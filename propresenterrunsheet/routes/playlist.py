@@ -49,7 +49,7 @@ from ..propresenter.playlist_update import (
 from ..propresenter import update_safety as safety
 from ..propresenter.thumbnails import ocr_playlist_media
 from ..parsing.align import align_playlist
-from ..parsing.models import fetch_catalogue, resolve_model
+from ..parsing.models import fetch_catalogue, next_usable_model, resolve_model
 from ..propresenter.update_safety import UpdateAborted
 from ..propresenter.templates import (
     auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlist_raw,
@@ -639,13 +639,14 @@ def _ai_anchors(base: str, playlist_uuid: str, raw: list, matched: list,
              if p.get("placed") and p.get("above_index") is not None}
     if len(known) >= len(matched):
         return {}                       # the rules placed everything
-    model = resolve_model((settings.get("or_model") or "").strip(),
-                          fetch_catalogue())
+    catalogue = fetch_catalogue()
+    model = resolve_model((settings.get("or_model") or "").strip(), catalogue)
     if not model:
         return {}
     slide_text = ocr_playlist_media(base, playlist_uuid, raw)
     return align_playlist(matched, raw, slide_text, known, is_header,
-                          or_key, model)
+                          or_key, model,
+                          backup=next_usable_model(model, catalogue))
 
 
 def _plan_update(base: str, playlist_uuid: str, matched: list,

@@ -156,6 +156,36 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
         "bumper.mp4"]
 
 
+def test_a_busy_provider_gets_exactly_one_retry_on_the_backup_model():
+    """Free providers are often overloaded, and OpenRouter reports it as
+    HTTP 200 with an error body. Retry once on the backup, then give up
+    quietly — the rules' placement still stands."""
+    from propresenterrunsheet.parsing import align
+
+    busy = {"error": {"code": 503, "message": "Upstream error from Nvidia: "
+                      "Service temporarily overloaded"}}
+    answer = {"choices": [{"message": {"content": json.dumps(
+        {"placements": [{"runsheet": 0, "playlist": 0}]})}}]}
+
+    def run(replies, backup):
+        asked = []
+
+        def fake_post(url, json=None, **kw):
+            asked.append(json["model"])
+            body = replies.pop(0)
+            return type("R", (), {"ok": True, "status_code": 200,
+                                  "json": staticmethod(lambda: body)})()
+
+        found = align.align_playlist(
+            RUNSHEET, PLAYLIST, SLIDE_TEXT, {1: 1}, lambda it: False,
+            or_key="k", model="m", post=fake_post, backup=backup)
+        return found, asked
+
+    assert run([busy, answer], "b") == ({0: 0}, ["m", "b"])
+    assert run([busy, busy], "b") == ({}, ["m", "b"])
+    assert run([busy], None) == ({}, ["m"])
+
+
 def test_an_ai_placement_never_outranks_the_operator():
     """Recall is the operator saying where it goes. The model guessing
     otherwise must lose, every time."""

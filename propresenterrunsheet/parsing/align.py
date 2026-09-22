@@ -38,6 +38,8 @@ import logging
 import re
 
 from ..config import APP_NAME
+from ..logging_setup import log_safe
+from .models import provider_failure
 
 
 log = logging.getLogger("pp_runsheet")
@@ -234,8 +236,11 @@ def parse_alignment(content: str, n_runsheet: int, max_index: int,
 
 
 def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
-                   is_header_fn, or_key: str, model: str, post=None) -> dict:
+                   is_header_fn, or_key: str, model: str, post=None,
+                   backup: str = None) -> dict:
     """One OpenRouter call, fully validated. {} whenever anything is off.
+
+    `backup` is asked once if `model`'s provider fails, as the parse does.
 
     Never raises: placement without this pass is the shipped behaviour,
     so every failure here degrades to it rather than stopping an
@@ -249,20 +254,35 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
         if sender is None:
             import requests as req
             sender = req.post
-        r = sender(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {or_key}",
-                     "HTTP-Referer": "runsheet-pilot",
-                     "X-Title": APP_NAME,
-                     "Content-Type": "application/json"},
-            json={"model": model,
-                  "messages": [{"role": "user", "content": prompt}],
-                  # Placement must not wobble between two runs of the
-                  # same runsheet: update mode treats an identical
-                  # result as a no-op and skips the write entirely.
-                  "temperature": 0,
-                  "response_format": {"type": "json_object"}},
-            timeout=60)
+
+        def ask(model_id):
+            return sender(
+                OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {or_key}",
+                         "HTTP-Referer": "runsheet-pilot",
+                         "X-Title": APP_NAME,
+                         "Content-Type": "application/json"},
+                json={"model": model_id,
+                      "messages": [{"role": "user", "content": prompt}],
+                      # Placement must not wobble between two runs of the
+                      # same runsheet: update mode treats an identical
+                      # result as a no-op and skips the write entirely.
+                      "temperature": 0,
+                      "response_format": {"type": "json_object"}},
+                timeout=60)
+
+        r = ask(model)
+        failure = provider_failure(r)
+        if failure and backup and backup != model:
+            log.info("Alignment: %s failed behind %s (%s) — retrying with %s",
+                     log_safe(failure["provider"]), log_safe(model),
+                     failure["code"], log_safe(backup))
+            r = ask(backup)
+            failure = provider_failure(r)
+        if failure:
+            log.info("Alignment: %s failed (%s) — placing without it",
+                     log_safe(failure["provider"]), failure["code"])
+            return {}
         if not getattr(r, "ok", False):
             log.info("Alignment call returned HTTP %s — placing without it",
                      getattr(r, "status_code", "?"))

@@ -328,6 +328,41 @@ def test_provider_side_429_gets_the_provider_message_not_a_500(
     assert "API key is fine" in err
 
 
+# The exact reply OpenRouter sent on 2026-09-22: HTTP 200, and no `choices`.
+_OVERLOADED = {"error": {
+    "code": 503,
+    "message": "Upstream error from Nvidia: Service temporarily overloaded",
+    "metadata": {"error_type": "provider_overloaded"}}}
+
+
+def test_busy_provider_behind_http_200_retries_the_next_model(
+        parse_client, isolated_state, monkeypatch):
+    """Reading `choices` out of that reply crashed into the generic error
+    instead of trying the next model."""
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_model_catalogue import _catalogue, _model
+
+    busy, spare = "nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-oss-20b:free"
+    cat = _catalogue(_model(busy, ctx=262144), _model(spare, ctx=128000))
+    monkeypatch.setattr(parse_mod, "fetch_catalogue", lambda *_a, **_k: cat)
+    good = json.dumps({"service_name": "Sunday Morning",
+                       "items": [{"type": "song", "title": "Build My Life"}]})
+    calls = []
+    r = _post_responses(
+        parse_client,
+        [_FakeErrorResponse(200, _OVERLOADED), _FakeResponse(good, model=spare)],
+        model=busy, calls=calls)
+    assert "error" not in r.get_json()
+    assert [c["model"] for c in calls] == [busy, spare]
+
+
+def test_busy_provider_with_no_backup_is_named_not_a_generic_error(
+        parse_client, isolated_state):
+    r = _post_responses(parse_client, [_FakeErrorResponse(200, _OVERLOADED)])
+    err = r.get_json()["error"]
+    assert "Nvidia" in err and "API key is fine" in err
+
+
 def test_bare_401_still_reports_a_key_problem(parse_client, isolated_state):
     """A 401 with no provider metadata IS a key problem — the request died at
     OpenRouter's own door. The original message must survive the fix.
