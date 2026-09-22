@@ -16,6 +16,7 @@ from propresenterrunsheet.propresenter.playlist_update import (
     split_existing,
     title_token_set,
     verify_content_preserved,
+    visible_signature,
 )
 
 
@@ -263,3 +264,97 @@ def test_verify_tolerates_propresenter_minting_new_item_uuids():
     before = [_media("A", "1")]
     after = [_media("A", "REMINTED", target="T-1")]
     assert verify_content_preserved(before, after)["ok"]
+
+
+def test_verify_tolerates_propresenter_minting_new_media_ids_too():
+    """Checked against a live ProPresenter 21.4: a write re-mints the
+    media target_uuid as well, on every item, every time. Only type, name
+    and order are stable, so they are all the check may compare."""
+    before = [_media("A", "1", target="T-1"), _media("B", "2", target="T-2")]
+    after = [_media("A", "X1", target="NEW-1"), _media("B", "X2", target="NEW-2")]
+    assert verify_content_preserved(before, after)["ok"]
+    # ...while a dropped or reordered slide is still caught.
+    assert not verify_content_preserved(before, after[:1])["ok"]
+    assert not verify_content_preserved(before, after[::-1])["ok"]
+
+
+# ── the live ProPresenter 21.4 test playlist, reproduced ──────────────────
+#
+# Ten stills named the way operators name them, and a ten-line runsheet.
+# Against the real thing the first version anchored NONE of them (the
+# "01" prefix was a required word), and a second run wrote again because
+# a stack of unplaced headers was "recalled" onto the first slide.
+
+_LIVE_NAMES = ["01_welcome", "02_worship", "03_song_1", "04_song_2",
+               "05_announcements", "06_giving", "07_tithing", "08_message",
+               "09_prayer", "10_thanks_for_coming"]
+_LIVE_RUNSHEET = [_item(t) for t in [
+    "Pre-service", "Welcome", "Worship", "Song 1", "Song 2",
+    "Announcements", "Offering", "Message - Ps Cathie", "Prayer Ministry",
+    "Close"]]
+
+
+def _live_playlist():
+    return [_media(n, str(i)) for i, n in enumerate(_LIVE_NAMES)]
+
+
+def _as_pp_reads_it_back(items):
+    """Every id re-minted; headers lose target_uuid (seen live)."""
+    out = []
+    for i, it in enumerate(items):
+        it = echo_existing_item(it)
+        it["id"]["uuid"] = f"NEW-{i}"
+        if it["type"] == "media":
+            it["target_uuid"] = f"NEWT-{i}"
+        else:
+            it.pop("target_uuid", None)
+        out.append(it)
+    return out
+
+
+def test_a_numeric_ordering_prefix_is_not_part_of_the_name():
+    assert anchor_tokens("01_welcome") == {"welcome"}
+    assert anchor_tokens("03_song_1") == {"song", "1"}
+    # Only a LEADING number is an ordering prefix.
+    assert anchor_tokens("Psalm 23") == {"psalm", "23"}
+    assert anchor_tokens("42") == {"42"}
+
+
+def test_numbered_media_anchors_by_name():
+    _, report = build_update_payload(_live_playlist(), _LIVE_RUNSHEET)
+    placed = {p["title"]: p["above"] for p in report["placements"]
+              if p["placed"]}
+    assert placed == {
+        "Welcome": "01_welcome", "Worship": "02_worship",
+        "Song 1": "03_song_1", "Song 2": "04_song_2",
+        "Announcements": "05_announcements",
+        "Message - Ps Cathie": "08_message",
+        "Prayer Ministry": "09_prayer"}
+
+
+def test_running_twice_plans_the_same_playlist():
+    """Visible result of run two == run one, so the second click is a
+    no-op — including after PP has re-minted every id."""
+    first, _ = build_update_payload(_live_playlist(), _LIVE_RUNSHEET)
+    second, _ = build_update_payload(_as_pp_reads_it_back(first),
+                                     _LIVE_RUNSHEET)
+    assert visible_signature(second) == visible_signature(first)
+
+
+def test_a_stack_of_unplaced_headers_is_not_recalled():
+    """When nothing anchors, every header stacks above the first slide.
+    None of them was placed there, so none may be remembered there."""
+    stacked, _ = build_update_payload(
+        [_media("IMG_1", "1"), _media("IMG_2", "2")],
+        [_item("Welcome"), _item("Offering"), _item("Close")])
+    _, recalled = split_existing(_as_pp_reads_it_back(stacked))
+    assert recalled == {}
+
+
+def test_a_dragged_out_unplaced_header_is_recalled():
+    """A ↕ header the operator dragged out of the stack stands alone
+    above its slide — that IS a placement, and it should stick."""
+    playlist = [_header(UNPLACED_MARK + "Offering (4 min)"),
+                _media("06_giving", "6")]
+    _, recalled = split_existing(playlist)
+    assert recalled["offering"][1] == "06_giving"

@@ -43,8 +43,8 @@ from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_playlist_dir, find_pp_root
 from ..propresenter.playlist import build_playlist_payload
 from ..propresenter.playlist_update import (
-    build_update_payload, echo_existing_item, is_header,
-    verify_content_preserved,
+    build_update_payload, is_header, verify_content_preserved,
+    visible_signature,
 )
 from ..propresenter import update_safety as safety
 from ..propresenter.thumbnails import ocr_playlist_media
@@ -667,8 +667,6 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
             ai_anchors = found
             items, report = build_update_payload(
                 raw, matched, _aliases(), ai_anchors)
-    existing_echo = [echo_existing_item(it) for it in raw
-                     if isinstance(it, dict)]
     return {
         "uuid":         playlist_uuid,       # ProPresenter's, not the client's
         "name":         playlist_name,
@@ -680,8 +678,9 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
         "fingerprint":  safety.fingerprint(raw),
         # Clicking the button twice is the most common operator
         # behaviour there is, and the safest destructive write is the
-        # one that never happens.
-        "no_change":    items == existing_echo,
+        # one that never happens. Compared on what is VISIBLE — PP
+        # re-mints every id on every write, see visible_signature.
+        "no_change":    visible_signature(items) == visible_signature(raw),
     }
 
 

@@ -121,12 +121,19 @@ def recall_key(label: str) -> str:
 
 
 def anchor_tokens(name: str) -> set:
-    """The tokens of an existing item's name that actually identify it."""
+    """The tokens of an existing item's name that actually identify it.
+
+    A leading run of digits is an ORDERING prefix, not part of the name:
+    operators number their media so it sorts ("01_welcome", "03_song_1").
+    Against a live ProPresenter playlist named exactly that way, keeping
+    the prefix meant every name demanded its number appear in the
+    runsheet line — "Welcome" could never find "01_welcome", and ten
+    items anchored none. Only the FIRST token is treated this way, and
+    only when something follows it, so "Song 2" and "Psalm 23" keep
+    their numbers. File extensions and years are dropped as noise."""
     words = _norm_words(name)
-    # A trailing file extension, defensively — PP's playlist items come
-    # back without one, but media dragged in from disk sometimes keeps it.
-    if len(words) > 1 and words[-1] in MEDIA_NOISE:
-        pass  # handled by the filter below; kept explicit for the reader
+    if len(words) > 1 and words[0].isdigit():
+        words = words[1:]
     return {w for w in words
             if w not in MEDIA_NOISE and not _YEAR_RE.match(w)}
 
@@ -151,16 +158,25 @@ def is_header(item: dict) -> bool:
 
 
 def identity_of(item: dict) -> tuple:
-    """What makes a playlist item the same item across a write.
+    """What makes a playlist item the same item across a write: its type
+    and its name. No uuid of any kind.
 
-    Deliberately NOT `id.uuid`: ProPresenter mints fresh playlist-item
-    uuids when it accepts a PUT, so a uuid-based comparison would report
-    every healthy update as data loss and roll it back. Type, name and
-    the ASSET uuid are stable across the round trip."""
+    Established against a live ProPresenter 21.4 (Sept 2026), not assumed:
+    every PUT mints a fresh playlist-item uuid AND a fresh media
+    `target_uuid` — even when a playlist is written back into itself,
+    unchanged, twice in a row. Only type, name and order survive. PP also
+    resolves media by NAME on the way in (a made-up target_uuid was
+    accepted and attached the right image), and the Media bin did not
+    grow, so the new ids are a relabel, not new media.
+
+    An earlier version compared the asset uuid too. Against real PP that
+    reported every healthy update as ten missing slides and rolled it
+    back — the test fake echoed uuids unchanged, so nothing caught it.
+    Order is carried by the sequence `content_fingerprint` builds, so a
+    reorder or a dropped slide is still caught."""
     idd = item.get("id") or {}
     return ((item.get("type") or "").lower(),
-            (idd.get("name") or "").strip().casefold(),
-            asset_uuid_of(item))
+            (idd.get("name") or "").strip().casefold())
 
 
 def content_fingerprint(items) -> list:
@@ -216,29 +232,41 @@ def split_existing(raw: list) -> tuple:
     accumulating them.
 
     `recalled` is the payoff for reading the old headers before dropping
-    them: `{recall_key(label): (asset_uuid, casefolded_name)}` of the
-    first non-header item BELOW each header. That pairing is the
-    operator's own answer to "where does this line belong", recorded by
-    the act of dragging it there last week. Each entry is claimed at most
-    once, so two headers reading "Worship" cannot both inherit the same
-    slide."""
+    them: `{recall_key(label): (asset_uuid, casefolded_name)}` for the
+    slide each header sits DIRECTLY above. That pairing is the operator's
+    own answer to "where does this line belong", recorded by the act of
+    dragging it there last week.
+
+    Only the header directly above a slide describes it. When several
+    headers stack up before one slide, the ones higher up are the
+    unplaced ones this module stacked there, waiting to be dragged — and
+    a header still marked ↕ inside a stack was never placed at all. Live
+    against ProPresenter, treating a whole stack as placed made a second
+    run recall every line to the first slide, plan something different,
+    and write again when nothing had changed. So a ↕ header counts only
+    once it stands alone (the operator has dragged it out), the banner
+    never counts, and each entry is claimed at most once."""
     kept, recalled = [], {}
-    pending_keys = []
+    run = []          # header names since the last slide, in order
     for it in raw or []:
         if not isinstance(it, dict):
             continue
         if is_header(it):
-            key = recall_key((it.get("id") or {}).get("name", ""))
-            if key:
-                pending_keys.append(key)
+            name = ((it.get("id") or {}).get("name") or "").strip()
+            if name != BANNER_LABEL:
+                run.append(name)
             continue
-        if pending_keys:
-            idd = it.get("id") or {}
-            target = (asset_uuid_of(it),
-                      (idd.get("name") or "").strip().casefold())
-            for key in pending_keys:
-                recalled.setdefault(key, target)
-            pending_keys = []
+        if run:
+            nearest = run[-1]
+            placed = (not nearest.startswith(UNPLACED_MARK.strip())
+                      or len(run) == 1)
+            key = recall_key(nearest)
+            if placed and key:
+                idd = it.get("id") or {}
+                recalled.setdefault(key, (
+                    asset_uuid_of(it),
+                    (idd.get("name") or "").strip().casefold()))
+            run = []
         kept.append(it)
     return kept, recalled
 
@@ -470,6 +498,32 @@ def build_update_payload(existing: list, matched: list, aliases=None,
         "placements":     placements,
     }
     return out, report
+
+
+def visible_signature(items) -> list:
+    """What the operator can SEE of a playlist: every item's type and
+    name in order, plus each header's colour. Nothing ProPresenter
+    re-mints.
+
+    The no-op check compares this, not the raw items. Against a live
+    ProPresenter 21.4 every write re-mints the id of every item, headers
+    included, and reads headers back with a `destination` field they
+    were not sent — so comparing raw items meant "press it twice" always
+    looked like a change and wrote again. Names (↕, —, 📖, ⚠ included)
+    and header colours were checked and do round-trip exactly."""
+    out = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        if is_header(it):
+            c = it.get("header_color") or {}
+            out.append(("header",
+                        ((it.get("id") or {}).get("name") or "").strip(),
+                        tuple(round(float(c.get(k) or 0), 4)
+                              for k in ("red", "green", "blue", "alpha"))))
+        else:
+            out.append(identity_of(it))
+    return out
 
 
 def verify_content_preserved(before: list, after: list) -> dict:

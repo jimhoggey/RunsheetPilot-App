@@ -9,6 +9,7 @@ before the PUT, the write is read back whatever ProPresenter said about
 it, and a bad outcome restores the original rather than leaving the
 operator with a half-written playlist twenty minutes before a service.
 """
+import copy
 import json
 from pathlib import Path
 
@@ -86,12 +87,35 @@ def pp(monkeypatch, tmp_path, isolated_state):
             return _Resp(200, [])
         return _Resp(404, {})
 
+    def _as_pp_stores_it(item, n):
+        # Real ProPresenter 21.4 (checked live, Sept 2026) gives every item
+        # a NEW playlist-item uuid and a NEW media target_uuid on every
+        # write — even writing a playlist back into itself. Only type,
+        # name and order survive. A fake that echoed ids unchanged is what
+        # let a uuid-based safety check pass here and roll back every
+        # update on the real thing.
+        stored = copy.deepcopy(item)
+        stored.setdefault("id", {})["uuid"] = f"REMINT-{n}-{id(stored)}"
+        if (stored.get("type") or "") == "media":
+            stored["target_uuid"] = f"REMINT-T-{n}-{id(stored)}"
+        if (stored.get("type") or "") == "header":
+            # Also seen live: headers are read back WITHOUT target_uuid,
+            # with a `destination` they were never sent.
+            stored.pop("target_uuid", None)
+            stored["destination"] = "presentation"
+        return stored
+
     def fake_put(url, json=None, timeout=0, **kw):
         state["puts"].append(json)
         n = len(state["puts"])
         code = state["put_codes"][min(n - 1, len(state["put_codes"]) - 1)]
+        # ...and its PUT refuses any item without one — exactly what made
+        # Undo fail live on a backup that held headers.
+        if any("target_uuid" not in (i or {}) for i in (json or [])):
+            return _Resp(400, text="Json deserialize error: missing field "
+                                   "`target_uuid`")
         if code < 400:
-            state["items"] = [dict(i) for i in (json or [])]
+            state["items"] = [_as_pp_stores_it(i, n) for i in (json or [])]
         elif state["corrupt_on"] == n:
             # A refusal is not a promise that nothing was applied — PP can
             # reject the request and still leave the playlist changed.
@@ -329,6 +353,34 @@ def test_restore_puts_a_snapshot_back(client, pp):
     assert out["ok"] is True and out["restored"] == 3
     assert _content_names(pp["items"]) == [
         "PRESERVICE LOOP", "IMG_4021", "WELCOME SLIDE"]
+
+
+def test_undo_restores_a_backup_that_holds_headers(client, pp):
+    """The live failure: PP reads headers back without target_uuid and
+    refuses them on the way in. A second update's backup holds the first
+    update's headers, so undoing it used to 400 every time."""
+    _post(client)                                   # first update: headers
+    res = _post(client, matched=[                   # second: different ones
+        {"parsed": {"type": "other", "title": "Welcome Back"}}])
+    assert res["ok"] is True, res
+    out = client.post("/api/restore_playlist", json={
+        "playlist_uuid": "PL-1",
+        "snapshot_path": res["snapshot_path"]}).get_json()
+    assert out["ok"] is True, out
+    names = [(i.get("id") or {}).get("name") for i in pp["items"]]
+    assert any(n and n.startswith("Pre-service") for n in names), names
+
+
+def test_two_updates_in_the_same_instant_keep_both_backups(client, pp,
+                                                           monkeypatch):
+    """Second-precision names collided live: the second backup replaced
+    the first and Undo restored the wrong state."""
+    monkeypatch.setattr(safety, "_utc_stamp", lambda: "20260922T100000Z")
+    first = safety.write_snapshot("PL-1", "x", [_media("A", "1")])
+    second = safety.write_snapshot("PL-1", "x", [_media("B", "2")])
+    assert first != second
+    assert json.loads(first.read_text(encoding="utf-8"))["items"][0]["id"]["name"] == "A"
+    assert safety.load_snapshot(str(second))["items"][0]["id"]["name"] == "B"
 
 
 # ── templates in the picker ───────────────────────────────────────────────

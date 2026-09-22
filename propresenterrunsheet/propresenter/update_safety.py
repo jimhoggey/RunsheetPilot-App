@@ -29,7 +29,9 @@ from pathlib import Path
 
 from ..config import DATA_DIR
 from .net import pp_id
-from .playlist_update import content_fingerprint, verify_content_preserved
+from .playlist_update import (
+    content_fingerprint, echo_existing_item, verify_content_preserved,
+)
 
 
 log = logging.getLogger("pp_runsheet")
@@ -45,7 +47,10 @@ SNAPSHOT_KEEP = 20
 # "<id>-<UTC stamp>.json". The id part keeps letters, digits and hyphens
 # only — no dots, so no "..", and no separators of either platform's kind.
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9-]+")
-_SNAPSHOT_NAME = re.compile(r"[A-Za-z0-9-]{1,40}-\d{8}T\d{6}Z\.json")
+# The stamp carries microseconds; the older second-precision form stays
+# valid so backups written before that change can still be restored.
+_SNAPSHOT_NAME = re.compile(
+    r"[A-Za-z0-9-]{1,40}-\d{8}T\d{6}(?:\d{6})?Z(?:-\d{1,3})?\.json")
 
 
 def snapshot_file(ref, dir_path=None) -> Path:
@@ -84,7 +89,11 @@ class UpdateAborted(Exception):
 
 
 def _utc_stamp() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    """UTC to the microsecond. Seconds were not enough: two updates in
+    the same second (a double-click, seen live) wrote the same filename,
+    the second backup silently replaced the first, and Undo then restored
+    the wrong state."""
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 def active_playlist_uuid(base: str, http_get=None) -> str:
@@ -144,6 +153,12 @@ def write_snapshot(playlist_uuid: str, playlist_name: str, items: list,
     stem = (f"{_SAFE_NAME.sub('-', str(playlist_uuid or ''))[:40] or 'playlist'}"
             f"-{_utc_stamp()}")
     path = snapshot_file(f"{stem}.json", d)
+    # Never overwrite an existing backup — a replaced backup is one the
+    # operator can no longer get back to.
+    n = 1
+    while path.exists() and n < 1000:
+        n += 1
+        path = snapshot_file(f"{stem}-{n}.json", d)
     payload = {
         "playlist_uuid": playlist_uuid,
         "playlist_name": playlist_name,
@@ -233,8 +248,17 @@ def rollback(base: str, playlist_uuid: str, snapshot_items: list,
         if put is None:
             import requests as req
             put = req.put
-        put(f"{base}/v1/playlist/{playlist_uuid}",
-            json=snapshot_items, timeout=10)
+        # The snapshot is exactly what PP's GET returned, and that cannot
+        # be PUT back as-is: PP reads header items back WITHOUT the
+        # `target_uuid` its PUT demands, and refused the raw snapshot
+        # with 400 "missing field `target_uuid`" (seen live, PP 21.4) —
+        # which made Undo fail on any playlist that had headers. The same
+        # echo the forward write uses repairs exactly that and nothing
+        # else.
+        resp = put(f"{base}/v1/playlist/{playlist_uuid}",
+                   json=[echo_existing_item(it) for it in snapshot_items
+                         if isinstance(it, dict)], timeout=10)
+        out["status"] = getattr(resp, "status_code", None)
     except Exception:
         log.exception("rollback PUT failed")
         return out
