@@ -19,6 +19,7 @@ import logging
 import re
 from typing import Optional
 
+from ..logging_setup import log_safe
 from .library import resolve_library_name
 
 
@@ -132,13 +133,14 @@ def fetch_pp_playlist_raw(base: str, playlist_uuid: str) -> Optional[list]:
         r.raise_for_status()
         data = r.json()
         if not isinstance(data, dict) or "items" not in data:
-            log.debug(f"fetch_pp_playlist_raw({playlist_uuid}): no items key")
+            log.debug("fetch_pp_playlist_raw(%s): no items key",
+                      log_safe(playlist_uuid, 64))
             return None
         items = data.get("items")
         return items if isinstance(items, list) else None
     except Exception:
-        log.debug(f"fetch_pp_playlist_raw({playlist_uuid}) failed",
-                  exc_info=True)
+        log.debug("fetch_pp_playlist_raw(%s) failed",
+                  log_safe(playlist_uuid, 64), exc_info=True)
         return None
 
 

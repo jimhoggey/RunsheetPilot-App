@@ -13,8 +13,6 @@ allowed to depend on it being present.
 """
 import json
 
-import pytest
-
 import propresenterrunsheet.routes.playlist as playlist_mod
 from propresenterrunsheet.propresenter import thumbnails
 from propresenterrunsheet.propresenter.playlist_update import build_update_payload

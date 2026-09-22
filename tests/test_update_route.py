@@ -10,6 +10,7 @@ it, and a bad outcome restores the original rather than leaving the
 operator with a half-written playlist twenty minutes before a service.
 """
 import json
+from pathlib import Path
 
 import pytest
 
@@ -65,6 +66,9 @@ def pp(monkeypatch, tmp_path, isolated_state):
     import requests
 
     def fake_get(url, timeout=0, **kw):
+        if url.endswith("/v1/playlists"):
+            return _Resp(200, [{"id": {"uuid": "PL-1",
+                                       "name": "Sunday 4 May"}}])
         if url.endswith("/v1/playlist/active"):
             return _Resp(200, {"presentation":
                                {"playlist": {"uuid": state["active"]}}})
@@ -134,13 +138,14 @@ def test_headers_are_added_and_every_slide_survives(client, pp):
 
 def test_a_snapshot_exists_before_anything_is_written(client, pp):
     res = _post(client)
-    snap = json.loads(open(res["snapshot_path"]).read())
+    snap_path = Path(res["snapshot_path"])
+    snap = json.loads(snap_path.read_text(encoding="utf-8"))
     assert snap["state"] == "verified"
     assert [i["id"]["name"] for i in snap["items"]] == [
         "PRESERVICE LOOP", "IMG_4021", "WELCOME SLIDE"]
     # The .txt beside it is the only artefact a volunteer can act on:
     # ProPresenter cannot import our JSON, but a person can read a list.
-    txt = open(res["snapshot_path"].replace(".json", ".txt")).read()
+    txt = snap_path.with_suffix(".txt").read_text(encoding="utf-8")
     assert "PRESERVICE LOOP" in txt and "Sunday 4 May" in txt
 
 
@@ -194,8 +199,8 @@ def test_a_refused_write_restores_the_original_and_says_so(client, pp):
     assert res["rollback_verified"] is True
     assert _content_names(pp["items"]) == [
         "PRESERVICE LOOP", "IMG_4021", "WELCOME SLIDE"]
-    assert json.loads(open(res["snapshot_path"]).read())["state"] \
-        == "rolled_back"
+    snap = json.loads(Path(res["snapshot_path"]).read_text(encoding="utf-8"))
+    assert snap["state"] == "rolled_back"
 
 
 def test_a_write_that_loses_a_slide_is_rolled_back_even_on_HTTP_204(client, pp,
@@ -386,13 +391,14 @@ def test_a_service_playlist_gets_no_template_warning(client, pp, monkeypatch):
     assert "template" not in res["warnings"]
 
 
-def test_template_warning_survives_a_failed_playlist_list(client, pp,
-                                                         monkeypatch):
-    """The list read has a shorter timeout than the plan read and
-    returns [] on any error. A safety warning must not fail open on
-    that: the target's own name and the pin are still known."""
+def test_a_failed_playlist_list_stops_the_preview_rather_than_guessing(
+        client, pp, monkeypatch):
+    """The target is confirmed against ProPresenter's own playlist list
+    before anything else happens. If that list can't be read, the preview
+    stops — so the template warning (which uses the same list) can never
+    be silently skipped, and a write can never target a playlist
+    ProPresenter didn't just confirm exists."""
     import requests
-    from propresenterrunsheet import settings as pp_settings
     real_get = requests.get
 
     def get(url, timeout=0, **kw):
@@ -401,16 +407,65 @@ def test_template_warning_survives_a_failed_playlist_list(client, pp,
         return real_get(url, timeout=timeout, **kw)
 
     monkeypatch.setattr(requests, "get", get)
-
-    # By name, from what the client sent.
     res = client.post("/api/update_playlist/preview", json={
-        "playlist_uuid": "PL-1", "playlist_name": "Youth Service - Library",
-        "matched": RUNSHEET}).get_json()
-    assert "template" in res["warnings"]
+        "playlist_uuid": "PL-1", "matched": RUNSHEET}).get_json()
+    assert res["ok"] is False and res["reason"] == "read_failed"
+    assert pp["puts"] == []
 
-    # By pin, whatever it is called.
+
+def test_a_pinned_template_is_warned_about_whatever_it_is_called(
+        client, pp, monkeypatch):
+    from propresenterrunsheet import settings as pp_settings
     pp_settings.save_settings({"template_playlist_uuid": "PL-1"})
     res = client.post("/api/update_playlist/preview", json={
-        "playlist_uuid": "PL-1", "playlist_name": "Sunday Master Run",
-        "matched": RUNSHEET}).get_json()
+        "playlist_uuid": "PL-1", "matched": RUNSHEET}).get_json()
     assert "template" in res["warnings"]
+
+
+# ── the id and the backup path arrive over HTTP ───────────────────────────
+
+@pytest.mark.parametrize("evil", [
+    "../timer/abc", "PL-1/../../v1/timers", "PL-1?x=1", "a b", "", "x" * 65,
+])
+def test_a_malformed_playlist_id_never_reaches_a_url(client, pp, evil):
+    """The id is spliced into /v1/playlist/{id} on a route that PUTs.
+    Unchecked, "../" walks out of the playlist API into the rest of
+    ProPresenter's."""
+    res = _post(client, playlist_uuid=evil)
+    assert res["ok"] is False and res["reason"] == "no_playlist"
+    assert pp["puts"] == []
+
+
+def test_a_playlist_proPresenter_does_not_list_is_refused(client, pp):
+    res = _post(client, playlist_uuid="NOT-THERE")
+    assert res["ok"] is False and res["reason"] == "read_failed"
+    assert pp["puts"] == []
+
+
+@pytest.mark.parametrize("evil", [
+    "/etc/passwd",
+    "../../settings.json",
+    "settings.json",
+    "C:\\Users\\x\\AppData\\Roaming\\Runsheet Pilot\\settings.json",
+])
+def test_restore_only_reads_inside_the_backups_folder(client, pp, evil):
+    """Undo sends back a filesystem path. Unconfined, it could read any
+    JSON file on the machine and — through mark_snapshot — rewrite it."""
+    out = client.post("/api/restore_playlist", json={
+        "snapshot_path": evil}).get_json()
+    assert out["ok"] is False
+    assert pp["puts"] == []
+
+
+def test_restore_accepts_a_windows_style_path_to_a_real_backup(client, pp):
+    """The browser holds whatever the server sent. On Windows that is a
+    backslash path, and it must still resolve to the backup it names."""
+    res = _post(client)
+    name = Path(res["snapshot_path"]).name
+    pp["items"] = [_media("WRECKED", "9")]
+    winpath = "C:\\Users\\x\\AppData\\Roaming\\Runsheet Pilot\\playlist_backups\\" + name
+    out = client.post("/api/restore_playlist", json={
+        "snapshot_path": winpath}).get_json()
+    assert out["ok"] is True
+    assert _content_names(pp["items"]) == [
+        "PRESERVICE LOOP", "IMG_4021", "WELCOME SLIDE"]

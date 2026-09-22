@@ -81,10 +81,20 @@ _YEAR_RE = re.compile(r"^(19|20)\d{2}$")
 # The decorations header_label() and this module put on a label, so a
 # header read back out of PP can be reduced to the runsheet title that
 # produced it. Order matters: duration tail, then time tail.
-_DUR_TAIL_RE = re.compile(r"\s*\(\s*\d+\s*min\s*\)\s*$", re.IGNORECASE)
+#
+# Neither pattern starts with \s*, and neither ends with one. A leading
+# \s* in front of a $-anchored pattern makes re.sub retry the whitespace
+# run from every start position — quadratic on a long run of spaces, and
+# these labels come out of ProPresenter, i.e. out of anything anyone typed
+# into a header. The surrounding whitespace is stripped in code instead
+# (see recall_key), and the input is capped at _MAX_LABEL.
+_DUR_TAIL_RE = re.compile(r"\(\s*\d+\s*min\s*\)$", re.IGNORECASE)
 _TIME_TAIL_RE = re.compile(
-    r"\s*[—–-]\s*(\d{1,2}[:.]\d{2}\s*(?:[ap]\.?m\.?)?"
-    r"|\d{1,2}\s*[ap]\.?m\.?)\s*$", re.IGNORECASE)
+    r"[—–-]\s*(?:\d{1,2}[:.]\d{2}\s*(?:[ap]\.?m\.?)?"
+    r"|\d{1,2}\s*[ap]\.?m\.?)$", re.IGNORECASE)
+# Longer than any real header; a pathological one is truncated rather
+# than scanned in full.
+_MAX_LABEL = 300
 _LEAD_MARK_RE = re.compile(r"^\s*(?:[↕⇅]\s*|⚠\s*ACTION\s+NEEDED\s*[—–-]\s*|📖\s*)+")
 
 
@@ -104,9 +114,9 @@ def recall_key(label: str) -> str:
     so the key is the title alone, normalised. That is what makes recall
     survive a re-parse: the operator's drag is remembered by WHAT the
     header says, not by when it happens."""
-    s = _LEAD_MARK_RE.sub("", label or "")
-    s = _DUR_TAIL_RE.sub("", s)
-    s = _TIME_TAIL_RE.sub("", s)
+    s = _LEAD_MARK_RE.sub("", (label or "")[:_MAX_LABEL])
+    s = _DUR_TAIL_RE.sub("", s.rstrip()).rstrip()
+    s = _TIME_TAIL_RE.sub("", s).rstrip()
     return " ".join(_norm_words(s))
 
 

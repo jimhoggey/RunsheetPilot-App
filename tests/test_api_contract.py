@@ -95,7 +95,6 @@ def test_no_filesystem_path_is_built_into_an_inline_onclick():
     """
     if not APP_JS.exists():
         pytest.skip("static/app.js not present")
-    import re
     src = APP_JS.read_text(encoding="utf-8")
     offenders = []
     for m in re.finditer(r'onclick="[^"]*\$\{([^}]*)\}[^"]*"', src):

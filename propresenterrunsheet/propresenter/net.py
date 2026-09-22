@@ -159,3 +159,24 @@ def pp_base(host, port) -> str:
     host_part = f"[{ip}]" if ip.version == 6 else str(ip)
     digits = re.sub(r"\D", "", str(port or ""))
     return f"http://{host_part}:{digits or '50001'}"
+
+
+# A ProPresenter object id as it appears in a URL path segment. PP's own
+# uuids are hex and hyphens; letters and digits generally are allowed so
+# a future id format degrades to "still works" rather than "refused".
+_PP_ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
+
+
+def pp_id(value) -> str:
+    """A playlist/presentation id that is safe to put in a URL PATH.
+
+    pp_base vets the host; this is its counterpart for the path. An id
+    arrives from the browser and is spliced into `/v1/playlist/{id}` —
+    unchecked, "../timer/…" walks out of the playlist API into any other
+    ProPresenter endpoint, and the destructive routes send PUTs there.
+    Same construction principle as pp_base: callers put THIS return
+    value in the URL, never their input. Raises ValueError otherwise."""
+    s = str(value if value is not None else "").strip()
+    if not _PP_ID_RE.fullmatch(s):
+        raise ValueError("not a ProPresenter id")
+    return s

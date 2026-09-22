@@ -39,7 +39,7 @@ from ..propresenter.media_bin import (
     fetch_media_bin, relink_media, unresolvable_media,
 )
 from ..propresenter.discovery import resolve_port
-from ..propresenter.net import pp_base
+from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_playlist_dir, find_pp_root
 from ..propresenter.playlist import build_playlist_payload
 from ..propresenter.playlist_update import (
@@ -540,17 +540,48 @@ def _aliases():
     return (load_settings() or {}).get("template_aliases")
 
 
+def _resolve_target(base: str, client_uuid) -> tuple:
+    """The playlist to act on, as PROPRESENTER names it.
+
+    Returns `(uuid, name, playlists)` where `uuid` and `name` are PP's own
+    values, never the browser's. Two reasons, one safety and one
+    correctness:
+
+      • the id goes into a URL path on routes that PUT, so it is checked
+        (pp_id) and then swapped for PP's copy of it — see net.pp_id for
+        what an unchecked id could reach;
+      • a destructive write should only ever target a playlist
+        ProPresenter confirms exists right now.
+
+    `playlists` is returned so callers that need the full list (the
+    template warning) reuse this read instead of making a second one
+    that could fail on its own. A failed list read aborts: for a write
+    that replaces the playlist, "couldn't confirm it exists" is a stop."""
+    try:
+        want = pp_id(client_uuid)
+    except ValueError:
+        raise UpdateAborted("no_playlist",
+                            "Choose the playlist you want to add headers to.")
+    playlists = fetch_pp_playlists(base)
+    for p_ in playlists:
+        if p_.get("uuid") == want:
+            return p_["uuid"], p_.get("name") or "playlist", playlists
+    raise UpdateAborted(
+        "read_failed",
+        "Couldn't find that playlist in ProPresenter, so nothing was "
+        "changed. Check ProPresenter is running, press ↻ Refresh "
+        "playlists, then try again.")
+
+
 def _read_target(base: str, playlist_uuid: str) -> list:
     """The playlist we are about to rewrite, or raise.
 
-    `fetch_pp_playlist_raw` returns None for a failed read and [] for a
-    genuinely empty playlist, and that distinction is the single most
-    important line in this feature: reading a network hiccup as "empty"
-    and then PUTting headers against that belief deletes every slide the
-    operator owns."""
-    if not playlist_uuid:
-        raise UpdateAborted("no_playlist",
-                            "Choose the playlist you want to add headers to.")
+    `playlist_uuid` must already be ProPresenter's own id (from
+    _resolve_target). `fetch_pp_playlist_raw` returns None for a failed
+    read and [] for a genuinely empty playlist, and that distinction is
+    the single most important line in this feature: reading a network
+    hiccup as "empty" and then PUTting headers against that belief
+    deletes every slide the operator owns."""
     raw = fetch_pp_playlist_raw(base, playlist_uuid)
     if raw is None:
         raise UpdateAborted(
@@ -624,6 +655,8 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
     One engine for both the preview and the write, so what the operator
     confirms is what gets sent — a preview computed by different code
     from the write is a preview of nothing."""
+    playlist_uuid, playlist_name, playlists = _resolve_target(
+        base, playlist_uuid)
     raw = _read_target(base, playlist_uuid)
     items, report = build_update_payload(raw, matched, _aliases(), ai_anchors)
     if use_ai and ai_anchors is None and report["unplaced"]:
@@ -637,6 +670,9 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
     existing_echo = [echo_existing_item(it) for it in raw
                      if isinstance(it, dict)]
     return {
+        "uuid":         playlist_uuid,       # ProPresenter's, not the client's
+        "name":         playlist_name,
+        "playlists":    playlists,
         "raw":          raw,
         "items":        items,
         "report":       report,
@@ -704,7 +740,7 @@ def api_update_playlist_preview():
 
     warnings = []
     active = safety.active_playlist_uuid(base)
-    if active and active == playlist_uuid:
+    if active and active == plan["uuid"]:
         warnings.append("live")
     # Update mode replaces every header, and a template's headers ARE its
     # sections — the thing create mode reads to find "Welcome", "Culture"
@@ -712,18 +748,12 @@ def api_update_playlist_preview():
     # next week's build. Not blocked (the operator asked for every
     # playlist to be available here), but said out loud before confirm.
     #
-    # The list read can fail on its own — it has a shorter timeout than
-    # the plan read that just succeeded, and returns [] on any error. A
-    # safety warning must not fail open on that, so when there is no
-    # list the check falls back to what we already know: the target's
-    # uuid (the pin still counts — the target was just read, so it
-    # exists) and the name the client sent (the "… Library" rule).
+    # Uses the playlist list the plan already read to confirm the target
+    # exists, so this check cannot fail open on a second read of its own:
+    # if that list could not be read, the plan aborted before we got here.
     from ..settings import load_settings
     pinned = ((load_settings() or {}).get("template_playlist_uuid") or "")
-    listed = fetch_pp_playlists(base) or [
-        {"uuid": playlist_uuid,
-         "name": (body.get("playlist_name") or "").strip()}]
-    if playlist_uuid in template_uuids(listed, pinned):
+    if plan["uuid"] in template_uuids(plan["playlists"], pinned):
         warnings.append("template")
     if any(it.get("is_pco") for it in plan["raw"] if isinstance(it, dict)):
         warnings.append("pco")
@@ -789,6 +819,11 @@ def api_update_playlist():
             base, playlist_uuid, matched,
             ai_anchors=_sane_anchors(body.get("ai_anchors"), len(matched),
                                      10_000) or None)
+        # From here on only ProPresenter's own id and name are used — in
+        # the URL, the snapshot filename, the rollback and the logs. The
+        # client's strings stop at _resolve_target.
+        playlist_uuid, playlist_name = plan["uuid"], plan["name"]
+        service_name = (body.get("name") or "").strip() or playlist_name
 
         # Guards. Each one aborts with NOTHING sent.
         if plan["no_change"]:
@@ -946,7 +981,13 @@ def api_restore_playlist():
     if not path:
         return jsonify({"ok": False, "error": "No backup to restore."}), 200
     try:
+        # load_snapshot only reads inside the backups folder — the path
+        # came over HTTP, and see snapshot_file for what it could reach.
         snap = safety.load_snapshot(path)
+    except ValueError:
+        log.info("Restore refused a path outside the backups folder")
+        return jsonify({"ok": False, "error":
+            "That isn't one of Runsheet Pilot's playlist backups."}), 200
     except Exception:
         log.exception("snapshot read failed")
         return jsonify({"ok": False, "error":
@@ -958,11 +999,12 @@ def api_restore_playlist():
     # is the same class of harm this whole feature is built to avoid,
     # arrived at through the one control the operator reaches for when
     # something already went wrong.
-    uuid = (snap.get("playlist_uuid") or "").strip()
-    asked = (body.get("playlist_uuid") or "").strip()
-    if not uuid:
+    try:
+        uuid = pp_id(snap.get("playlist_uuid"))
+    except ValueError:
         return jsonify({"ok": False, "error":
             "That backup doesn't say which playlist it came from."}), 200
+    asked = (body.get("playlist_uuid") or "").strip()
     if asked and asked != uuid:
         log.info("Restore target differs from the snapshot's playlist — "
                  "using the snapshot's")

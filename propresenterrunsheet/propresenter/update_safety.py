@@ -23,10 +23,12 @@ our JSON, but a person can rebuild a playlist from a list of names."""
 import datetime as _dt
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
 from ..config import DATA_DIR
+from .net import pp_id
 from .playlist_update import content_fingerprint, verify_content_preserved
 
 
@@ -39,7 +41,32 @@ SNAPSHOT_DIR = DATA_DIR / "playlist_backups"
 # still answerable, small enough to stay a rounding error on disk.
 SNAPSHOT_KEEP = 20
 
-_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+# Snapshot filenames are built by this module and have exactly one shape:
+# "<id>-<UTC stamp>.json". The id part keeps letters, digits and hyphens
+# only — no dots, so no "..", and no separators of either platform's kind.
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9-]+")
+_SNAPSHOT_NAME = re.compile(r"[A-Za-z0-9-]{1,40}-\d{8}T\d{6}Z\.json")
+
+
+def snapshot_file(ref, dir_path=None) -> Path:
+    """Resolve a snapshot reference to a file INSIDE the backups folder.
+
+    The Undo button sends back the path the server gave it, which makes
+    this a filesystem path arriving over HTTP. Used as-is, it would let
+    the restore route read any JSON file on the machine and write it
+    back (mark_snapshot rewrites the file it is pointed at). So only the
+    final name is kept — split on BOTH separators, because a Windows
+    path handed to a Mac process keeps its backslashes — it must have
+    the exact shape this module writes, and the resolved result must
+    still sit inside the snapshot folder. Raises ValueError otherwise."""
+    name = re.split(r"[\\/]", str(ref or ""))[-1]
+    if not _SNAPSHOT_NAME.fullmatch(name):
+        raise ValueError("not a snapshot file")
+    base = os.path.realpath(str(dir_path or SNAPSHOT_DIR))
+    full = os.path.realpath(os.path.join(base, name))
+    if not full.startswith(base + os.sep):
+        raise ValueError("snapshot outside the backups folder")
+    return Path(full)
 
 
 class UpdateAborted(Exception):
@@ -114,8 +141,9 @@ def write_snapshot(playlist_uuid: str, playlist_name: str, items: list,
     and pruning never removes one."""
     d = Path(dir_path or SNAPSHOT_DIR)
     d.mkdir(parents=True, exist_ok=True)
-    stem = f"{_SAFE_NAME.sub('-', playlist_uuid)[:40]}-{_utc_stamp()}"
-    path = d / f"{stem}.json"
+    stem = (f"{_SAFE_NAME.sub('-', str(playlist_uuid or ''))[:40] or 'playlist'}"
+            f"-{_utc_stamp()}")
+    path = snapshot_file(f"{stem}.json", d)
     payload = {
         "playlist_uuid": playlist_uuid,
         "playlist_name": playlist_name,
@@ -127,7 +155,7 @@ def write_snapshot(playlist_uuid: str, playlist_name: str, items: list,
     tmp.write_text(json.dumps(payload, indent=1), encoding="utf-8")
     tmp.replace(path)
     try:
-        (d / f"{stem}.txt").write_text(
+        path.with_suffix(".txt").write_text(
             snapshot_text(playlist_name, items), encoding="utf-8")
     except Exception:
         log.debug("snapshot .txt write failed (non-fatal)", exc_info=True)
@@ -137,7 +165,7 @@ def write_snapshot(playlist_uuid: str, playlist_name: str, items: list,
 def mark_snapshot(path, state: str) -> None:
     """Advance a snapshot's state once we know how the write ended."""
     try:
-        p = Path(path)
+        p = snapshot_file(path)
         data = json.loads(p.read_text(encoding="utf-8"))
         data["state"] = state
         tmp = p.with_suffix(".json.tmp")
@@ -148,8 +176,9 @@ def mark_snapshot(path, state: str) -> None:
 
 
 def load_snapshot(path) -> dict:
-    """Read a snapshot back — for the Undo button and the restore route."""
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """Read a snapshot back — for the Undo button and the restore route.
+    Only ever from the backups folder; see snapshot_file."""
+    return json.loads(snapshot_file(path).read_text(encoding="utf-8"))
 
 
 def prune_snapshots(keep: int = SNAPSHOT_KEEP, dir_path=None) -> int:
@@ -167,7 +196,10 @@ def prune_snapshots(keep: int = SNAPSHOT_KEEP, dir_path=None) -> int:
                           ).get("state") == "put_in_flight":
                 continue
         except Exception:
-            pass
+            # Unreadable means we can't tell whether it was confirmed —
+            # but an unreadable backup can't be restored either, so it is
+            # safe to prune. Logged so a pattern of these is visible.
+            log.debug(f"unreadable snapshot {f.name}; pruning", exc_info=True)
         try:
             f.unlink()
             f.with_suffix(".txt").unlink(missing_ok=True)
@@ -191,6 +223,11 @@ def rollback(base: str, playlist_uuid: str, snapshot_items: list,
     red notice in this app that the operator must not miss."""
     from .templates import fetch_pp_playlist_raw
     out = {"attempted": True, "verified": False, "detail": {}}
+    try:
+        playlist_uuid = pp_id(playlist_uuid)
+    except ValueError:
+        log.error("rollback refused: not a ProPresenter playlist id")
+        return out
     try:
         put = http_put
         if put is None:
