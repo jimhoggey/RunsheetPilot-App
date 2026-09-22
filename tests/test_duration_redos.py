@@ -12,7 +12,6 @@ import time
 import pytest
 
 from propresenterrunsheet.parsing.duration import (
-    _DURATION_RE,
     _extract_duration_min,
     _find_duration_number,
 )
@@ -42,9 +41,6 @@ def test_same_answer_as_the_old_pattern(text):
     old = _OLD_DURATION_RE.search(text)
     expected = old.group(1) if old else ""
     assert _find_duration_number(text) == expected
-    # The re-exported pattern gained a lookbehind; it must still agree.
-    new = _DURATION_RE.search(text)
-    assert (new.group(1) if new else "") == expected
 
 
 def _seconds(fn, *args):
@@ -58,11 +54,6 @@ def test_long_run_of_digits_is_fast():
     digits = "9" * 200_000
     assert _seconds(_find_duration_number, digits) < 1.0
     assert _find_duration_number(digits) == ""
-
-
-def test_long_run_of_digits_is_fast_through_the_reexported_pattern():
-    digits = "9" * 200_000
-    assert _seconds(_DURATION_RE.search, digits) < 1.0
 
 
 def test_many_short_numbers_and_long_whitespace_are_fast():

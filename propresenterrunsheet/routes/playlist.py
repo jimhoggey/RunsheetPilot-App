@@ -10,6 +10,7 @@ by the sidebar's "Test connection" button."""
 
 import datetime as _dt
 import logging
+import os
 import re
 import shutil
 import time
@@ -288,8 +289,15 @@ def api_create_playlist():
         # playlists. An unplugged drive, a read-only folder or a Windows-
         # invalid name all land here; the UI already says "Could not find
         # the exported file" whenever export_path comes back empty.
+        #
+        # The folder is the one saved in Settings. The request only says
+        # WHETHER to export: a create call carrying a filesystem path would
+        # let whoever sends it choose where the app writes.
         export_path = None
-        export_dir = (body.get("export_dir") or "").strip()
+        export_dir = ""
+        if body.get("export"):
+            from ..settings import load_settings
+            export_dir = str(load_settings().get("export_dir") or "").strip()
         if export_dir:
             try:
                 pdir = find_playlist_dir(find_pp_root())
@@ -301,11 +309,18 @@ def api_create_playlist():
                     if candidates:
                         newest = max(candidates,
                                      key=lambda f: f.stat().st_mtime)
-                        Path(export_dir).mkdir(parents=True, exist_ok=True)
-                        dest = (Path(export_dir)
-                                / f"{_export_file_name(name)}.playlist")
+                        folder = os.path.normpath(export_dir)
+                        Path(folder).mkdir(parents=True, exist_ok=True)
+                        dest = os.path.normpath(os.path.join(
+                            folder, f"{_export_file_name(name)}.playlist"))
+                        # _export_file_name already keeps the name a plain
+                        # file name; this says so where CodeQL can see it.
+                        # join(folder, "") ends in exactly one separator,
+                        # so a drive root such as E:\ still works.
+                        if not dest.startswith(os.path.join(folder, "")):
+                            raise OSError("export name left the folder")
                         shutil.copy2(newest, dest)
-                        export_path = str(dest)
+                        export_path = dest
             except OSError:
                 log.exception("Playlist export failed (playlist itself "
                               "was created)")

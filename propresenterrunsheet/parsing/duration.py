@@ -15,23 +15,13 @@ import re
 # themselves are duration-based since the runsheet is uploaded days ahead.
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})\s*([AaPp][Mm])")
 
-# Matches durations like "20 min", "20min", "20 minutes", "20m", "(20 min)".
-#
-# _extract_duration_min no longer searches with this — see
-# _find_duration_number. It stays because parsing/__init__.py and
-# propresenter_app.py re-export it, and the `(?<!\d)` is there for anyone
-# who does search with it: a match can then only start on the FIRST digit
-# of a number, so a long run of digits is tried once, not from every
-# digit. It finds exactly what the pattern without it found.
-_DURATION_RE = re.compile(r"(?<!\d)(\d+)\s*(?:min(?:ute)?s?|m\b)",
-                          re.IGNORECASE)
-
-# _DURATION_RE's two halves, matched separately. Searching with the whole
-# pattern retried `\d+` from every digit of a long number before giving
-# up, so a note of a few thousand digits took quadratic time — and notes
-# arrive in the request body (CodeQL py/polynomial-redos). A bare `\d+`
-# always succeeds on a whole run, so finditer passes over the text once;
-# the unit is then checked at one fixed spot after each number.
+# Durations like "20 min", "20min", "20 minutes", "20m", "(20 min)", found
+# as a number and a unit matched separately. The single pattern
+# `(\d+)\s*(?:min(?:ute)?s?|m\b)` retried `\d+` from every digit of a long
+# number, so a note of a few thousand digits took quadratic time — and
+# notes arrive in the request body (CodeQL py/polynomial-redos). A bare
+# `\d+` always succeeds on a whole run, so finditer passes over the text
+# once; the unit is then checked at one fixed spot after each number.
 _NUMBER_RE = re.compile(r"\d+")
 _UNIT_RE = re.compile(r"min(?:ute)?s?|m\b", re.IGNORECASE)
 
@@ -63,8 +53,7 @@ def _extract_time_str(text: str) -> str:
 def _find_duration_number(text: str) -> str:
     """The number in the first "<number> <unit>" in `text`, or "".
 
-    The same answer `_DURATION_RE.search(text).group(1)` gives, in linear
-    time. The whitespace between number and unit is skipped in code:
+    The same answer the single pattern above gave, in linear time. The whitespace between number and unit is skipped in code:
     str.isspace() is the same character set as the regex's \\s. The unit is
     matched in place rather than on a slice, so `m\\b` still sees the
     character that really follows it."""

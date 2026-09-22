@@ -282,8 +282,8 @@ def _denied(cmd, cwd=None):
     "sed -i.bak 's/a/b/' propresenterrunsheet/net.py",
     "printf x | tee tests/test_new.py",
     "cp /tmp/x.py propresenterrunsheet/x.py",
-    "python3 - <<'PY'\nfrom pathlib import Path\n"
-    "p = Path(\"static/app.js\")\ns = p.read_text()\np.write_text(s)\nPY",
+    ("python3 - <<'PY'\nfrom pathlib import Path\n"
+     "p = Path(\"static/app.js\")\ns = p.read_text()\np.write_text(s)\nPY"),
     "python3 -c \"open('propresenterrunsheet/a.py','w').write('x')\"",
     "perl -pi -e 's/a/b/' propresenterrunsheet/stats.py",
     # A variable that resolves INTO the repo is still a repo write.
@@ -302,14 +302,14 @@ def test_bash_guard_refuses_shell_writes_into_source(cmd):
     "git checkout -b some-branch origin/main",
     "git diff main...HEAD -- static/app.js",
     "echo x > /tmp/scratch.txt",
-    "python3 - <<'PY'\nimport json\nd = json.load(open('graphify-out/graph.json'))\n"
-    "open('/tmp/out.json','w').write(json.dumps(d))\nPY",
+    ("python3 - <<'PY'\nimport json\nd = json.load(open('graphify-out/graph.json'))\n"
+     "open('/tmp/out.json','w').write(json.dumps(d))\nPY"),
     "ls > /dev/null 2>&1",
     "echo '{\"a\": 1.5}' > /tmp/x.json",
     # A variable pointing outside the repo. Refused before the fix: the
     # guard read "$SP/..." as a relative path inside the repo.
-    "SP=/tmp/rp-scratch; curl -s http://127.0.0.1:1/v1/playlists "
-    "> \"$SP/playlists.json\"",
+    ("SP=/tmp/rp-scratch; curl -s http://127.0.0.1:1/v1/playlists "
+     "> \"$SP/playlists.json\""),
     "echo x > \"$TMPDIR/probe.txt\"",
     # A `>` inside quotes is text. Refused before the fix as a write into
     # a file named "=1.0.1".
@@ -318,8 +318,8 @@ def test_bash_guard_refuses_shell_writes_into_source(cmd):
     "grep -n 'a > b' static/app.js",
     # A heredoc body is data. This exact commit was refused before the
     # fix, because its message mentioned tee, sed -i and a redirect.
-    "git commit -q -F - <<'EOF'\nStop edits slipping past (redirects, tee,\n"
-    "sed -i, `cat > static/app.js`) into the tree.\nEOF\ngit log --oneline -1",
+    ("git commit -q -F - <<'EOF'\nStop edits slipping past (redirects, tee,\n"
+     "sed -i, `cat > static/app.js`) into the tree.\nEOF\ngit log --oneline -1"),
 ])
 def test_bash_guard_leaves_everything_else_alone(cmd):
     assert not _denied(cmd), cmd
@@ -337,6 +337,37 @@ def test_bash_guard_post_is_silent_when_nothing_changed():
                "cwd": str(_REPO)}
     _guard_run("pre", payload)
     assert _guard_run("post", payload).strip() == ""
+
+
+def _load_guard():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bash_guard",
+                                                  HOOKS / "bash_guard.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("cmd, is_git", [
+    ("git checkout main", True),
+    ("cd /repo && git merge x", True),
+    ("cd a&&cd b && GIT_DIR=/x/.git FOO= git status", True),
+    ("gitk", False),
+    ("cd /repo && python3 x.py", False),
+    ("FOO=git make", False),
+])
+def test_bash_guard_recognises_git_behind_cd_and_env_prefixes(cmd, is_git):
+    assert _load_guard()._is_git(cmd) is is_git
+
+
+def test_bash_guard_git_check_is_linear_on_hostile_input():
+    """The shape CodeQL reported for the old pattern: many '!==! '."""
+    import time
+    guard = _load_guard()
+    for hostile in ("!==! " * 20_000, "cd a&&" * 20_000, "A=b " * 20_000 + "x"):
+        t = time.perf_counter()
+        guard._is_git(hostile)
+        assert time.perf_counter() - t < 1.0
 
 
 def test_bash_guard_survives_junk_input():

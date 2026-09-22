@@ -1,7 +1,9 @@
 """/api/create_playlist must keep request text out of paths, URLs and replies.
 
-Three things the route takes from the request and used to use as-is:
+Four things the route takes from the request and used to use as-is:
 
+  - the export FOLDER was a path in the request body; it now comes only
+    from the folder saved in Settings;
   - the playlist NAME became the export file name, so "../../x" wrote the
     .playlist file outside the folder the operator chose;
   - the same name was the fallback playlist id in the URL of the pushes
@@ -85,10 +87,17 @@ def pp_library(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _save_export_folder(folder):
+    """What the Settings panel does when the operator picks a folder."""
+    from propresenterrunsheet.settings import save_settings
+    save_settings({"export_dir": str(folder)})
+
+
 def test_a_traversal_name_is_exported_inside_the_chosen_folder(
         client, pp, pp_library):
     export_dir = pp_library / "exports" / "inner"
-    body = _create(client, "../../escaped", export_dir=str(export_dir))
+    _save_export_folder(export_dir)
+    body = _create(client, "../../escaped", export=True)
     assert body.get("ok") is True, body
 
     written = list(export_dir.iterdir())
@@ -101,9 +110,26 @@ def test_a_traversal_name_is_exported_inside_the_chosen_folder(
 
 def test_an_ordinary_name_is_exported_unchanged(client, pp, pp_library):
     export_dir = pp_library / "exports"
-    body = _create(client, "Sunday Service", export_dir=str(export_dir))
+    _save_export_folder(export_dir)
+    body = _create(client, "Sunday Service", export=True)
     assert body.get("ok") is True, body
     assert (export_dir / "Sunday Service.playlist").is_file()
+
+
+def test_a_folder_in_the_request_is_never_written_to(client, pp, pp_library):
+    """The request says whether to export; only Settings says where."""
+    saved, sent = pp_library / "exports", pp_library / "elsewhere"
+    _save_export_folder(saved)
+    body = _create(client, "Sunday Service", export=True, export_dir=str(sent))
+    assert body["export_path"] == str(saved / "Sunday Service.playlist")
+    assert not sent.exists()
+
+
+def test_no_export_unless_the_request_asks(client, pp, pp_library):
+    _save_export_folder(pp_library / "exports")
+    body = _create(client, "Sunday Service")
+    assert body.get("ok") is True and body["export_path"] is None
+    assert not (pp_library / "exports").exists()
 
 
 @pytest.mark.parametrize("name, expected", [
@@ -168,8 +194,8 @@ def test_a_failed_export_does_not_fail_the_create(client, pp, pp_library,
         raise OSError("No space left on device")
 
     monkeypatch.setattr(playlist_mod.shutil, "copy2", no_space)
-    body = _create(client, "Sunday Service",
-                   export_dir=str(pp_library / "exports"))
+    _save_export_folder(pp_library / "exports")
+    body = _create(client, "Sunday Service", export=True)
     assert body.get("ok") is True, body
     assert body["export_path"] is None
 

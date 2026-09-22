@@ -32,6 +32,7 @@ complete; it aims to catch every way this repo's source has actually been
 written through Bash. The post-check is the backstop that does not need
 to guess.
 """
+import contextlib
 import json
 import os
 import re
@@ -269,10 +270,8 @@ def _source_files():
 def _mtimes() -> dict:
     snap = {}
     for rel in _source_files():
-        try:
+        with contextlib.suppress(OSError):      # deleted since ls-files
             snap[rel] = os.stat(REPO / rel).st_mtime_ns
-        except OSError:
-            pass
     return snap
 
 
@@ -292,10 +291,8 @@ def _changed_since(payload: dict) -> list:
     except Exception:
         before = None
     finally:
-        try:
+        with contextlib.suppress(OSError):  # already gone: nothing to tidy
             state.unlink()
-        except Exception:
-            pass
     after = _mtimes()
     if before is None:
         # No snapshot (the pre half did not run): fall back to what the
@@ -335,15 +332,23 @@ def _replay(rel: str, script: str) -> str:
         return out
 
 
+# git moves the tree between committed states; that is not an edit. Leading
+# `cd … &&` and VAR=value prefixes are skipped first. Neither pattern can
+# split `&` or `=` two ways, so both stay linear (CodeQL py/redos on the
+# old `(?:\S+=\S+\s+)*git`).
+_CD_PREFIX = re.compile(r"^(?:cd\s+[^\s&]+\s*&&\s*)+")
+_GIT_CMD = re.compile(r"(?:\w+=\S*\s+)*git\b")
+
+
+def _is_git(cmd: str) -> bool:
+    return bool(_GIT_CMD.match(_CD_PREFIX.sub("", cmd.lstrip())))
+
+
 def post(payload: dict) -> str:
     changed = _changed_since(payload)
     if not changed:
         return ""
-    cmd = ((payload.get("tool_input") or {}).get("command") or "").lstrip()
-    # git moves the tree between committed states; that is not an edit.
-    # Skip any leading `cd … &&` and VAR=value prefixes before deciding.
-    head_cmd = re.sub(r"^(?:cd\s+\S+\s*&&\s*)+", "", cmd)
-    if re.match(r"(?:\S+=\S+\s+)*git\b", head_cmd):
+    if _is_git((payload.get("tool_input") or {}).get("command") or ""):
         return ""
     notes = []
     if len(changed) > _BULK:
