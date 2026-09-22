@@ -311,6 +311,11 @@ def test_bash_guard_refuses_shell_writes_into_source(cmd):
     "SP=/tmp/rp-scratch; curl -s http://127.0.0.1:1/v1/playlists "
     "> \"$SP/playlists.json\"",
     "echo x > \"$TMPDIR/probe.txt\"",
+    # A `>` inside quotes is text. Refused before the fix as a write into
+    # a file named "=1.0.1".
+    "uv pip install --python .venv/bin/python \"ocrmac>=1.0.1\"",
+    "python3 -c \"print(3 > 2)\"",
+    "grep -n 'a > b' static/app.js",
     # A heredoc body is data. This exact commit was refused before the
     # fix, because its message mentioned tee, sed -i and a redirect.
     "git commit -q -F - <<'EOF'\nStop edits slipping past (redirects, tee,\n"

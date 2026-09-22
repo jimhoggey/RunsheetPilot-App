@@ -139,6 +139,21 @@ _PATH_LITERAL = re.compile(
 _ASSIGN = re.compile(r"(\w+)\s*=\s*(?:Path\()?\s*['\"]([^'\"]+)['\"]")
 
 
+_QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
+
+
+def _mask_quoted_text(cmd: str) -> str:
+    """Blank out quoted strings for the REDIRECT scan — a `>` inside
+    quotes is text, not a redirect. `pip install "pkg>=1.0"` was refused
+    as a write into a file called "=1.0". A quoted string directly after
+    a real `>` is the redirect's own target (`> "static/app.js"`), so
+    that one is kept."""
+    def keep_or_blank(m):
+        before = cmd[:m.start()].rstrip()
+        return m.group(0) if before.endswith(">") else '""'
+    return _QUOTED.sub(keep_or_blank, cmd)
+
+
 _HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
@@ -200,7 +215,7 @@ def check_command(cmd: str, cwd: str):
     _CMD_VARS.clear()
     _CMD_VARS.update(_collect_vars(full))
     cmd = _strip_heredocs(full)            # shell syntax only
-    for m in _REDIRECT.finditer(cmd):
+    for m in _REDIRECT.finditer(_mask_quoted_text(cmd)):
         if _in_repo_source(m.group(1), cwd):
             return f"a redirect into {m.group(1).strip(chr(39) + chr(34))}"
     for m in _TEE.finditer(cmd):
