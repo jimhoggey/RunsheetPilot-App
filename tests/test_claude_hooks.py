@@ -286,6 +286,8 @@ def _denied(cmd, cwd=None):
     "p = Path(\"static/app.js\")\ns = p.read_text()\np.write_text(s)\nPY",
     "python3 -c \"open('propresenterrunsheet/a.py','w').write('x')\"",
     "perl -pi -e 's/a/b/' propresenterrunsheet/stats.py",
+    # A variable that resolves INTO the repo is still a repo write.
+    "D=static; echo x > \"$D/app.js\"",
 ])
 def test_bash_guard_refuses_shell_writes_into_source(cmd):
     assert _denied(cmd), cmd
@@ -304,6 +306,11 @@ def test_bash_guard_refuses_shell_writes_into_source(cmd):
     "open('/tmp/out.json','w').write(json.dumps(d))\nPY",
     "ls > /dev/null 2>&1",
     "echo '{\"a\": 1.5}' > /tmp/x.json",
+    # A variable pointing outside the repo. Refused before the fix: the
+    # guard read "$SP/..." as a relative path inside the repo.
+    "SP=/tmp/rp-scratch; curl -s http://127.0.0.1:1/v1/playlists "
+    "> \"$SP/playlists.json\"",
+    "echo x > \"$TMPDIR/probe.txt\"",
     # A heredoc body is data. This exact commit was refused before the
     # fix, because its message mentioned tee, sed -i and a redirect.
     "git commit -q -F - <<'EOF'\nStop edits slipping past (redirects, tee,\n"

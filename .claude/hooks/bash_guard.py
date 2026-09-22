@@ -65,12 +65,38 @@ _DENY = (
     "Writing outside the repo (a scratchpad, /tmp) is fine, and so is git.")
 
 
+# `NAME=value` assignments made earlier in the command being checked, so
+# `SP=/tmp/x; … > "$SP/out.json"` resolves to /tmp/x/out.json instead of
+# a literal "$SP" directory inside the repo. One command per hook process,
+# so a module-level table is enough.
+_CMD_VARS: dict = {}
+_ASSIGN_VAR = re.compile(r"(?:^|[\s;&|(])([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|)]*)")
+_VAR_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def _collect_vars(cmd: str) -> dict:
+    return {name: value.strip("'\"")
+            for name, value in _ASSIGN_VAR.findall(cmd or "")}
+
+
+def _expand_vars(s: str) -> str:
+    def sub(m):
+        name = m.group(1) or m.group(2)
+        return _CMD_VARS.get(name, os.environ.get(name, m.group(0)))
+    return _VAR_REF.sub(sub, s)
+
+
 def _in_repo_source(path_str: str, cwd: str) -> bool:
     """True when `path_str` names a file this repo authors."""
-    s = (path_str or "").strip().strip("'\"")
+    s = _expand_vars((path_str or "").strip().strip("'\""))
     if not s or s.startswith(("-", "&", "$(")) or s in ("/dev/null", "-"):
         return False
     if s.startswith("/dev/"):
+        return False
+    if "$" in s or "`" in s:
+        # A variable we could not resolve. Refusing on a guess would block
+        # ordinary scratch-file work; the post-check still catches a real
+        # write into the repo by looking at what actually changed.
         return False
     p = Path(os.path.expanduser(s))
     if not p.is_absolute():
@@ -171,6 +197,8 @@ def _script_writes_source(cmd: str, cwd: str) -> bool:
 def check_command(cmd: str, cwd: str):
     """The reason `cmd` is refused, or None to let it run."""
     full = cmd or ""
+    _CMD_VARS.clear()
+    _CMD_VARS.update(_collect_vars(full))
     cmd = _strip_heredocs(full)            # shell syntax only
     for m in _REDIRECT.finditer(cmd):
         if _in_repo_source(m.group(1), cwd):
