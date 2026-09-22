@@ -323,7 +323,6 @@ def score_pairs(matched: list, candidates: list, aliases=None,
         ttokens = title_token_set(title)
         want = recalled.get(recall_key(title))
         for c in candidates:
-            score, via = 0, ""
             if want == c["pos"]:
                 score, via = 1000, "recall"
             elif (resolve_with_aliases(title, [c], aliases) is not None
