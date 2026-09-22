@@ -650,6 +650,10 @@ function setPlaylistMode(mode) {
   if (row) row.hidden = upd;
   const aiRow = document.getElementById('ai-place-row');
   if (aiRow) aiRow.hidden = !upd;
+  // On whenever there's a key to use: file names in a working playlist
+  // are often stale, and only reading the slides gets past that.
+  const ai = document.getElementById('ai-place');
+  if (ai && upd) ai.checked = !!document.getElementById('or-key').value.trim();
   // onMatchToggle() greys the picker out when matching is off. In update
   // mode the checkbox that would turn it back on is hidden, so entering
   // this mode with matching off would leave the one control this mode

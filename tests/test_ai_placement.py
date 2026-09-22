@@ -199,6 +199,100 @@ def test_an_ai_placement_never_outranks_the_operator():
     assert report["by_recall"] == 1 and report["by_ai"] == 0
 
 
+# ── stale file names ──────────────────────────────────────────────────────
+# Media names in a working playlist are often out of date, so they must
+# not steer the model. Songs are different: a .pro file IS its title.
+
+def test_a_slide_with_a_meaningless_name_can_still_be_placed_by_the_model():
+    """"Final.png" has no usable word, so the name rule skipped it as a
+    candidate — and the model's correct answer for it was dropped."""
+    playlist = [_media("Final.png", "1"), _media("Worship loop", "2")]
+    _, report = build_update_payload(playlist, RUNSHEET[:1], ai_anchors={0: 0})
+    assert report["by_ai"] == 1
+    assert report["placements"][0]["above"] == "Final.png"
+
+
+def test_the_model_overrules_a_stale_name():
+    """"Offering" named the slide that now shows the notices."""
+    playlist = [_media("Welcome", "1"), _media("Offering", "2"),
+                _media("IMG_7", "3")]
+    runsheet = [{"parsed": {"type": "other", "title": "Offering"}}]
+    _, by_name = build_update_payload(playlist, runsheet)
+    assert by_name["placements"][0]["above"] == "Offering"
+    _, report = build_update_payload(playlist, runsheet, ai_anchors={0: 2})
+    assert report["placements"][0]["above"] == "IMG_7"
+
+
+def _ai_pass(monkeypatch, raw, matched):
+    """Run the route's AI pass with OCR and the model faked; return what
+    the model was handed and what came back."""
+    seen = {}
+    monkeypatch.setattr("propresenterrunsheet.settings.load_settings",
+                        lambda: {"or_key": "k", "or_model": "m"})
+    monkeypatch.setattr(playlist_mod, "fetch_catalogue", lambda: None)
+    # OCR answers by ProPresenter's own index, which counts headers.
+    monkeypatch.setattr(playlist_mod, "ocr_playlist_media",
+                        lambda base, uuid, items: {
+                            i: f"text {i}" for i, it in enumerate(items)
+                            if it["type"] != "header"})
+
+    def fake_align(matched, items, slide_text, known, *_a, **_k):
+        seen.update(items=[i["id"]["name"] for i in items],
+                    slide_text=slide_text, known=known)
+        return {0: 1}
+
+    monkeypatch.setattr(playlist_mod, "align_playlist", fake_align)
+    _, report = build_update_payload(raw, matched)
+    return playlist_mod._ai_anchors("http://pp", "PL", raw, matched, report), seen
+
+
+def test_the_model_counts_positions_the_way_the_payload_builder_does(monkeypatch):
+    """A re-run starts from a playlist that already has headers. Numbering
+    by ProPresenter's index there put every AI placement a few slides off."""
+    header = {"id": {"uuid": "", "name": "↕ Notices", "index": 0},
+              "type": "header", "target_uuid": "", "is_hidden": False,
+              "is_pco": False, "header_color": {}}
+    raw = [header, _media("IMG_1", "1"), header, _media("IMG_2", "2")]
+    found, seen = _ai_pass(monkeypatch, raw, RUNSHEET[:1])
+    assert seen["items"] == ["IMG_1", "IMG_2"]
+    assert seen["slide_text"] == {0: "text 1", 1: "text 3"}
+    assert found == {0: 1}
+
+
+def test_only_songs_and_the_operator_are_facts_to_the_model(monkeypatch):
+    playlist = [_pres("Goodness Of God", "2"), _media("Offering", "3")]
+    runsheet = [{"parsed": {"type": "song", "title": "Goodness of God"}},
+                {"parsed": {"type": "other", "title": "Offering"}}]
+    _, seen = _ai_pass(monkeypatch, playlist, runsheet)
+    assert seen["known"] == {0: 0}      # the song, not the "Offering" still
+
+
+def test_the_model_is_asked_even_when_names_placed_everything(monkeypatch):
+    playlist = [_media("Offering", "3")]
+    runsheet = [{"parsed": {"type": "other", "title": "Offering"}}]
+    found, seen = _ai_pass(monkeypatch, playlist, runsheet)
+    assert seen["known"] == {} and found == {0: 1}
+
+
+def test_a_playlist_with_nothing_to_place_against_is_never_sent(monkeypatch):
+    """Empty, or holding only headers: no answer could change anything."""
+    header = {"id": {"uuid": "", "name": "Offering", "index": 0},
+              "type": "header", "target_uuid": "", "is_hidden": False,
+              "is_pco": False, "header_color": {}}
+    for raw in ([], [header]):
+        found, seen = _ai_pass(monkeypatch, raw, RUNSHEET[:1])
+        assert found == {} and seen == {}
+
+
+def test_agreeing_with_a_name_is_not_reported_as_reading_the_slide():
+    """"Read off the slide" is for what only reading found — and a video
+    is never read at all."""
+    playlist = [_media("Offering Video.mp4", "1")]
+    runsheet = [{"parsed": {"type": "other", "title": "Offering Video"}}]
+    _, report = build_update_payload(playlist, runsheet, ai_anchors={0: 0})
+    assert report["by_name"] == 1 and report["by_ai"] == 0
+
+
 # ── the write reuses what was confirmed ───────────────────────────────────
 
 def test_anchors_from_the_client_are_re_validated():

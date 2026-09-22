@@ -622,29 +622,36 @@ def _sane_anchors(raw_anchors, n_runsheet: int, n_items: int) -> dict:
 
 def _ai_anchors(base: str, playlist_uuid: str, raw: list, matched: list,
                 report: dict) -> dict:
-    """Read the slides and ask a model to place what the rules missed.
+    """Read every still and ask a model where each runsheet line starts.
 
-    Runs only over the gaps: the deterministic anchors are passed in as
-    settled facts, so the model reasons about the items between them
-    instead of re-deciding the whole playlist. Entirely best-effort —
-    no key, no model, no OCR engine, an unreachable ProPresenter or a
-    refusing provider all return {}, which is the behaviour that shipped
-    before this existed."""
+    Media file names in a working playlist are often out of date, so a
+    name match is NOT a fact here: the model sees each item's name and
+    what its slide reads, and trusts the slide. The facts it works around
+    are the ones someone vouches for — recall (the operator dragged the
+    header there), an alias they taught, and a song, whose .pro name is
+    its title. Positions count only non-header items, as the payload
+    builder does; ProPresenter's own indexes count headers too. Entirely
+    best-effort: no key, model, OCR engine or answer returns {}."""
     from ..settings import load_settings
     settings = load_settings() or {}
     or_key = (settings.get("or_key") or "").strip()
     if not or_key:
         return {}
+    at = [i for i, it in enumerate(raw) if isinstance(it, dict) and not is_header(it)]
+    kept = [raw[i] for i in at]
     known = {p["index"]: p["above_index"] for p in report.get("placements", [])
-             if p.get("placed") and p.get("above_index") is not None}
-    if len(known) >= len(matched):
-        return {}                       # the rules placed everything
+             if p.get("above_index") is not None
+             and (p.get("via") in ("recall", "alias")
+                  or (kept[p["above_index"]].get("type") or "").lower() == "presentation")}
+    if not kept or len(known) >= len(matched):
+        return {}                       # nothing to place, or all vouched for
     catalogue = fetch_catalogue()
     model = resolve_model((settings.get("or_model") or "").strip(), catalogue)
     if not model:
         return {}
-    slide_text = ocr_playlist_media(base, playlist_uuid, raw)
-    return align_playlist(matched, raw, slide_text, known, is_header,
+    read = ocr_playlist_media(base, playlist_uuid, raw)     # by PP's index
+    slide_text = {pos: read[i] for pos, i in enumerate(at) if i in read}
+    return align_playlist(matched, kept, slide_text, known, is_header,
                           or_key, model,
                           backup=next_usable_model(model, catalogue))
 
@@ -660,9 +667,10 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
         base, playlist_uuid)
     raw = _read_target(base, playlist_uuid)
     items, report = build_update_payload(raw, matched, _aliases(), ai_anchors)
-    if use_ai and ai_anchors is None and report["unplaced"]:
-        # Second pass, and only when the free rules left gaps. The first
-        # pass is what tells the model which items are already settled.
+    if use_ai and ai_anchors is None:
+        # Second pass, even when the names placed everything: a stale
+        # name "matches" just as confidently as a right one. The first
+        # pass is what tells the model which placements are vouched for.
         found = _ai_anchors(base, playlist_uuid, raw, matched, report)
         if found:
             ai_anchors = found

@@ -7,7 +7,10 @@ and the placement rules that make the headers useful — see
 propresenter/playlist_update.py for why placement is built around the
 MISS rather than the hit."""
 
+import pytest
+
 from propresenterrunsheet.propresenter.playlist_update import (
+    BANNER_LABEL,
     UNPLACED_MARK,
     anchor_tokens,
     build_update_payload,
@@ -189,7 +192,7 @@ def test_split_existing_reads_last_weeks_placement_out_of_the_playlist():
     existing = [_header("Notices — 10:05 AM (6 min)"), _media("IMG_4021", "9")]
     kept, recalled = split_existing(existing)
     assert _names(kept) == ["IMG_4021"]
-    assert recalled["notices"] == ("T-9", "img_4021")
+    assert recalled["notices"] == 0          # the slide's position in kept
 
 
 def test_a_remembered_drag_beats_a_name_match_elsewhere():
@@ -207,7 +210,17 @@ def test_two_headers_with_the_same_wording_cannot_claim_one_slide():
     existing = [_header("Worship"), _media("IMG_01", "1"),
                 _header("Worship"), _media("IMG_02", "2")]
     _, recalled = split_existing(existing)
-    assert recalled["worship"] == ("T-1", "img_01")
+    assert recalled["worship"] == 0
+
+
+def test_recall_follows_the_slide_not_a_name_it_shares():
+    """Two slides called "Background": a header dragged above the second
+    must come back above the second, not snap to the first by name."""
+    existing = [_media("IMG_1", "1"), _media("Background", "2"),
+                _header("Notices"), _media("Background", "4")]
+    items, report = build_update_payload(existing, [_item("Notices")])
+    assert report["by_recall"] == 1
+    assert _names(items) == ["IMG_1", "Background", "Notices", "Background"]
 
 
 # ── echoing existing items back to ProPresenter ───────────────────────────
@@ -354,7 +367,24 @@ def test_a_stack_of_unplaced_headers_is_not_recalled():
 def test_a_dragged_out_unplaced_header_is_recalled():
     """A ↕ header the operator dragged out of the stack stands alone
     above its slide — that IS a placement, and it should stick."""
-    playlist = [_header(UNPLACED_MARK + "Offering (4 min)"),
+    playlist = [_media("05_announcements", "5"),
+                _header(UNPLACED_MARK + "Offering (4 min)"),
                 _media("06_giving", "6")]
     _, recalled = split_existing(playlist)
-    assert recalled["offering"][1] == "06_giving"
+    assert recalled["offering"] == 1
+
+
+@pytest.mark.parametrize("top", [[], [_header(BANNER_LABEL)]])
+def test_a_lone_unplaced_header_at_the_top_is_not_recalled(top):
+    """The top is where this module stacks lines it could not place, so a
+    ↕ header there says nothing — and recalling it made the second click
+    write again instead of being a no-op."""
+    first, _ = build_update_payload(
+        [_media("Loop", "1"), _media("IMG_2", "2")],
+        [_item("Pre-service"), _item("Welcome")], ai_anchors={1: 1})
+    assert _names(first)[0] == UNPLACED_MARK + "Pre-service"
+    _, recalled = split_existing(top + _as_pp_reads_it_back(first))
+    assert "pre service" not in recalled
+    second, _ = build_update_payload(_as_pp_reads_it_back(first),
+                                     [_item("Pre-service"), _item("Welcome")])
+    assert visible_signature(second) == visible_signature(first)

@@ -232,10 +232,12 @@ def split_existing(raw: list) -> tuple:
     accumulating them.
 
     `recalled` is the payoff for reading the old headers before dropping
-    them: `{recall_key(label): (asset_uuid, casefolded_name)}` for the
-    slide each header sits DIRECTLY above. That pairing is the operator's
-    own answer to "where does this line belong", recorded by the act of
-    dragging it there last week.
+    them: `{recall_key(label): position in kept}` of the slide each header
+    sits DIRECTLY above — the operator's own answer to "where does this
+    line belong", recorded by dragging it there. A position, not a name
+    or uuid: ProPresenter re-mints uuids on every write, and two slides
+    called "Background" share a name, but recall and the candidates it
+    is matched against always come from this same read.
 
     Only the header directly above a slide describes it. When several
     headers stack up before one slide, the ones higher up are the
@@ -244,8 +246,9 @@ def split_existing(raw: list) -> tuple:
     against ProPresenter, treating a whole stack as placed made a second
     run recall every line to the first slide, plan something different,
     and write again when nothing had changed. So a ↕ header counts only
-    once it stands alone (the operator has dragged it out), the banner
-    never counts, and each entry is claimed at most once."""
+    once it stands alone BELOW some slide (at the very top it is where
+    this module puts unplaced lines itself), the banner never counts, and
+    each entry is claimed at most once."""
     kept, recalled = [], {}
     run = []          # header names since the last slide, in order
     for it in raw or []:
@@ -259,33 +262,34 @@ def split_existing(raw: list) -> tuple:
         if run:
             nearest = run[-1]
             placed = (not nearest.startswith(UNPLACED_MARK.strip())
-                      or len(run) == 1)
+                      or (len(run) == 1 and bool(kept)))
             key = recall_key(nearest)
             if placed and key:
-                idd = it.get("id") or {}
-                recalled.setdefault(key, (
-                    asset_uuid_of(it),
-                    (idd.get("name") or "").strip().casefold()))
+                recalled.setdefault(key, len(kept))
             run = []
         kept.append(it)
     return kept, recalled
 
 
 def anchor_candidates(kept: list) -> list:
-    """The existing items a runsheet line could sit above."""
+    """Every existing item, as something a runsheet line could sit above.
+
+    Items whose name carries no usable word ("Final.png", "01.png") stay
+    in: the name rule can't match them, but recall and the slide-reading
+    pass can, and a stale or meaningless name is exactly the case that
+    pass exists for."""
     out = []
     for pos, it in enumerate(kept):
-        idd = it.get("id") or {}
-        name = (idd.get("name") or "").strip()
-        if not name:
-            continue
-        tokens = anchor_tokens(name)
-        if not tokens:
-            continue
-        out.append({"pos": pos, "name": name, "tokens": tokens,
-                    "uuid": asset_uuid_of(it),
-                    "key": name.casefold()})
+        name = ((it.get("id") or {}).get("name") or "").strip()
+        out.append({"pos": pos, "name": name, "tokens": anchor_tokens(name)})
     return out
+
+
+def _name_tier(c: dict, ttokens: set) -> tuple:
+    """(score, via) when every word of the item's name is in the title."""
+    if not c["tokens"] or not c["tokens"] <= ttokens:
+        return 0, ""
+    return (10 * len(c["tokens"]), "name") if len(c["tokens"]) > 1 else (5, "weak")
 
 
 def score_pairs(matched: list, candidates: list, aliases=None,
@@ -320,9 +324,7 @@ def score_pairs(matched: list, candidates: list, aliases=None,
         want = recalled.get(recall_key(title))
         for c in candidates:
             score, via = 0, ""
-            if want and (
-                    (want[0] and want[0] == c["uuid"])
-                    or (want[1] and want[1] == c["key"])):
+            if want == c["pos"]:
                 score, via = 1000, "recall"
             elif (resolve_with_aliases(title, [c], aliases) is not None
                   and resolve_object(title, [c]) is None):
@@ -332,10 +334,11 @@ def score_pairs(matched: list, candidates: list, aliases=None,
                 # without a second copy of the rule drifting from it.
                 score, via = 500, "alias"
             elif ai.get(n) == c["pos"]:
-                score, via = 200, "ai"
-            elif c["tokens"] <= ttokens:
-                score = 10 * len(c["tokens"]) if len(c["tokens"]) > 1 else 5
-                via = "name" if len(c["tokens"]) > 1 else "weak"
+                # Where the model only agreed with the name, say so: the
+                # preview's "read off the slide" is for what reading found.
+                score, via = 200, _name_tier(c, ttokens)[1] or "ai"
+            else:
+                score, via = _name_tier(c, ttokens)
             if score:
                 pairs.append({"n": n, "pos": c["pos"], "score": score,
                               "via": via, "name": c["name"]})

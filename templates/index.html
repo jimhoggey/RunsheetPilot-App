@@ -130,9 +130,10 @@
       <span>Populate with media from PP</span>
     </label>
     <!-- Update mode only. Reads each still with the machine's own OCR
-         engine and sends the TEXT (never the images) to the model, so
-         slides named IMG_4021 can still be matched. Off by default: it
-         spends an AI request and sends slide wording to OpenRouter. -->
+         engine and sends the TEXT (never the images) to the model, so a
+         slide with a stale or meaningless name still lands in the right
+         place. Ticked whenever an OpenRouter key is set; untick to place
+         by names alone and send nothing. -->
     <label id="ai-place-row" hidden
            style="display:flex;align-items:center;gap:8px;cursor:pointer;
                   margin:10px 0 4px;font-size:.78rem;font-weight:600">

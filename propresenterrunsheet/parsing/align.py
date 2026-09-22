@@ -19,10 +19,11 @@ Three things make this a tractable question rather than an open
 
   • BOTH LISTS ARE IN SERVICE ORDER. The model is filling gaps in a
     sequence, not matching two unordered bags.
-  • THE DETERMINISTIC ANCHORS ARE GIVEN AS FACTS, not re-asked. Songs
-    in particular are usually already placed, because a `.pro` file is
-    normally named after its song — so they pin the sequence and the
-    model only reasons about what sits between them.
+  • WHAT SOMEONE VOUCHES FOR IS GIVEN AS FACT, not re-asked: where the
+    operator dragged a header, an alias they taught, and songs, whose
+    `.pro` file is named after the song. Media file names are not in
+    that list — in a working playlist they are often out of date — so
+    the model weighs them below what the slide actually reads.
   • EVERY playlist item is listed, including ones with no OCR text.
     Omitting them would leave holes in the ordering and destroy the one
     signal that costs nothing.
@@ -82,6 +83,8 @@ RULES
 - Weigh, in this order: text read off the slide, the slide's name, the
   position in the sequence, then the runsheet's times and durations
   (a 30-minute line is the sermon; a 3-minute one is not).
+- Slide names are often out of date. When what a slide reads and what
+  it is called disagree, trust what it reads.
 
 Reply with JSON only:
 {{"placements": [{{"runsheet": 0, "playlist": 3}}, {{"runsheet": 1, "playlist": null}}]}}
