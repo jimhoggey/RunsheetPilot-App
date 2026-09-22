@@ -307,3 +307,61 @@ def test_meta_prop_names_cannot_be_shadowed_by_a_real_setting():
         assert name not in _default_settings(), (
             f"a real setting is named {name!r}, which collides with the "
             f"props settings_change_props emits")
+
+
+def test_update_events_carry_only_counts_and_a_closed_reason_vocabulary():
+    """The update routes are the newest place a runsheet title, a media
+    filename or a playlist name could be interpolated into telemetry.
+
+    `track()` does NOT scrub prop values — a string passed here goes out
+    verbatim — so the guard has to be that these two events carry numbers
+    and nothing else, except `reason`, which is drawn from a fixed list
+    of our own literals. This reads the route source rather than calling
+    the routes, so it catches a future edit that adds a string prop
+    without any of the app's plumbing having to run.
+    """
+    import ast
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "propresenterrunsheet" / "routes" / "playlist.py")
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+
+    REASONS = {
+        "no_playlist", "read_failed", "playlist_active", "concurrent_edit",
+        "pp_unreachable", "pp_refused", "verify_failed", "rolled_back",
+        "rollback_failed", "unexpected",
+    }
+    seen = 0
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "track"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value in ("playlist_updated",
+                                           "playlist_update_failed")):
+            continue
+        seen += 1
+        for kw in node.keywords:
+            if kw.arg == "reason":
+                # Either a literal from the closed set, or the `reason`
+                # name bound from an UpdateAborted — never an f-string or
+                # an exception's text.
+                if isinstance(kw.value, ast.Constant):
+                    assert kw.value.value in REASONS, (
+                        f"unknown reason {kw.value.value!r} — add it to the "
+                        "vocabulary here and confirm it carries no content")
+                else:
+                    assert isinstance(kw.value, ast.Name), (
+                        "reason must be a literal or a plain name, never a "
+                        "computed string that could carry operator content")
+                continue
+            # Everything else must be a number or a len()/int() of one.
+            v = kw.value
+            ok = (isinstance(v, ast.Constant) and isinstance(v.value, int)) \
+                or isinstance(v, ast.Call) \
+                or isinstance(v, ast.Subscript)
+            assert ok, (f"{kw.arg!r} on the update events is not obviously a "
+                        "count — names and numbers only, never content")
+    assert seen >= 2, "update telemetry call sites moved — retarget this test"

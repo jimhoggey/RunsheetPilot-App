@@ -49,6 +49,28 @@ def _color_dict(rgba: tuple) -> dict:
     return {"red": r, "green": g, "blue": b, "alpha": a}
 
 
+def asset_uuid_of(item: dict) -> str:
+    """The ASSET uuid PP identifies a playlist item by — NOT the item's own
+    playlist-item uuid, which PP 404s on when sent back.
+
+    Where it lives depends on the item's type, established by live
+    testing against PP 7 (see the expander in build_playlist_payload):
+
+        media        → top-level `target_uuid`
+        presentation → `presentation_info.presentation_uuid`
+        loop         → presentation + `duration`, same location
+
+    Public and extracted rather than inlined because update mode echoes
+    existing playlist items back to PP and must apply the identical rule.
+    A second copy of it is exactly how two paths drift apart."""
+    pinfo = item.get("presentation_info") or {}
+    return (pinfo.get("presentation_uuid")
+            or item.get("target_uuid")
+            or (item.get("id") or {}).get("uuid")
+            or item.get("uuid", "")
+            or "")
+
+
 # A time of day at the START of the notes field. Parses made before
 # `start_time` existed carried the time there — the model happened to lead
 # the notes with it — so this recovers it for playlists built from older
@@ -184,10 +206,9 @@ def build_playlist_payload(matched: list) -> list:
                 # Asset UUID: presentation_info.presentation_uuid for
                 # presentation + loop items, target_uuid for media. Fall
                 # back to the bare uuid only for synthetic test fixtures
-                # that lack both.
-                asset = (pinfo.get("presentation_uuid")
-                         or ti.get("target_uuid")
-                         or ti.get("uuid", ""))
+                # that lack both. Shared with update mode — see
+                # asset_uuid_of's docstring for why it is one function.
+                asset = asset_uuid_of(ti)
                 item_type = ti.get("type") or "presentation"
                 entry = {
                     "id":          {"uuid":  asset,

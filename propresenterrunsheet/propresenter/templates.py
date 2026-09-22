@@ -46,6 +46,23 @@ def template_candidates(playlists: list) -> list:
             or "template" in (p.get("name") or "").lower()]
 
 
+def template_uuids(playlists: list, pinned: str = "") -> set:
+    """Every playlist the app treats as a template: the ones whose NAME
+    flags them (what Auto considers — see template_candidates) plus the
+    one the operator pinned in the dropdown, whatever it is called.
+
+    One definition, used everywhere the distinction shows: the grouped
+    dropdown, and update mode's warning before it rewrites a template.
+    A pinned playlist counts because pinning is the operator saying so
+    — the name rule is only the app's guess."""
+    out = {p.get("uuid") for p in template_candidates(playlists)
+           if p.get("uuid")}
+    pinned = (pinned or "").strip()
+    if pinned and any(p.get("uuid") == pinned for p in playlists or []):
+        out.add(pinned)
+    return out
+
+
 def _template_signal_tokens(name: str) -> set:
     """Return the distinctive lowercased tokens in a playlist name —
     the ones that identify which service type it's for. The shared
@@ -91,19 +108,48 @@ def fetch_pp_playlists(base: str) -> list:
         return []
 
 
-def fetch_pp_playlist_items(base: str, playlist_uuid: str) -> list:
-    """Return the raw items of a PP playlist (each is a header or media
-    entry). Empty list on any failure — caller treats absent template as
-    "no augmentation, parse normally". Caller is responsible for caching."""
+def fetch_pp_playlist_raw(base: str, playlist_uuid: str) -> Optional[list]:
+    """The raw items of a PP playlist, or None when the read FAILED.
+
+    The None-vs-[] distinction is the whole point of this function, and it
+    is load-bearing for update mode. `fetch_pp_playlist_items` below
+    collapses both to [] — correct for the template path, where a
+    unreadable template just means "no augmentation". But update mode
+    REPLACES the playlist with what it believes is in there: reading a
+    network hiccup as "the playlist is empty" and PUTting headers-only
+    against that belief deletes every slide the operator built.
+
+    So: None means "ProPresenter didn't answer, or answered with
+    something that isn't a playlist" — abort, write nothing. [] means the
+    playlist really is empty, which is a legitimate thing to organise.
+
+    A response with no `items` key at all is a read failure too, not an
+    empty playlist: the dropdown lists whatever /v1/playlists returns,
+    which can include things that are not item-bearing playlists."""
     import requests as req
     try:
         r = req.get(f"{base}/v1/playlist/{playlist_uuid}", timeout=6)
         r.raise_for_status()
-        return r.json().get("items") or []
+        data = r.json()
+        if not isinstance(data, dict) or "items" not in data:
+            log.debug(f"fetch_pp_playlist_raw({playlist_uuid}): no items key")
+            return None
+        items = data.get("items")
+        return items if isinstance(items, list) else None
     except Exception:
-        log.debug(f"fetch_pp_playlist_items({playlist_uuid}) failed",
+        log.debug(f"fetch_pp_playlist_raw({playlist_uuid}) failed",
                   exc_info=True)
-        return []
+        return None
+
+
+def fetch_pp_playlist_items(base: str, playlist_uuid: str) -> list:
+    """Return the raw items of a PP playlist (each is a header or media
+    entry). Empty list on any failure — caller treats absent template as
+    "no augmentation, parse normally". Caller is responsible for caching.
+
+    Callers that must tell a failed read from an empty playlist want
+    `fetch_pp_playlist_raw` instead."""
+    return fetch_pp_playlist_raw(base, playlist_uuid) or []
 
 
 def playlist_to_sections(items: list) -> list:

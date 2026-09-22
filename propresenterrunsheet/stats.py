@@ -67,6 +67,9 @@ EVENTS = (
     "playlist_created",
     "playlist_failed",
     "media_unlinked",
+    # adding headers to a playlist the operator already built
+    "playlist_updated",
+    "playlist_update_failed",
     # the downloaded-media assist panel
     "media_assist_shown",
     "media_assist_reveal",

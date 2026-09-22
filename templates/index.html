@@ -84,14 +84,32 @@
     </div>
   </div>
 
-  <!-- Template Playlist — the recurring template the operator built once in
+  <!-- Playlist — two modes sharing one dropdown.
+       CREATE (default): the recurring TEMPLATE the operator built once in
        PP (e.g. "Youth Service - Library"). Auto routes by runsheet content
        when there are multiple templates; operator can lock to a specific
-       one via the dropdown. See routes/parse.py for the resolution. -->
+       one. See routes/parse.py for the resolution.
+       UPDATE: the playlist they have ALREADY built and filled with media,
+       which Runsheet Pilot only adds coloured section headers to. No Auto
+       option there — guessing which playlist someone hand-built is how you
+       write this week's headers into last week's service. See
+       propresenter/playlist_update.py. -->
   <div class="sidebar-section">
-    <div class="sec-title"><span>Template Playlist</span></div>
+    <div class="sec-title"><span id="playlist-sec-title">Template Playlist</span></div>
+    <!-- Not persisted, and reset to Create with every new runsheet — same
+         call as the match toggle below, for a worse downside: a mode left
+         on Update would quietly rewrite an old playlist next Sunday
+         instead of creating anything. -->
+    <div class="radio-row" id="playlist-mode" style="margin-bottom:10px">
+      <label><input type="radio" name="playlist-mode" value="create" checked
+                    onchange="setPlaylistMode('create')">
+             Create a new playlist</label>
+      <label><input type="radio" name="playlist-mode" value="update"
+                    onchange="setPlaylistMode('update')">
+             Update an existing playlist</label>
+    </div>
     <div class="field" style="margin-bottom:6px">
-      <label>Reuse sections from this PP playlist</label>
+      <label id="template-playlist-label">Reuse sections from this PP playlist</label>
       <select id="template-playlist">
         <option value="">⚡ Auto — pick best for this runsheet</option>
       </select>
@@ -110,6 +128,16 @@
       <input type="checkbox" id="match-toggle" checked
              onchange="onMatchToggle()" style="margin:0;flex:none">
       <span>Populate with media from PP</span>
+    </label>
+    <!-- Update mode only. Reads each still with the machine's own OCR
+         engine and sends the TEXT (never the images) to the model, so
+         slides named IMG_4021 can still be matched. Off by default: it
+         spends an AI request and sends slide wording to OpenRouter. -->
+    <label id="ai-place-row" hidden
+           style="display:flex;align-items:center;gap:8px;cursor:pointer;
+                  margin:10px 0 4px;font-size:.78rem;font-weight:600">
+      <input type="checkbox" id="ai-place" style="margin:0;flex:none">
+      <span>Use AI to place headers</span>
     </label>
     <div id="template-status" style="font-size:.72rem;color:var(--muted);line-height:1.5">
       <strong>Auto</strong> picks the template for whichever service this is.
@@ -281,18 +309,18 @@
   <div class="step-card state-locked" id="step-card-3">
     <div class="step-header">
       <div class="step-badge"><span class="step-num">3</span></div>
-      <div class="step-title">Create Runsheet &amp; Export</div>
+      <div class="step-title" id="step-3-title">Create Runsheet &amp; Export</div>
       <div class="step-meta" id="step-3-meta"></div>
     </div>
     <div class="step-body">
-      <p class="step-desc">
+      <p class="step-desc" id="step-3-desc">
         The new playlist will appear in ProPresenter immediately. If you
         set an export folder in Settings, a <code>.playlist</code> backup
         file is saved there too.
       </p>
       <div class="row" style="align-items:stretch;gap:12px">
         <div style="flex:1">
-          <label for="playlist-name">Service name (also the playlist name in PP)</label>
+          <label for="playlist-name" id="playlist-name-label">Service name (also the playlist name in PP)</label>
           <input id="playlist-name" type="text"
                  placeholder="Sunday Service · 4 May 2026" style="margin-bottom:0">
         </div>
@@ -308,13 +336,21 @@
            is being built in ProPresenter. Mounted by createPlaylist(). -->
       <div class="orb-loader" id="create-loader" hidden>
         <canvas id="create-orb" width="64" height="64" role="img" aria-label="Working…"></canvas>
-        <div class="orb-label">Building the playlist in ProPresenter…</div>
+        <div class="orb-label" id="create-orb-label">Building the playlist in ProPresenter…</div>
       </div>
     </div>
   </div>
 
+  <!-- Update-mode plan. Shown BEFORE anything is written, because the
+       write replaces a playlist the operator assembled by hand — they
+       see where every header lands and confirm it. A plan summary, not
+       an editor: dragging a header is their native motion in PP, and
+       update mode reads those drags back next week (see "recall" in
+       propresenter/playlist_update.py). -->
+  <div id="update-plan" role="status" aria-live="polite" hidden></div>
+
   <!-- Result notice — green/red banner that appears after create. -->
-  <div id="result-notice"></div>
+  <div id="result-notice" role="status" aria-live="polite"></div>
 
   <!-- ── SERVICE MATE (collapsible, off by default) ──────────────── -->
   <div class="card sm-card" id="sm-card" data-collapsed>
