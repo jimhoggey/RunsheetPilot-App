@@ -37,6 +37,8 @@ card then shows the result before a single byte is written."""
 import json
 import logging
 import re
+import threading
+import time
 
 from ..config import APP_NAME
 from ..logging_setup import log_safe
@@ -46,6 +48,31 @@ from .models import provider_failure
 log = logging.getLogger("pp_runsheet")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# Wall-clock limit on the whole pass, backup model included. A read timeout
+# is not enough: OpenRouter trickles keep-alive bytes while a model works,
+# so a slow reply never trips one — live, a preview sat for minutes. Good
+# answers from the free default model took 12-28 s; a paid one takes a few.
+_BUDGET_S = 30
+
+
+def _within(deadline: float, fn, *args):
+    """fn(*args), or None if it hasn't returned by `deadline` (monotonic).
+    Runs on a daemon thread, so an abandoned call never holds the app open."""
+    box = {}
+
+    def run():
+        try:
+            box["r"] = fn(*args)
+        except Exception as e:          # re-raised below, in the caller
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(max(0.0, deadline - time.monotonic()))
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
 
 # A model that maps most of the runsheet onto one slide has not solved
 # the problem, it has collapsed. Such a reply is thrown away whole
@@ -272,16 +299,21 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
                       # result as a no-op and skips the write entirely.
                       "temperature": 0,
                       "response_format": {"type": "json_object"}},
-                timeout=60)
+                timeout=_BUDGET_S)
 
-        r = ask(model)
-        failure = provider_failure(r)
+        deadline = time.monotonic() + _BUDGET_S
+        r = _within(deadline, ask, model)
+        failure = r is not None and provider_failure(r)
         if failure and backup and backup != model:
             log.info("Alignment: %s failed behind %s (%s) — retrying with %s",
                      log_safe(failure["provider"]), log_safe(model),
                      failure["code"], log_safe(backup))
-            r = ask(backup)
-            failure = provider_failure(r)
+            r = _within(deadline, ask, backup)
+            failure = r is not None and provider_failure(r)
+        if r is None:
+            log.info("Alignment: no answer within %ss — placing without it",
+                     _BUDGET_S)
+            return {}
         if failure:
             log.info("Alignment: %s failed (%s) — placing without it",
                      log_safe(failure["provider"]), failure["code"])

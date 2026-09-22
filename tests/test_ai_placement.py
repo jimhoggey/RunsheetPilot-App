@@ -186,6 +186,24 @@ def test_a_busy_provider_gets_exactly_one_retry_on_the_backup_model():
     assert run([busy], None) == ({}, ["m"])
 
 
+def test_a_model_that_never_answers_costs_the_budget_not_minutes(monkeypatch):
+    """OpenRouter's keep-alive bytes meant a read timeout never fired, and a
+    preview sat waiting for minutes. The whole pass now has a hard limit."""
+    import time
+    from propresenterrunsheet.parsing import align
+
+    monkeypatch.setattr(align, "_BUDGET_S", 0.3)
+
+    def stuck(*_a, **_k):
+        time.sleep(5)
+
+    t = time.monotonic()
+    found = align.align_playlist(RUNSHEET, PLAYLIST, SLIDE_TEXT, {},
+                                 lambda it: False, or_key="k", model="m",
+                                 post=stuck, backup="b")
+    assert found == {} and time.monotonic() - t < 1.5
+
+
 def test_an_ai_placement_never_outranks_the_operator():
     """Recall is the operator saying where it goes. The model guessing
     otherwise must lose, every time."""
