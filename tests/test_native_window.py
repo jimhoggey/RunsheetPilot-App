@@ -10,8 +10,6 @@ without the WebView2 runtime).
 import sys
 import types
 
-import pytest
-
 from propresenterrunsheet import server
 
 

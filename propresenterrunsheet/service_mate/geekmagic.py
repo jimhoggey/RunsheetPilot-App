@@ -117,7 +117,10 @@ def _identify_clock(ip: str) -> dict:
             try:
                 fw = (r.json() or {}).get("firmware") or ""
             except Exception:
-                pass
+                # It answered /api/state, so it IS custom firmware; an
+                # unreadable body only costs us the version string.
+                log.debug("Clock %s sent an unreadable /api/state body",
+                          log_safe(ip), exc_info=True)
             return {"ok": True, "kind": "esp32",
                     "label": "Service Mate ESP32",
                     "detail": fw or "custom firmware"}
@@ -294,10 +297,10 @@ def clock_error_message(exc, ip: str) -> str:
             # The tell: a denied permission fails EVERY clock, every time.
             # A sleeping clock is intermittent and one-at-a-time.
             return (base + " — or macOS is blocking this app from reaching "
-                    f"your network. Check System Settings \u203a Privacy & "
-                    f"Security \u203a Local Network and turn on Runsheet "
-                    f"Pilot. If every clock fails and none of them ever come "
-                    f"back, it's this, not the hardware.")
+                    "your network. Check System Settings \u203a Privacy & "
+                    "Security \u203a Local Network and turn on Runsheet "
+                    "Pilot. If every clock fails and none of them ever come "
+                    "back, it's this, not the hardware.")
         return (base + ". If it never comes back, check the IP on the "
                 "clock's own screen.")
     if "refused" in text:

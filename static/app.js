@@ -176,7 +176,6 @@ function setStepState(n, state) {
 // as a single option so the user's choice survives and Settings still opens.
 async function loadModels(saved) {
   const sel  = document.getElementById('or-model');
-  const note = document.getElementById('or-model-note');
   if (!sel) return;
   let data = {models: [], auto: null, available: false};
   try {
@@ -465,7 +464,7 @@ function handleFileSelect(file) {
   dz.classList.add('has-file');
   dz.innerHTML = `
     <div style="font-size:1.8rem;margin-bottom:6px">✅</div>
-    <div style="font-weight:700;color:var(--grn)">${file.name}</div>
+    <div style="font-weight:700;color:var(--grn)">${escapeHtml(file.name)}</div>
     <div class="hint">${(file.size/1024).toFixed(0)} KB</div>`;
   // From here, "Start over" is the ONE way to change course — a second
   // hidden path (clicking the zone to swap files) made the state model

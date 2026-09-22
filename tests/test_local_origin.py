@@ -50,6 +50,22 @@ def test_a_same_origin_post_goes_through(client, isolated_state):
     assert r.status_code != 403
 
 
+@pytest.mark.parametrize("site", ["cross-site", "same-site"])
+def test_a_tag_fired_get_from_another_site_is_refused(client, site):
+    """An <img src="http://127.0.0.1:…/api/library/auto?dir=/"> sends no
+    Origin — Sec-Fetch-Site is what gives it away."""
+    r = client.get("/api/library/auto?dir=/", headers={"Sec-Fetch-Site": site})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("site", ["same-origin", "none"])
+def test_this_apps_own_requests_carry_a_fetch_site_that_passes(client, site):
+    """"same-origin" from the page's own fetches, "none" for the window's
+    first load."""
+    r = client.get("/api/health", headers={"Sec-Fetch-Site": site})
+    assert r.status_code == 200
+
+
 def test_quit_cannot_be_triggered_from_another_site(client, monkeypatch):
     """A page elsewhere could otherwise shut the app down mid-service."""
     import os

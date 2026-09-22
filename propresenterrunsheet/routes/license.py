@@ -9,6 +9,7 @@ import logging
 from flask import Blueprint, jsonify, request
 
 from ..licensing import service_mate_status, verify_license
+from ..logging_setup import log_safe
 from ..settings import load_settings, save_settings
 
 
@@ -45,5 +46,8 @@ def api_license_post():
                                  "contact support."}), 400
 
     save_settings({"license_key": key})
-    log.info("Service Mate licence activated for '%s'", payload.get("n"))
+    # The name comes out of the pasted key. The signature proves who issued
+    # it, not that it holds one clean line, so it is flattened before logging.
+    log.info("Service Mate licence activated for '%s'",
+             log_safe(payload.get("n")))
     return jsonify({"ok": True, **service_mate_status(), "has_key": True})

@@ -26,8 +26,6 @@ once on the next-ranked free model before surfacing an honest error.
 import io
 import json
 
-import pytest
-
 from propresenterrunsheet.service_mate import state as sm_state
 
 

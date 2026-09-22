@@ -14,6 +14,7 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
+from ..logging_setup import log_safe
 from ..propresenter.library import scan_library
 from ..settings import load_settings
 
@@ -31,13 +32,12 @@ def api_scan_library():
     if not Path(d).exists():
         return jsonify({"error": f"Folder not found: {d}"}), 400
     items = scan_library(d)
-    log.info(f"Library scan: {len(items)} items from {d}")
+    log.info(f"Library scan: {len(items)} items from {log_safe(d)}")
     return jsonify({"items": items, "count": len(items)})
 
 
 @bp.route("/api/library/fetch", methods=["POST"])
 def api_fetch_library():
-    import requests as req
     body = request.get_json(silent=True) or {}
     host = body.get("host") or "localhost"
     port = body.get("port") or "50001"
@@ -124,13 +124,13 @@ def api_library_auto():
         items = _fetch_library_via_api(host, port)
         if items:
             log.info(f"Library auto: {len(items)} items from PP API "
-                     f"({host}:{port}, mode={mode})")
+                     f"({log_safe(host)}:{log_safe(port)}, mode={mode})")
             return jsonify({"items": items, "source": "api",
                             "count": len(items)})
         if mode == "api":
             # API-only mode and PP didn't answer — don't fall back to disk.
             log.info(f"Library auto: PP unreachable in api-only mode "
-                     f"({host}:{port})")
+                     f"({log_safe(host)}:{log_safe(port)})")
             return jsonify({"items": [], "source": "none", "count": 0})
 
     # 2. Try disk scan (unless mode locks to api only — already returned above).
@@ -138,11 +138,12 @@ def api_library_auto():
         try:
             items = scan_library(disk_dir)
             log.info(f"Library auto: {len(items)} items from disk "
-                     f"({disk_dir}, mode={mode})")
+                     f"({log_safe(disk_dir)}, mode={mode})")
             return jsonify({"items": items, "source": "disk",
                             "count": len(items)})
         except Exception:
-            log.exception(f"Library auto: disk scan of {disk_dir} failed")
+            log.exception(f"Library auto: disk scan of {log_safe(disk_dir)} "
+                          "failed")
 
     # 3. Nothing worked — UI will show "no library, open Settings".
     log.info(f"Library auto: no source available (mode={mode})")

@@ -117,7 +117,6 @@ def test_clocks_existing_file_without_enabled_key_treated_as_enabled(
     master-switch existed get enabled=True so Service Mate keeps working
     after the upgrade. Only fresh installs (no clocks.json) inherit the
     new enabled=False default."""
-    import json
     from propresenterrunsheet.service_mate import state as sm_state
     legacy = {"clocks": [{"id": "screen", "role": "screen", "ip": "",
                           "name": "S", "verbosity": "compact"}],

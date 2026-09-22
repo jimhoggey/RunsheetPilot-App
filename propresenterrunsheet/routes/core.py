@@ -51,13 +51,27 @@ def _only_this_apps_own_page():
     Host is the header rebinding cannot fake: the browser still sends the
     attacker's hostname. Origin covers a cross-site form post. A missing
     Origin is allowed (same-origin GETs and non-browser tools send none);
-    "null" is not — a sandboxed frame sends that, never this app."""
+    "null" is not — a sandboxed frame sends that, never this app.
+
+    Sec-Fetch-Site closes the gap Origin leaves: a page elsewhere can
+    fire a plain GET at 127.0.0.1 from an <img> or <script> tag, which
+    carries no Origin at all, and several routes act on GET query strings
+    (/api/library/auto scans the ?dir= it is given). Every current browser
+    engine, including the WebKit and Chromium webviews this app runs in,
+    sends it on every request: "same-origin" from this app's own page,
+    "none" for the window's first load, "cross-site" from anywhere else.
+    Tools like curl and the test client send none, so an absent header
+    stays allowed."""
     if _hostname(request.host) not in _LOCAL_HOSTS:
         log.warning("Refused a request whose Host is not this machine")
         return jsonify({"error": "Not allowed."}), 403
     origin = request.headers.get("Origin")
     if origin is not None and _hostname(urlsplit(origin).netloc) not in _LOCAL_HOSTS:
         log.warning("Refused a cross-origin request")
+        return jsonify({"error": "Not allowed."}), 403
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site is not None and fetch_site not in ("same-origin", "none"):
+        log.warning("Refused a request from another site")
         return jsonify({"error": "Not allowed."}), 403
     return None
 
