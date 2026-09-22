@@ -10,14 +10,56 @@ import os
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
-from flask import Blueprint, jsonify, render_template
+from flask import Blueprint, jsonify, render_template, request
 
 from ..config import VERSION
 
 
 bp = Blueprint("core", __name__)
 log = logging.getLogger("pp_runsheet")
+
+# The hostnames this app's own page is ever served under: the native
+# window loads http://127.0.0.1:<port>, the browser fallback
+# http://localhost:<port> (see server.py).
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _hostname(netloc: str) -> str:
+    """'localhost:5757' → 'localhost', '[::1]:80' → '::1', junk → ''."""
+    try:
+        return (urlsplit(f"//{netloc}").hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+@bp.before_app_request
+def _only_this_apps_own_page():
+    """Refuse any request that did not come from this app's own page.
+
+    The server binds to 127.0.0.1, so nothing on the LAN can reach it —
+    but a web page open in a browser on the SAME machine can, through DNS
+    rebinding: a site points its own hostname at 127.0.0.1, and the
+    browser then treats this API as same-origin with it. Every route here
+    trusts its caller — folders to scan and export into, a quit endpoint,
+    writes to the operator's ProPresenter — so the caller has to be this
+    app. (This is also why the CodeQL path alerts on the operator-chosen
+    library and export folders are by design: the chooser is the
+    operator, and this check is what guarantees it.)
+
+    Host is the header rebinding cannot fake: the browser still sends the
+    attacker's hostname. Origin covers a cross-site form post. A missing
+    Origin is allowed (same-origin GETs and non-browser tools send none);
+    "null" is not — a sandboxed frame sends that, never this app."""
+    if _hostname(request.host) not in _LOCAL_HOSTS:
+        log.warning("Refused a request whose Host is not this machine")
+        return jsonify({"error": "Not allowed."}), 403
+    origin = request.headers.get("Origin")
+    if origin is not None and _hostname(urlsplit(origin).netloc) not in _LOCAL_HOSTS:
+        log.warning("Refused a cross-origin request")
+        return jsonify({"error": "Not allowed."}), 403
+    return None
 
 
 @bp.route("/")
