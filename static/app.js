@@ -1704,6 +1704,7 @@ async function parseRunsheet() {
         loader.classList.remove('orb-done');
         btn.hidden = false;
         btn.disabled = false;
+        if (seq !== _parseSeq) return;   // a new file or Start over since
         const wrap = document.getElementById('results-wrap');
         wrap.hidden = false;
         wrap.classList.add('spring-in');
