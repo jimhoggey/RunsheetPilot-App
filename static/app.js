@@ -368,7 +368,7 @@ async function loadSettings() {
   // Only the CREATE-mode pick is ever persisted; the update target is a
   // per-runsheet choice and resets with the mode.
   _createTemplateUuid = s.template_playlist_uuid || '';
-  await loadTemplatePlaylists(_createTemplateUuid);
+  await loadTemplatePlaylists();
   document.getElementById('template-playlist')
     .addEventListener('change', _rememberTemplatePick);
 
@@ -488,9 +488,26 @@ function handleDrop(e) {
   else setStatus('Drop a PDF, or a PNG/JPG screenshot of the runsheet.',
                  'var(--red)');
 }
+// Everything that belongs to one runsheet. A new file or Start over drops
+// it all, so Step 3 can never act on the runsheet before — and a parse
+// still running for that one is discarded when it lands.
+let _parseSeq = 0;
+function _clearRunsheetState() {
+  _parseSeq++;
+  matchedItems = [];
+  _clearUpdatePlan();
+  document.getElementById('results-wrap').hidden = true;
+  document.getElementById('results-body').innerHTML = '';
+  _hideNextStepHint();
+  document.getElementById('result-notice').innerHTML = '';
+  document.getElementById('step-3-meta').textContent = '';
+  setStepState(3, 'locked');
+}
+
 function handleFileSelect(file) {
   if (!file) return;
   uploadedFile = file;
+  _clearRunsheetState();
   // Every new runsheet starts with matching ON. See resetMatchToggle().
   resetMatchToggle();
   resetPlaylistMode();
@@ -612,7 +629,6 @@ function onMatchToggle() {
 // screen and the request can never disagree about which one is in effect.
 function setPlaylistMode(mode) {
   playlistMode = mode === 'update' ? 'update' : 'create';
-  _modeActedOn = false;
   const sel = document.getElementById('template-playlist');
   const upd = playlistModeIsUpdate();
   // Sync the radio, so a programmatic call can't leave the screen saying
@@ -666,22 +682,35 @@ function setPlaylistMode(mode) {
     const refresh = document.querySelector('[onclick="loadTemplatePlaylists()"]');
     if (refresh) { refresh.disabled = false; refresh.style.opacity = ''; }
   }
-  document.getElementById('update-plan').hidden = true;
-  _updatePlan = null;
-  // Rebuild the option list: the meta text and the first option differ.
-  loadTemplatePlaylists(upd ? _updateTargetUuid : _createTemplateUuid);
+  _clearUpdatePlan();
+  // Redraw from the cached list NOW — the dropdown must never show the
+  // other mode's list while the refresh below is in flight — then refresh.
+  _renderTemplateOptions();
+  loadTemplatePlaylists();
   if (!upd) onMatchToggle();
 }
 
 // A mode choice lasts until it's acted on. Once headers have been written,
-// the next runsheet starts back in Create: a mode left on Update would, next
-// Sunday, quietly write this week's headers into last week's hand-built
-// playlist. But choosing Update and THEN uploading must keep it — resetting
-// on every upload threw that choice away.
+// the next runsheet starts back in Create with no target: a mode left on
+// Update would, next Sunday, quietly write this week's headers into last
+// week's hand-built playlist. But choosing Update and THEN uploading must
+// keep it — resetting on every upload threw that choice away.
 function resetPlaylistMode() {
   if (!_modeActedOn) return;
-  setPlaylistMode('create');
+  _modeActedOn = false;
   _updateTargetUuid = '';
+  setPlaylistMode('create');
+}
+
+// The preview is a promise about one playlist, one runsheet and one mode.
+// Anything that changes those withdraws it, and bumping the sequence drops
+// a preview still in flight — so "✓ Update playlist" can only ever send
+// the placement that is on screen.
+let _updatePlanSeq = 0;
+function _clearUpdatePlan() {
+  _updatePlanSeq++;
+  _updatePlan = null;
+  document.getElementById('update-plan').hidden = true;
 }
 
 // ─── The template verdict banner ──────────────────────────────────────────
@@ -730,7 +759,12 @@ let _ppAutoDetected = '';
 // the update target.
 let _playlistLoadSeq = 0;
 
-async function loadTemplatePlaylists(selectUuid) {
+// Shows the pick remembered for the mode in effect when the answer lands
+// (_createTemplateUuid / _updateTargetUuid), never one captured at call time
+// — a pick made while loading must survive. A remembered pick missing from
+// this answer (ProPresenter closed, still starting) is kept, not wiped: only
+// the dropdown falls back, so the next autosave can't erase the saved pin.
+async function loadTemplatePlaylists() {
   const seq = ++_playlistLoadSeq;
   const status = document.getElementById('template-status');
   const host = document.getElementById('pp-host2').value || 'localhost';
@@ -742,15 +776,6 @@ async function loadTemplatePlaylists(selectUuid) {
     if (seq !== _playlistLoadSeq) return;           // superseded
     _ppPlaylists = res.playlists || [];
     _ppAutoDetected = res.auto_detected || '';
-    // Selection priority: explicit saved UUID > Auto (empty).
-    // When the operator hasn't picked anything (selectUuid == '' or unset),
-    // keep the dropdown on Auto rather than silently picking the auto-
-    // detected playlist — that way the operator SEES "Auto" is in effect
-    // and the routing happens fresh on every parse.
-    const want = selectUuid || '';
-    const pick = want && _ppPlaylists.some(p => p.uuid === want) ? want : '';
-    if (playlistModeIsUpdate()) _updateTargetUuid = pick;
-    else _createTemplateUuid = pick;
     setPPDot(_ppPlaylists.length > 0);
     _renderTemplateOptions();
   } catch (e) {
@@ -874,6 +899,12 @@ function _renderTemplateOptions() {
 function _rememberTemplatePick() {
   const v = document.getElementById('template-playlist').value;
   if (playlistModeIsUpdate()) {
+    if (v !== _updateTargetUuid) {
+      // A preview was for the old target; choosing a playlist is also a
+      // fresh decision, so the next runsheet must not undo it.
+      _clearUpdatePlan();
+      _modeActedOn = false;
+    }
     _updateTargetUuid = v;
     _renderTemplateOptions();          // refreshes the status line too
     return;
@@ -884,6 +915,9 @@ function _rememberTemplatePick() {
   // (an oddly-named one only counts while it is pinned), so regroup.
   if (changed) _renderTemplateOptions();
   else _syncCreateButton();
+  // Items parse already linked to the old template would otherwise keep
+  // its media, and the new playlist would be a mix of the two.
+  if (changed && matchedItems.length) rematchNow();
 }
 
 function _syncCreateButton() {
@@ -1465,6 +1499,7 @@ async function rematchNow() {
   // on rather than silently contradicting it. Create later reads the
   // toggle, so leaving it off here would throw the new links away.
   resetMatchToggle();
+  _clearUpdatePlan();
   const btn = document.getElementById('rematch-btn');
   btn.disabled = true;
   btn.textContent = '↻ Re-matching…';
@@ -1502,7 +1537,7 @@ function resetFlow() {
   _mediaAssistPolls = 0;
   document.getElementById('media-assist-card').hidden = true;
   uploadedFile = null;
-  matchedItems = [];
+  _clearRunsheetState();
   parsedTemplate = {uuid: '', name: '', declined: false, service_label: ''};
   _renderTemplateVerdict();
   document.getElementById('pdf-input').value = '';
@@ -1517,19 +1552,13 @@ function resetFlow() {
     <div class="hint">PDF · or a PNG/JPG screenshot</div>`;
   dz.onclick = () => document.getElementById('pdf-input').click();
   document.getElementById('reset-btn').hidden = true;
-  document.getElementById('results-wrap').hidden = true;
-  document.getElementById('results-body').innerHTML = '';
-  _hideNextStepHint();
-  document.getElementById('result-notice').innerHTML = '';
   document.getElementById('step-1-meta').textContent = '';
   _renderParseEstimate();
-  document.getElementById('step-3-meta').textContent = '';
   const today = new Date().toLocaleDateString('en-AU',
       {day:'2-digit', month:'short', year:'numeric'});
   document.getElementById('playlist-name').value = 'Service ' + today;
   setStepState(1, 'active');
   setStepState(2, 'locked');
-  setStepState(3, 'locked');
   _startIdleGreeter();
 }
 
@@ -1542,6 +1571,8 @@ async function parseRunsheet() {
     return;
   }
 
+  const seq = ++_parseSeq;
+  _clearUpdatePlan();                  // the plan was for the previous parse
   const btn = document.getElementById('parse-btn');
   btn.disabled = true;
   btn.hidden = true;
@@ -1601,6 +1632,7 @@ async function parseRunsheet() {
   try {
     const res = await fetch('/api/upload_and_parse', {method:'POST', body: form})
       .then(r => r.json());
+    if (seq !== _parseSeq) return;     // a new file or Start over since
     if (res.error) {
       setStatus('❌ ' + escapeHtml(res.error), 'var(--red)');
       setStepState(2, 'active');     // back to active so they can retry
@@ -1623,13 +1655,19 @@ async function parseRunsheet() {
       ? `AI found ${res.items.length} items — matching to library…`
       : `AI found ${res.items.length} items — building headers…`);
 
+    // Matching off means nothing to look up — and /api/match answers that
+    // case in a different shape, which left matchedItems undefined and
+    // every matching-off parse failing. Build the plain rows here instead.
     const threshold = parseInt(document.getElementById('threshold').value) / 100;
-    const matchRes = await fetch('/api/match', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({parsed: res.items, library: libraryItems, threshold,
-                            matching: matchingOn(),
-                            service_label: parsedTemplate.service_label})
-    }).then(r => r.json());
+    const matchRes = matchingOn()
+      ? await fetch('/api/match', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({parsed: res.items, library: libraryItems, threshold,
+                                matching: true,
+                                service_label: parsedTemplate.service_label})
+        }).then(r => r.json())
+      : {items: res.items.map(p => ({parsed: p, match: null, confidence: 0}))};
+    if (seq !== _parseSeq) return;
 
     matchedItems = matchRes.items;
     renderResults();
@@ -1767,6 +1805,12 @@ function renderResults() {
     tbody.appendChild(tr);
   });
 
+  if (playlistModeIsUpdate()) {
+    // Update mode never searches for songs, so song counts mean nothing here.
+    setStatus(`${matchedItems.length} items parsed &nbsp;·&nbsp; Click ` +
+              `<strong>Add Section Headers</strong> when ready.`, 'var(--grn)');
+    return;
+  }
   const unmatched = total - matched;
   const reusedFrag = reused
     ? ` &nbsp;·&nbsp; ♻ ${reused} reused from library` : '';
@@ -1958,6 +2002,12 @@ async function previewUpdate() {
     setStatus('Pick the playlist you want to add headers to.', 'var(--red)');
     return;
   }
+  _clearUpdatePlan();
+  const seq = _updatePlanSeq;
+  // What this plan is FOR. Confirm sends exactly these, not whatever the
+  // dropdown or the parse says by the time the operator clicks.
+  const target = {playlist_uuid: sel, playlist_name: _selectedPlaylistName(),
+                  matched: matchedItems};
   const btn = document.getElementById('create-btn');
   btn.disabled = true;
   const loader = document.getElementById('create-loader');
@@ -1969,15 +2019,17 @@ async function previewUpdate() {
   try {
     const res = await fetch('/api/update_playlist/preview', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(_updateBody({use_ai: _aiPlacementOn()}))
+      body: JSON.stringify(_updateBody({...target, use_ai: _aiPlacementOn()}))
     }).then(r => r.json());
+    // The playlist, runsheet or mode changed while this was working.
+    if (seq !== _updatePlanSeq) return;
     if (!res.ok) {
       document.getElementById('result-notice').innerHTML =
         `<div class="notice notice-err">❌ ${escapeHtml(res.error || 'Could not read that playlist.')}</div>`;
       setStatus('Nothing was changed.', 'var(--red)');
       return;
     }
-    _updatePlan = res;
+    _updatePlan = {...res, target};
     _renderUpdatePlan(res);
     // The plan is the confirm step for an irreversible write — it must
     // not appear silently below the fold.
@@ -1989,7 +2041,7 @@ async function previewUpdate() {
   } finally {
     orb.stop();
     loader.hidden = true;
-    btn.disabled = false;
+    _syncCreateButton();
   }
 }
 
@@ -2081,13 +2133,19 @@ function _renderUpdatePlan(res) {
 }
 
 function cancelUpdate() {
-  document.getElementById('update-plan').hidden = true;
-  _updatePlan = null;
+  _clearUpdatePlan();
   setStatus('Nothing was changed.', 'var(--muted)');
 }
 
+// The playlist the last write went into, for Undo — not whatever the
+// dropdown shows by the time Undo is pressed.
+let _lastWrittenUuid = '';
+
 async function confirmUpdate() {
-  if (!_updatePlan) return;
+  // Taken and withdrawn in one step: a double-click can't send it twice.
+  const plan = _updatePlan;
+  if (!plan) return;
+  _clearUpdatePlan();
   const btn = document.getElementById('create-btn');
   btn.disabled = true;
   const loader = document.getElementById('create-loader');
@@ -2102,14 +2160,18 @@ async function confirmUpdate() {
       // changed while the plan was on screen, the write is refused
       // rather than applied to a playlist that has moved on.
       body: JSON.stringify(_updateBody({
-        // The placement the operator just confirmed, not a fresh one.
-        ai_anchors: _updatePlan.ai_anchors || {},
-        expect_fingerprint: _updatePlan.fingerprint,
-        force: (_updatePlan.warnings || []).includes('live'),
+        // The playlist, runsheet and placement the operator just confirmed.
+        ...plan.target,
+        ai_anchors: plan.ai_anchors || {},
+        expect_fingerprint: plan.fingerprint,
+        force: (plan.warnings || []).includes('live'),
       }))
     }).then(r => r.json());
-    document.getElementById('update-plan').hidden = true;
-    _renderUpdateResult(res);
+    if (res.snapshot_path) {
+      _lastSnapshotPath = res.snapshot_path;
+      _lastWrittenUuid = plan.target.playlist_uuid;
+    }
+    _renderUpdateResult(res, plan.target.playlist_name);
     if (res.ok) _modeActedOn = true;
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
@@ -2117,15 +2179,13 @@ async function confirmUpdate() {
   } finally {
     orb.stop();
     loader.hidden = true;
-    btn.disabled = false;
-    _updatePlan = null;
+    _syncCreateButton();
   }
 }
 
-function _renderUpdateResult(res) {
+function _renderUpdateResult(res, playlistName) {
   const notice = document.getElementById('result-notice');
-  const name = escapeHtml(_selectedPlaylistName());
-  if (res.snapshot_path) _lastSnapshotPath = res.snapshot_path;
+  const name = escapeHtml(playlistName);
 
   // The one message in this app the operator must not be able to miss.
   if (res.reason === 'rollback_failed') {
@@ -2209,10 +2269,12 @@ async function restoreSnapshot(path) {
       body: JSON.stringify({
         host: document.getElementById('pp-host2').value,
         port: document.getElementById('pp-port2').value,
-        playlist_uuid: document.getElementById('template-playlist').value,
+        playlist_uuid: _lastWrittenUuid,
         snapshot_path: path,
       })
     }).then(r => r.json());
+    // Nothing stays written, so the next runsheet keeps the mode as it is.
+    if (res.ok) _modeActedOn = false;
     document.getElementById('result-notice').innerHTML =
       `<div class="notice notice-${res.ok ? 'ok' : 'err'}">
         ${res.ok ? '↺ ' + escapeHtml(res.message || 'Restored.')
