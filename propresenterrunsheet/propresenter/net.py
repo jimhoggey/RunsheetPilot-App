@@ -157,8 +157,34 @@ def pp_base(host, port) -> str:
             f"{str(host)[:60]} isn't an address ProPresenter can be on. "
             f"Use localhost, or the computer's name or LAN IP.")
     host_part = f"[{ip}]" if ip.version == 6 else str(ip)
+    return f"http://{host_part}:{_port_number(port)}"
+
+
+def _port_number(port) -> int:
+    """The port as an INTEGER in 1-65535, or raise UnreachableHost.
+
+    An int rather than a digit string, and the difference is not
+    cosmetic. The old `re.sub(r"\\D", "", port)` kept only digits and so
+    was already safe — but a digit string is still a string built from
+    request data, and CodeQL (which cannot prove a regex is a sanitiser)
+    traced it through the returned URL into every request the app makes.
+    That, not the host, was the source of the partial-SSRF alerts on
+    pp_base's callers: the host is rebuilt from an ipaddress object and
+    was never tainted. An int is a new value, so the trail ends here.
+
+    Empty or non-numeric input falls back to ProPresenter's default,
+    as it always has. Out of range is refused rather than quietly
+    replaced: sending the request to a port the operator did not type is
+    worse than telling them the one they typed cannot exist."""
     digits = re.sub(r"\D", "", str(port or ""))
-    return f"http://{host_part}:{digits or '50001'}"
+    if not digits:
+        return 50001
+    number = int(digits)
+    if not 1 <= number <= 65535:
+        raise UnreachableHost(
+            f"{digits[:12]} isn't a port number. ProPresenter's is "
+            f"usually 50001 — see Preferences → Integrations → Network.")
+    return number
 
 
 # A ProPresenter object id as it appears in a URL path segment. PP's own

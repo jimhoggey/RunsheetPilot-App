@@ -794,8 +794,6 @@ def api_update_playlist():
     port = body.get("port") or "50001"
     base = pp_base(host, port)
     playlist_uuid = (body.get("playlist_uuid") or "").strip()
-    playlist_name = (body.get("playlist_name") or "").strip() or "playlist"
-    service_name = (body.get("name") or "").strip() or playlist_name
     matched = body.get("matched") or []
     force = bool(body.get("force"))
     before = time.time()
