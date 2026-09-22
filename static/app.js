@@ -29,6 +29,7 @@ let parsedTemplate = {uuid: '', name: '', declined: false, service_label: ''};
 // only gets coloured headers added). Each mode keeps its own selection so
 // flipping between them never loses the other side's pick.
 let playlistMode = 'create';
+let _modeActedOn = false;     // headers written in this mode — see resetPlaylistMode
 let _createTemplateUuid = '';
 let _updateTargetUuid = '';
 // The plan returned by /api/update_playlist/preview, awaiting confirm.
@@ -611,6 +612,7 @@ function onMatchToggle() {
 // screen and the request can never disagree about which one is in effect.
 function setPlaylistMode(mode) {
   playlistMode = mode === 'update' ? 'update' : 'create';
+  _modeActedOn = false;
   const sel = document.getElementById('template-playlist');
   const upd = playlistModeIsUpdate();
   // Sync the radio, so a programmatic call can't leave the screen saying
@@ -671,11 +673,13 @@ function setPlaylistMode(mode) {
   if (!upd) onMatchToggle();
 }
 
-// Every new runsheet starts in Create. A mode left on Update would, next
+// A mode choice lasts until it's acted on. Once headers have been written,
+// the next runsheet starts back in Create: a mode left on Update would, next
 // Sunday, quietly write this week's headers into last week's hand-built
-// playlist instead of creating anything — the same reasoning as
-// resetMatchToggle(), with a worse failure.
+// playlist. But choosing Update and THEN uploading must keep it — resetting
+// on every upload threw that choice away.
 function resetPlaylistMode() {
+  if (!_modeActedOn) return;
   setPlaylistMode('create');
   _updateTargetUuid = '';
 }
@@ -840,7 +844,8 @@ function _renderTemplateOptions() {
     status.innerHTML = sel.value
       ? 'Adds coloured section headers to this playlist. Your media, its ' +
         'order and everything else in it are left alone. ' +
-        '<em>Resets to Create on each new runsheet.</em>'
+        '<em>Goes back to Create for the next runsheet once the headers ' +
+        'are written.</em>'
       : '<span style="color:var(--org)">Pick the playlist you want to add ' +
         'headers to.</span>';
     return;
@@ -1460,7 +1465,6 @@ async function rematchNow() {
   // on rather than silently contradicting it. Create later reads the
   // toggle, so leaving it off here would throw the new links away.
   resetMatchToggle();
-  resetPlaylistMode();
   const btn = document.getElementById('rematch-btn');
   btn.disabled = true;
   btn.textContent = '↻ Re-matching…';
@@ -2106,6 +2110,7 @@ async function confirmUpdate() {
     }).then(r => r.json());
     document.getElementById('update-plan').hidden = true;
     _renderUpdateResult(res);
+    if (res.ok) _modeActedOn = true;
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
     setStepState(3, 'active');
