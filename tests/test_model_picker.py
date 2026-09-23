@@ -79,21 +79,22 @@ def test_the_shortlist_is_the_owners_three():
     assert [r["id"] for r in m.RECOMMENDED] == list(m.PAID_DEFAULTS)
 
 
-def test_a_pdf_goes_to_a_model_that_can_read_one():
+def test_a_file_goes_to_a_model_that_can_read_it():
     reads = {"architecture": {"input_modalities": ["text", "file"]}}
     cat = {"data": [{"id": "anthropic/claude-haiku-4.5", **reads},
                     {"id": "text/only"}]}
-    assert m.pdf_reader(cat, "text/only") == "anthropic/claude-haiku-4.5"
-    assert m.pdf_reader(cat, "anthropic/claude-haiku-4.5") == \
+    assert m.model_reading(cat, "text/only") == "anthropic/claude-haiku-4.5"
+    assert m.model_reading(cat, "anthropic/claude-haiku-4.5") == \
         "anthropic/claude-haiku-4.5"
-    assert m.pdf_reader({"data": [{"id": "text/only"}]}, "text/only") is None
-    assert m.pdf_reader(None, "x") is None
+    assert m.model_reading(cat, "text/only", "image") is None   # PDFs, not pictures
+    assert m.model_reading({"data": [{"id": "text/only"}]}, "text/only") is None
+    assert m.model_reading(None, "x") is None
     # The catalogue is third-party data: odd shapes mean "can't", not a crash.
     junk = {"data": [{"id": "a", "architecture": "text+file"},
                      {"id": "b", "architecture": {"input_modalities": None}},
                      {"id": "c", "architecture": {"input_modalities": "file"}},
                      "not a model"]}
-    assert m.pdf_reader(junk, "a") is None
+    assert m.model_reading(junk, "a") is None
 
 
 def test_a_router_has_no_price_of_its_own():

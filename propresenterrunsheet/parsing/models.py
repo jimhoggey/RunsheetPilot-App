@@ -186,17 +186,17 @@ def pick_paid_model(catalogue: dict):
     return next((i for i in PAID_DEFAULTS if i in ids), None)
 
 
-def pdf_reader(catalogue: dict, current: str = None):
-    """A model that can read a PDF itself: `current` when it can, else the
-    first paid default that can. None when the catalogue lists neither."""
-    def reads_files(m):
+def model_reading(catalogue: dict, current: str = None, modality: str = "file"):
+    """A model that can take `modality` ("file" for a PDF, "image" for a
+    picture) as input: `current` when it can, else the first paid default
+    that can. None when the catalogue lists neither."""
+    def reads(m):
         arch = m.get("architecture") if isinstance(m, dict) else None
         mods = arch.get("input_modalities") if isinstance(arch, dict) else None
-        return isinstance(mods, list) and "file" in mods
+        return isinstance(mods, list) and modality in mods
 
-    reads = {m.get("id") for m in (catalogue or {}).get("data") or []
-             if reads_files(m)}
-    return next((i for i in (current, *PAID_DEFAULTS) if i in reads), None)
+    able = {m.get("id") for m in (catalogue or {}).get("data") or [] if reads(m)}
+    return next((i for i in (current, *PAID_DEFAULTS) if i in able), None)
 
 
 def free_model_ids(catalogue: dict) -> set:

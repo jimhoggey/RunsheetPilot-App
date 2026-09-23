@@ -25,7 +25,7 @@ from ..parsing.ai import (
 )
 from ..parsing.models import (
     dollars, estimate_cost, fetch_catalogue, is_router, key_is_funded,
-    next_usable_model, pdf_reader, resolve_model,
+    model_reading, next_usable_model, resolve_model,
 )
 from .flags import matching_enabled
 from ..parsing.ocr import (
@@ -132,21 +132,33 @@ def _upload_to_text(upload):
         tmp_path.unlink(missing_ok=True)
 
 
-# Bigger than any runsheet; a PDF past this isn't sent to the model whole.
-_PDF_READ_MAX = 8 * 1024 * 1024
+# Bigger than any runsheet; a file past this isn't sent to the model whole.
+_ATTACH_MAX = 8 * 1024 * 1024
+_PDF_MIME = "application/pdf"
+_MIME = {".pdf": _PDF_MIME, ".png": "image/png",
+         ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 
 
-def _pdf_bytes(upload):
-    """The uploaded PDF itself, for the model to read when its text parsed
-    to nothing. None for an image, an oversized file or an unreadable one."""
-    if _safe_ext(upload.filename) not in PDF_EXTS:
+def _attachment(upload):
+    """The upload itself as `(mime type, bytes)`, for a model to read when
+    our extracted text won't do. None when oversized or unreadable."""
+    mime = _MIME.get(_safe_ext(upload.filename))
+    if not mime:
         return None
     try:
         upload.stream.seek(0)
-        data = upload.stream.read(_PDF_READ_MAX + 1)
+        data = upload.stream.read(_ATTACH_MAX + 1)
     except Exception:
         return None
-    return data if 0 < len(data) <= _PDF_READ_MAX else None
+    return (mime, data) if 0 < len(data) <= _ATTACH_MAX else None
+
+
+def _file_reader(mime: str, current, api_key: str):
+    """A model to read the file itself — `current` if it can — or None.
+    Paid models only, so only on a key with credit."""
+    reader = model_reading(fetch_catalogue(), current,
+                           "file" if mime == _PDF_MIME else "image")
+    return reader if reader and api_key and key_is_funded(api_key) else None
 
 
 def _extracted_or_error(upload):
@@ -193,8 +205,15 @@ def api_extract_text():
         stats.track("extract_failed", kind=_safe_ext(upload.filename) or "none")
         return jsonify({"error": error}), 400
 
+    # With credit on the key, a screenshot or a scan goes to the model as
+    # the picture itself (see upload_and_parse), so there is no OCR text to
+    # check and no request to save.
+    model_reads = source == "ocr" and bool(_file_reader(
+        _MIME.get(_safe_ext(upload.filename), ""), None,
+        ((load_settings() or {}).get("or_key") or "").strip()))
+    needs_review = source == "ocr" and not model_reads
     stats.track("runsheet_uploaded", source=source,
-                needs_review=(source == "ocr"), chars=len(text))
+                needs_review=needs_review, chars=len(text))
     if source == "ocr":
         stats.track("ocr_used", chars=len(text),
                     kind=_safe_ext(upload.filename) or "none")
@@ -207,7 +226,8 @@ def api_extract_text():
         # Only OCR output is worth a human's eyes. A text PDF is exact,
         # so showing a review panel for it would add a click to the
         # path every Sunday runsheet takes.
-        "needs_review": source == "ocr",
+        "needs_review": needs_review,
+        "model_reads":  model_reads,
         "filename":     upload.filename,
     })
 
@@ -402,7 +422,8 @@ def api_upload_and_parse():
     # and a misbehaving model was impossible to identify.
     used_model = model
     content = ""
-    pdf_bytes = None
+    attachment = lead = None     # the file itself; `lead` when it goes first
+    read_from = ""               # "PDF" / "picture" when the model read it
 
     try:
         # 4. Get the runsheet text. Either the operator already reviewed
@@ -412,10 +433,19 @@ def api_upload_and_parse():
         if reviewed_text.strip():
             raw = reviewed_text
         else:
-            raw, _source, error = _extracted_or_error(upload)
+            raw, source, error = _extracted_or_error(upload)
             if error:
                 return jsonify({"error": error}), 400
-            pdf_bytes = _pdf_bytes(upload)
+            attachment = _attachment(upload)
+            # A screenshot or a scan, on a key with credit: the model reads
+            # the picture itself. Local OCR loses what a table shows plainly
+            # (small grey numbers, seen live), and there is no request to
+            # save by making someone check its text first.
+            reader = (_file_reader(attachment[0], model, or_key)
+                      if source == "ocr" and attachment else None)
+            if reader:
+                lead, model = attachment, reader
+                used_model = model
 
         # 5. Assemble the prompt — user-customised or default, plus the
         # Service Mate cue addendum so the model also emits per-role cues.
@@ -523,20 +553,25 @@ def api_upload_and_parse():
         # — that is not the operator's key/credit/model-id problem, so it gets
         # one retry on the next-ranked free model and an honest message,
         # before the per-status mapping below gets a chance to misdiagnose it.
-        def _openrouter_post(model_id, json_mode=True, pdf=None):
+        def _openrouter_post(model_id, json_mode=True, attach=None):
             log.info(f"OpenRouter request: model={log_safe(model_id)}, "
                      f"raw_chars={len(raw)}, json_mode={json_mode}, "
-                     f"pdf={pdf is not None}")
-            # With `pdf`, the model reads the page itself instead of our
-            # extracted text — see step 7a.
-            content_ = prompt if pdf is None else [
-                {"type": "text", "text": assemble_prompt(
-                    prompt_template, "(The runsheet is the attached PDF.)",
-                    library_names=section_names)},
-                {"type": "file", "file": {
-                    "filename":  "runsheet.pdf",
-                    "file_data": "data:application/pdf;base64,"
-                                 + base64.b64encode(pdf).decode()}}]
+                     f"file={attach[0] if attach else None}")
+            content_ = prompt
+            if attach:
+                # The model reads the file itself instead of our extracted
+                # text — a picture from step 4, or a PDF in step 7a.
+                mime, data = attach
+                url = f"data:{mime};base64,{base64.b64encode(data).decode()}"
+                content_ = [
+                    {"type": "text", "text": assemble_prompt(
+                        prompt_template, f"(The runsheet is the attached "
+                        f"{'PDF' if mime == _PDF_MIME else 'picture'}.)",
+                        library_names=section_names)},
+                    {"type": "file", "file": {"filename": "runsheet.pdf",
+                                              "file_data": url}}
+                    if mime == _PDF_MIME else
+                    {"type": "image_url", "image_url": {"url": url}}]
             body = {
                 "model":       model_id,
                 "messages":    [{"role": "user", "content": content_}],
@@ -555,7 +590,7 @@ def api_upload_and_parse():
             # that failure mode on every model that honours it.
             if json_mode:
                 body["response_format"] = {"type": "json_object"}
-            if pdf is not None:
+            if attach and attach[0] == _PDF_MIME:
                 body["plugins"] = [{"id": "file-parser",
                                     "pdf": {"engine": "native"}}]
             return req.post(
@@ -572,7 +607,7 @@ def api_upload_and_parse():
 
         ai_t0 = time.time()
         refused_json = None          # a model that 400'd on response_format
-        resp = _openrouter_post(model)
+        resp = _openrouter_post(model, attach=lead)
         # Some free-tier providers advertise structured output and still
         # 400 on `response_format`. That is OUR parameter being refused,
         # not the operator's key or model — so retry the same model once,
@@ -584,7 +619,7 @@ def api_upload_and_parse():
             log.info(f"{log_safe(model)} rejected response_format — "
                      f"retrying without JSON mode")
             refused_json = model
-            resp = _openrouter_post(model, json_mode=False)
+            resp = _openrouter_post(model, json_mode=False, attach=lead)
         failure = _provider_failure(resp)
         if failure:
             backup = next_usable_model(model, fetch_catalogue())
@@ -606,8 +641,10 @@ def api_upload_and_parse():
                     model, failure, backup, backup_failure)}), 200
             # The backup answered; from here on it is the model of record —
             # any later error message must name the model that actually
-            # produced the response.
+            # produced the response. It was sent our OCR text, not the
+            # picture: a free backup can't read one.
             model = used_model = backup
+            lead = None
 
         if resp.status_code == 429:
             stats.track("parse_failed", reason="rate_limit", model=used_model)
@@ -657,44 +694,46 @@ def api_upload_and_parse():
             items, service_name, service_type = parse_ai_response(content)
             unreadable = None
         except json.JSONDecodeError as e:
-            # Kept, not raised yet: reading the PDF (7a) may still rescue it.
+            # Kept, not raised yet: reading the file itself (7a) may rescue it.
             items, service_name, service_type, unreadable = [], "", "", e
 
         # 7a. The text gave nothing. A key with credit gets a second look,
-        # at the PDF itself: extraction flattens tables and columns, and
+        # at the file itself: extraction flattens tables and columns, and
         # the page layout is often what the model needed. Only ever on a
         # failed parse, so a working runsheet never pays for it twice.
-        read_pdf = False
-        reader = (pdf_reader(fetch_catalogue(), used_model)
-                  if not items and pdf_bytes else None)
-        if reader and key_is_funded(or_key):
-            log.info(f"No items from the text — reading the PDF itself "
-                     f"with {log_safe(reader)}")
+        second = (_file_reader(attachment[0], used_model, or_key)
+                  if not items and attachment and not lead else None)
+        rescued = False
+        if second:
+            log.info(f"No items from the text — reading the file itself "
+                     f"with {log_safe(second)}")
             try:
                 # A refusal, or a provider error dressed as a 200, has no
                 # choices — so it parses to nothing and changes nothing.
-                again = _openrouter_post(reader, json_mode=reader != refused_json,
-                                         pdf=pdf_bytes)
-                pdf_body = again.json() if again.status_code < 400 else {}
-                pdf_content = (((pdf_body.get("choices") or [{}])[0]
-                                .get("message") or {}).get("content") or "")
-                got = parse_ai_response(pdf_content)
+                again = _openrouter_post(second, json_mode=second != refused_json,
+                                         attach=attachment)
+                file_body = again.json() if again.status_code < 400 else {}
+                file_content = (((file_body.get("choices") or [{}])[0]
+                                 .get("message") or {}).get("content") or "")
+                got = parse_ai_response(file_content)
             except Exception:
-                log.info("Reading the PDF itself failed", exc_info=True)
+                log.info("Reading the file itself failed", exc_info=True)
                 got = ([], "", "")
             if got[0]:
                 items, service_name, service_type = got
-                content, read_pdf = pdf_content, True
-                extra = dollars((pdf_body.get("usage") or {}).get("cost"))
+                content, rescued, lead = file_content, True, attachment
+                extra = dollars((file_body.get("usage") or {}).get("cost"))
                 if extra is not None:
                     # One runsheet, two calls: a total only when both were
-                    # billed to the same model, else the PDF read's own cost.
-                    same = reader == used_model
+                    # billed to the same model, else the file read's own cost.
+                    same = second == used_model
                     spent = extra + ((spent or 0.0) if same else 0.0)
                     cost_source = cost_source if same else "billed"
-                used_model = pdf_body.get("model") or reader
-        if unreadable is not None and not read_pdf:
+                used_model = file_body.get("model") or second
+        if unreadable is not None and not rescued:
             raise unreadable
+        if lead:
+            read_from = "PDF" if lead[0] == _PDF_MIME else "picture"
 
         # A reply can be perfectly valid JSON and still not be a runsheet —
         # `{"safety": "safe"}` parses fine and yields zero items. Without this
@@ -922,7 +961,7 @@ def api_upload_and_parse():
                     rescued=rescued_rows,
                     template_links=resolved_section_hits + resolved_object_hits,
                     source="text" if reviewed_text.strip() else "file",
-                    read_pdf=read_pdf,
+                    read_from=read_from,
                     matching=do_matching,
                     # How often Auto has to say "none of these are for
                     # this service" — the measure of whether the decline
@@ -946,7 +985,7 @@ def api_upload_and_parse():
         return jsonify({
             "items":          items,
             "rescued_rows":   rescued_rows,
-            "read_pdf":       read_pdf,
+            "read_from":      read_from,
             "filename":       upload_name,
             "suggested_name": service_name,
             # The template verdict, resolved ONCE here and carried by the

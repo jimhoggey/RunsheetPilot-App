@@ -85,8 +85,9 @@ def _provider_error_body(provider="Darkbloom", code=401):
 # (test_item_types.py) can drive the parse route too.
 
 
-def _post_responses(client, responses, model="test/model:free", calls=None):
-    """Upload the fake PDF with OpenRouter's replies fully scripted.
+def _post_responses(client, responses, model="test/model:free", calls=None,
+                    upload=(b"%PDF-1.4 fake", "service.pdf")):
+    """Upload the fake PDF (or `upload`) with OpenRouter's replies scripted.
 
     `responses` are handed out one per POST, in order — the retry tests need
     a failure followed by a success. Pass a `calls` list to capture each
@@ -106,7 +107,7 @@ def _post_responses(client, responses, model="test/model:free", calls=None):
     try:
         return client.post(
             "/api/upload_and_parse",
-            data={"pdf": (io.BytesIO(b"%PDF-1.4 fake"), "service.pdf"),
+            data={"pdf": (io.BytesIO(upload[0]), upload[1]),
                   "or_key": "sk-or-test", "or_model": model},
             content_type="multipart/form-data")
     finally:
@@ -541,7 +542,7 @@ def test_a_paid_key_reads_the_pdf_itself_when_the_text_gave_nothing(
                                              "title": "Welcome"}]}))],
         calls=calls)
     body = r.get_json()
-    assert body.get("read_pdf") is True, body
+    assert body.get("read_from") == "PDF", body
     assert "Welcome" in [i["title"] for i in body["items"]]
     text, pdf = calls[1]["messages"][0]["content"]
     assert calls[1]["model"] == "openai/gpt-4.1-mini"
@@ -567,7 +568,7 @@ def test_a_text_reply_that_isnt_json_still_gets_the_pdf_read(
     for first in ("", "I could not find a runsheet here."):
         r = _post_responses(parse_client, [_FakeResponse(first),
                                            _FakeResponse(_RUNSHEET)])
-        assert r.get_json().get("read_pdf") is True, repr(first)
+        assert r.get_json().get("read_from") == "PDF", repr(first)
 
 
 def test_when_both_replies_are_prose_the_error_quotes_the_model(
@@ -586,8 +587,57 @@ def test_a_model_that_refused_json_mode_isnt_asked_for_it_again(
     calls = []
     r = _post_responses(parse_client, [refused, _FakeResponse('{"items": []}'),
                                        _FakeResponse(_RUNSHEET)], calls=calls)
-    assert r.get_json().get("read_pdf") is True
+    assert r.get_json().get("read_from") == "PDF"
     assert "response_format" not in calls[2] and "plugins" in calls[2]
+
+
+# ── a screenshot, on a key with credit ────────────────────────────────────
+
+_PNG = (b"\x89PNG\r\n\x1a\n fake", "runsheet.png")
+
+
+def _ocr(monkeypatch, text="9:30 AM Go Live\n9:31 AM Countdown"):
+    import propresenterrunsheet.routes.parse as parse_mod
+    monkeypatch.setattr(parse_mod, "image_to_text", lambda _p: text)
+
+
+def test_a_paid_key_sends_a_screenshot_to_the_model_as_the_picture(
+        parse_client, isolated_state, monkeypatch):
+    """Local OCR dropped the small grey numbers of a table, live; the
+    model reading the picture itself doesn't."""
+    _catalogue(monkeypatch, funded=True)
+    _ocr(monkeypatch)
+    calls = []
+    r = _post_responses(parse_client, [_FakeResponse(_RUNSHEET)], calls=calls,
+                        upload=_PNG)
+    assert r.get_json().get("read_from") == "picture"
+    text, picture = calls[0]["messages"][0]["content"]
+    assert picture["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "plugins" not in calls[0] and len(calls) == 1
+
+
+def test_without_credit_a_screenshot_is_read_by_ocr_as_before(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=False)
+    _ocr(monkeypatch)
+    calls = []
+    r = _post_responses(parse_client, [_FakeResponse(_RUNSHEET)], calls=calls,
+                        upload=_PNG)
+    assert not r.get_json().get("read_from")
+    assert "9:30 AM Go Live" in calls[0]["messages"][0]["content"]
+
+
+def test_no_ocr_review_when_the_model_will_read_the_picture(
+        parse_client, isolated_state, monkeypatch):
+    from propresenterrunsheet.settings import save_settings
+    save_settings({"or_key": "sk-or-test"})
+    _ocr(monkeypatch)
+    for funded, review in ((True, False), (False, True)):
+        _catalogue(monkeypatch, funded=funded)
+        r = parse_client.post("/api/extract_text",
+                              data={"file": (io.BytesIO(_PNG[0]), _PNG[1])},
+                              content_type="multipart/form-data").get_json()
+        assert (r["needs_review"], r["model_reads"]) == (review, not review)
 
 
 def test_a_pdf_the_model_also_cannot_read_gives_the_usual_error(

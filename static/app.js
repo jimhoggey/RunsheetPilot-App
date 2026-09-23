@@ -624,6 +624,11 @@ async function extractText(file) {
       _showOcrReview(res.text);
       setStatus('📝 Read your screenshot — check the text on Step 2, ' +
                 'fix anything odd, then <strong>🔍 Parse Runsheet</strong>.');
+    } else if (res.model_reads) {
+      // A key with credit: the AI reads the picture itself, so there is
+      // no OCR text to check first.
+      setStatus('Runsheet loaded — the AI will read the picture itself. ' +
+                'Click <strong>🔍 Parse Runsheet</strong> on Step 2.');
     } else {
       setStatus('Runsheet loaded — click <strong>🔍 Parse Runsheet</strong> ' +
                 'on Step 2.');
@@ -1502,7 +1507,7 @@ async function parseRunsheet() {
     document.getElementById('step-2-meta').textContent =
       `${matchedItems.length} items` +
       (res.rescued_rows > 0 ? ` (${res.rescued_rows} recovered)` : '') +
-      (res.read_pdf ? ' · read from the PDF' : '');
+      (res.read_from ? ` · read from the ${res.read_from}` : '');
     _recordParseTime((performance.now() - t0) / 1000);
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
