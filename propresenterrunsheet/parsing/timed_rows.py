@@ -39,6 +39,8 @@ _ROW_TIME = re.compile(
 # trailing `\s*$` backtracks polynomially on space-heavy lines (CodeQL
 # py/polynomial-redos).
 _ROW_REST = re.compile(r"^\s*(?:(?P<dur>\d{1,3})\s+)?(?P<title>\S.*)$")
+# A row's title has at least one real word: two letters in a row.
+_WORD = re.compile(r"[^\W\d_]{2}")
 
 
 def _norm_time(t: str) -> str:
@@ -71,8 +73,10 @@ def extract_timed_rows(raw) -> list:
         if not m:
             continue
         rest = _ROW_REST.match(line[m.end():])
-        if not rest or not rest.group("title"):
-            continue      # bare service-start time in the page header
+        if not rest or not _WORD.search(rest.group("title")):
+            # A bare service-start time in the page header — or, in a
+            # phone screenshot, the status bar ("12:39 ▪▪▪ 73").
+            continue
         rows.append({
             "start_time":   " ".join(m.group("time").split()).strip(" ."),
             "title":        rest.group("title").strip(),

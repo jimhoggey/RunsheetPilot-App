@@ -80,6 +80,14 @@ def test_a_bare_time_line_is_not_a_row():
                if r["start_time"] == "6:00 PM") == 1
 
 
+def test_a_phone_status_bar_in_a_screenshot_is_not_a_row():
+    """OCR of a phone screenshot starts with the clock and battery. The
+    model rightly skips it; the guard must not put it back as an item."""
+    raw = "12:39\n12:39 73•\n3:30 20 Teams Arrive and Set Up\n"
+    assert [r["title"] for r in extract_timed_rows(raw)] == [
+        "Teams Arrive and Set Up"]
+
+
 def test_a_time_with_title_but_no_duration_is_a_row():
     rows = extract_timed_rows("9:30 AM Worship and Ministry\n")
     assert rows == [{"start_time": "9:30 AM",
