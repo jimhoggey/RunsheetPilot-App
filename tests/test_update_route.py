@@ -307,6 +307,58 @@ def test_no_playlist_is_created(client, pp, monkeypatch):
     assert _post(client)["ok"] is True
 
 
+# ── out of runsheet order ─────────────────────────────────────────────────
+# The slide reading as the browser hands it back: WELCOME SLIDE is the
+# Welcome line, but it sits below the Pre-service loop.
+SHUFFLE = {"0": 1, "2": 0}
+
+
+def test_preview_says_the_playlist_is_out_of_order_and_what_yes_would_do(
+        client, pp):
+    res = client.post("/api/update_playlist/preview", json={
+        "playlist_uuid": "PL-1", "matched": RUNSHEET,
+        "ai_sections": SHUFFLE}).get_json()
+    assert res["out_of_order"] == 1 and res["moved"] == 0
+    assert [n for is_header, n in res["new_order"] if not is_header] == [
+        "WELCOME SLIDE", "PRESERVICE LOOP", "IMG_4021"]
+    assert pp["puts"] == []
+
+
+def test_keep_my_order_moves_nothing(client, pp):
+    res = _post(client, ai_sections=SHUFFLE)
+    assert res["ok"] is True and res["moved"] == 0
+    assert _content_names(pp["items"]) == [
+        "PRESERVICE LOOP", "IMG_4021", "WELCOME SLIDE"]
+
+
+def test_yes_puts_the_playlist_in_runsheet_order(client, pp):
+    res = _post(client, ai_sections=SHUFFLE, reorder=True)
+    assert res["ok"] is True and res["moved"] == 1
+    assert _content_names(pp["items"]) == [
+        "WELCOME SLIDE", "PRESERVICE LOOP", "IMG_4021"]
+
+
+def test_a_new_order_propresenter_did_not_keep_is_rolled_back(client, pp,
+                                                             monkeypatch):
+    """The read-back is checked against what was SENT. PP answering 204
+    and keeping the old order is not success."""
+    import requests
+    real_put = requests.put
+
+    def stubborn_put(url, json=None, timeout=0, **kw):
+        before = pp["items"]
+        resp = real_put(url, json=json, timeout=timeout, **kw)
+        if len(pp["puts"]) == 1:
+            pp["items"] = before
+        return resp
+
+    monkeypatch.setattr(requests, "put", stubborn_put)
+    res = _post(client, ai_sections=SHUFFLE, reorder=True)
+    assert res["ok"] is False and res["rollback_verified"] is True
+    assert _content_names(pp["items"]) == [
+        "PRESERVICE LOOP", "IMG_4021", "WELCOME SLIDE"]
+
+
 # ── the preview ───────────────────────────────────────────────────────────
 
 def test_preview_writes_nothing_and_returns_the_plan(client, pp):

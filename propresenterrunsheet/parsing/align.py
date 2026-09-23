@@ -1,4 +1,5 @@
-"""Ask a model where each runsheet header belongs in an existing playlist.
+"""Ask a model which runsheet line each slide in an existing playlist
+belongs to.
 
 The last resort in update mode's placement cascade, and the only one
 that can read MEANING. The deterministic rules compare strings: every
@@ -14,25 +15,23 @@ and for free, so the model receives "item 7 reads GIVING" rather than
 a picture of item 7. Same information, a fraction of the tokens, and
 it works on any model rather than only a vision one.
 
-Three things make this a tractable question rather than an open
-40-way alignment:
+The question is per SLIDE, not per header, because a playlist can be
+out of runsheet order: filing each slide under its line is what shows
+that, and what lets songs travel with their worship set when the
+operator agrees to put the playlist in runsheet order.
 
-  • BOTH LISTS ARE IN SERVICE ORDER. The model is filling gaps in a
-    sequence, not matching two unordered bags.
-  • WHAT SOMEONE VOUCHES FOR IS GIVEN AS FACT, not re-asked: where the
-    operator dragged a header, an alias they taught, and songs, whose
-    `.pro` file is named after the song. Media file names are not in
-    that list — in a working playlist they are often out of date — so
-    the model weighs them below what the slide actually reads.
-  • EVERY playlist item is listed, including ones with no OCR text.
-    Omitting them would leave holes in the ordering and destroy the one
-    signal that costs nothing.
+  • WHAT SOMEONE VOUCHES FOR IS GIVEN AS FACT, not re-asked: an alias
+    they taught, and songs, whose `.pro` file is named after the song.
+    Existing headers are shown as context, not facts — slides may have
+    been moved under them. Media file names are weighed below what the
+    slide actually reads; in a working playlist they are often stale.
+  • EVERY playlist item is listed, including ones with no OCR text:
+    their neighbours are the only signal they have.
 
-Nothing here is trusted. `parse_alignment` re-checks every number the
+Nothing here is trusted. `parse_sections` re-checks every number the
 model returns, and `propresenter/playlist_update.py` scores whatever
 survives BELOW recall and below the operator's aliases — a thing the
-operator told us always beats a thing the model inferred. The preview
-card then shows the result before a single byte is written."""
+operator told us always beats a thing the model inferred."""
 
 import json
 import logging
@@ -74,47 +73,40 @@ def _within(deadline: float, fn, *args):
         raise box["e"]
     return box.get("r")
 
-# A model that maps most of the runsheet onto one slide has not solved
-# the problem, it has collapsed. Such a reply is thrown away whole
-# rather than partly believed — see parse_alignment.
-_COLLAPSE_RATIO = 0.6
-
 _PROMPT = """\
-You are placing section headers into a ProPresenter playlist.
+You are organising a ProPresenter playlist to match a church service runsheet.
 
-A church service runsheet lists what happens, in order. A ProPresenter
-playlist holds the slides and media for that service, also in order.
-Your job: for each runsheet line, say which playlist item it starts at,
-so a coloured header can be inserted directly above that item.
+The runsheet lists what happens in the service, in order. The playlist
+holds the slides and media for that service. Your job: say which
+runsheet line each playlist item belongs to, so it can sit under that
+line's header.
 
 RUNSHEET, in service order:
 {runsheet}
 
-PLAYLIST, in order. "reads:" is text read off the slide itself by OCR;
-absent means the slide has no readable text (a photo, a motion
-background, or a video, which this operator always names on the
-runsheet instead).
+PLAYLIST, as it is now. "reads:" is text read off the slide itself by
+OCR; absent means the slide has no readable text (a photo, a motion
+background, or a video). Lines starting "--" are headers already in the
+playlist: someone put them there, but slides may have been moved since.
 {playlist}
 
-{anchors}
-RULES
-- Answer with the playlist index each runsheet line starts at.
-- Indexes must INCREASE down the runsheet. Two lines cannot share an
-  index, and a later line cannot point above an earlier one.
-- Use null when you genuinely cannot tell. Null is a good answer. A
-  wrong guess puts the wrong label above the wrong slide in front of a
-  live congregation; an honest null gets the header placed in runsheet
-  order instead, which is safe.
-- The already-placed lines above are FACTS. Do not move them, and keep
-  everything else consistent with them.
-- Weigh, in this order: text read off the slide, the slide's name, the
-  position in the sequence, then the runsheet's times and durations
-  (a 30-minute line is the sermon; a 3-minute one is not).
-- Slide names are often out of date. When what a slide reads and what
-  it is called disagree, trust what it reads.
+{facts}RULES
+- Answer for every numbered playlist item: the runsheet line it belongs
+  to, or null when you genuinely cannot tell. Null is a good answer: a
+  wrong guess puts a slide in the wrong part of a live service.
+- A line can have several items (songs in worship, sermon slides) or none.
+- The playlist may be out of order. Judge each item by what it is, not
+  by where it sits; use its neighbours only when nothing else tells you.
+- A slide that reads something belongs to the line its text is about.
+  Slide names are often out of date: use a name only when the slide
+  has no readable text, and never over what the slide reads.
+- Otherwise weigh the header above it, its neighbours, and the
+  runsheet's times and durations (a 30-minute line is the sermon; a
+  3-minute one is not).
+- The facts above are settled. Do not contradict them.
 
 Reply with JSON only:
-{{"placements": [{{"runsheet": 0, "playlist": 3}}, {{"runsheet": 1, "playlist": null}}]}}
+{{"items": [{{"playlist": 0, "runsheet": 1}}, {{"playlist": 1, "runsheet": null}}]}}
 """
 
 
@@ -143,39 +135,36 @@ def describe_runsheet(matched: list) -> str:
 
 
 def describe_playlist(items: list, slide_text: dict, is_header_fn) -> str:
-    """Every non-header playlist item, numbered by its real index.
+    """The playlist as it stands, slides numbered as the payload builder
+    counts them (headers don't count), headers shown as context.
 
-    Items with no OCR text are still listed. They are the sequence the
-    model reasons about, and leaving them out would turn a dense ordered
-    list into a sparse one with unexplained gaps."""
+    Items with no OCR text are still listed: their neighbours are the
+    only thing that says where they belong."""
     text = slide_text or {}
-    lines = []
-    for i, it in enumerate(items or []):
-        if not isinstance(it, dict) or is_header_fn(it):
+    lines, pos = [], 0
+    for it in items or []:
+        if not isinstance(it, dict):
             continue
         name = ((it.get("id") or {}).get("name") or "").strip() or "(unnamed)"
-        kind = (it.get("type") or "item").lower()
-        line = f"{i}. [{kind}] {name}"
-        got = (text.get(i) or "").strip()
-        if got:
-            line += f'  reads: "{got}"'
-        lines.append(line)
+        if is_header_fn(it):
+            lines.append(f"-- header: {name}")
+            continue
+        got = (text.get(pos) or "").strip()
+        lines.append(f"{pos}. [{(it.get('type') or 'item').lower()}] {name}"
+                     + (f'  reads: "{got}"' if got else ""))
+        pos += 1
     return "\n".join(lines)
 
 
-def describe_anchors(known: dict, matched: list) -> str:
-    """The deterministic matches, stated as settled."""
-    if not known:
-        return ""
+def describe_facts(known: dict, matched: list) -> str:
+    """What someone vouched for — `{playlist position: runsheet line}`."""
     lines = []
-    for n in sorted(known):
+    for pos, n in sorted((known or {}).items()):
         p = ((matched[n].get("parsed") or {})
              if n < len(matched) and isinstance(matched[n], dict) else {})
         title = (p.get("title") or "").strip() or "(untitled)"
-        lines.append(f"- runsheet {n} ({title}) is already placed at "
-                     f"playlist item {known[n]}")
-    return ("ALREADY PLACED — these are settled, work around them:\n"
-            + "\n".join(lines) + "\n\n")
+        lines.append(f"- playlist item {pos} belongs to runsheet line {n} ({title})")
+    return ("FACTS, already settled:\n" + "\n".join(lines) + "\n\n") if lines else ""
 
 
 def build_alignment_prompt(matched: list, items: list, slide_text: dict,
@@ -183,92 +172,56 @@ def build_alignment_prompt(matched: list, items: list, slide_text: dict,
     return _PROMPT.format(
         runsheet=describe_runsheet(matched),
         playlist=describe_playlist(items, slide_text, is_header_fn),
-        anchors=describe_anchors(known, matched))
+        facts=describe_facts(known, matched))
 
 
-def parse_alignment(content: str, n_runsheet: int, max_index: int,
-                    known: dict = None) -> dict:
-    """Validate a model's answer into `{runsheet_index: playlist_index}`.
+def _index(v, size: int) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v < size
 
-    Every number is re-checked here, because the cost of a bad one is a
-    wrong label above a slide during a live service. Rejected outright:
-    indexes out of range, a line that contradicts a deterministic
-    anchor, an order that goes backwards, and — whole-reply — an answer
-    that collapses most of the runsheet onto a single slide, which is
-    what a model does when it has not understood the question but still
-    wants to be helpful.
 
-    Returns {} for an unusable reply. That is not a failure: it means
-    placement falls back to the deterministic rules, which is exactly
-    where it started."""
+def parse_sections(content: str, n_runsheet: int, n_items: int,
+                   known: dict = None) -> dict:
+    """Validate a model's answer into `{playlist position: runsheet line}`.
+
+    Every number is re-checked, because a bad one puts a slide in the
+    wrong part of a live service. Dropped: anything out of range, a
+    second answer for the same slide, and an answer about a slide that is
+    already a fact. Thrown away whole: a reply that files every slide
+    under one line of a longer runsheet — what a model does when it has
+    not understood the question but still wants to be helpful.
+
+    The answer may be out of runsheet order; that is how a shuffled
+    playlist is noticed. Returns {} for an unusable reply, which leaves
+    placement to the deterministic rules."""
     known = known or {}
     try:
-        body = content.strip()
-        body = re.sub(r"^```[a-z]*\n?", "", body)
-        body = re.sub(r"\n?```$", "", body)
+        body = re.sub(r"^```[a-z]*\n?|\n?```$", "", content.strip())
         m = re.search(r"\{.*\}", body, re.DOTALL)
         data = json.loads(m.group() if m else body)
     except Exception:
         log.info("Alignment reply was not JSON — ignoring it")
         return {}
-
-    raw = data.get("placements") if isinstance(data, dict) else data
-    if not isinstance(raw, list):
-        return {}
-
-    proposed = {}
-    for row in raw:
+    rows = data.get("items") if isinstance(data, dict) else data
+    out = {}
+    for row in rows if isinstance(rows, list) else ():
         if not isinstance(row, dict):
             continue
-        n, pos = row.get("runsheet"), row.get("playlist")
-        if not isinstance(n, int) or isinstance(n, bool):
-            continue
-        if pos is None or isinstance(pos, bool) or not isinstance(pos, int):
-            continue
-        if not (0 <= n < n_runsheet) or not (0 <= pos <= max_index):
-            continue
-        # A deterministic anchor outranks the model by construction, so a
-        # contradiction is dropped rather than argued with.
-        if n in known:
-            continue
-        proposed[n] = pos
-
-    if not proposed:
+        pos, n = row.get("playlist"), row.get("runsheet")
+        if _index(pos, n_items) and _index(n, n_runsheet) \
+                and pos not in known and pos not in out:
+            out[pos] = n
+    if len(out) > 2 and n_runsheet > 2 and len(set(out.values())) == 1:
+        log.info("Alignment reply put every slide under one line — ignoring it")
         return {}
-
-    # Collapse guard: "everything belongs at item 3" is syntactically
-    # perfect and semantically worthless.
-    counts = {}
-    for pos in proposed.values():
-        counts[pos] = counts.get(pos, 0) + 1
-    if len(proposed) > 2 and max(counts.values()) / len(proposed) >= _COLLAPSE_RATIO:
-        log.info("Alignment reply collapsed onto one slide — ignoring it")
-        return {}
-
-    # Enforce a strictly increasing sequence against the anchors too, so
-    # the model's answers and the settled ones form one coherent order.
-    merged = dict(known)
-    merged.update(proposed)
-    kept, last_pos = {}, -1
-    for n in sorted(merged):
-        pos = merged[n]
-        if pos <= last_pos:
-            if n in known:
-                # Never drop a settled anchor; drop whatever crossed it.
-                kept = {k: v for k, v in kept.items()
-                        if k in known or v < pos}
-                kept[n] = pos
-                last_pos = pos
-            continue
-        kept[n] = pos
-        last_pos = pos
-    return {n: pos for n, pos in kept.items() if n not in known}
+    return out
 
 
 def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
                    is_header_fn, or_key: str, model: str, post=None,
                    backup: str = None) -> dict:
-    """One OpenRouter call, fully validated. {} whenever anything is off.
+    """One OpenRouter call, fully validated: `{playlist position: runsheet
+    line}` for the slides the model could place. {} whenever anything is
+    off. `items` is the playlist as it stands, headers included.
 
     `backup` is asked once if `model`'s provider fails, as the parse does.
 
@@ -326,7 +279,9 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
     except Exception:
         log.info("Alignment call failed — placing without it", exc_info=True)
         return {}
-    out = parse_alignment(content, len(matched), max(len(items) - 1, 0), known)
-    log.info("Alignment placed %d of %d runsheet items the rules missed",
-             len(out), len(matched) - len(known or {}))
+    n_items = sum(1 for it in items or []
+                  if isinstance(it, dict) and not is_header_fn(it))
+    out = parse_sections(content, len(matched), n_items, known)
+    log.info("Alignment filed %d of %d slides under a runsheet line",
+             len(out), n_items - len(known or {}))
     return out

@@ -122,15 +122,16 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
         @staticmethod
         def json():
             return {"choices": [{"message": {"content": json.dumps(
-                {"placements": [{"runsheet": 0, "playlist": 0},
-                                {"runsheet": 2, "playlist": 2}]})}}]}
+                {"items": [{"playlist": 0, "runsheet": 0},
+                           {"playlist": 2, "runsheet": 2},
+                           {"playlist": 3, "runsheet": None}]})}}]}
 
     def fake_post(url, headers=None, json=None, timeout=0, **kw):
         captured["prompt"] = json["messages"][0]["content"]
         captured["temperature"] = json["temperature"]
         return _Reply()
 
-    known = {1: 1}                        # the song, already placed
+    known = {1: 1}                        # the song, already filed
     found = align.align_playlist(
         RUNSHEET, PLAYLIST, SLIDE_TEXT, known,
         lambda it: (it.get("type") or "") == "header",
@@ -139,13 +140,14 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
 
     # The prompt has to carry the three things that make this tractable.
     assert 'reads: "GIVING"' in captured["prompt"]
-    assert "already placed at playlist item 1" in captured["prompt"]
+    assert "playlist item 1 belongs to runsheet line 1" in captured["prompt"]
     assert "[presentation] Goodness Of God" in captured["prompt"]
     # Placement must not wobble between two runs of the same runsheet —
     # update mode treats an identical result as a no-op and skips the write.
     assert captured["temperature"] == 0
 
-    items, report = build_update_payload(PLAYLIST, RUNSHEET, ai_anchors=found)
+    items, report = build_update_payload(PLAYLIST, RUNSHEET,
+                                         sections={**found, **known})
     assert report["anchored"] == 3 and report["unplaced"] == 0
     assert report["by_ai"] == 2
     # Headers keep create mode's exact labelling, duration and all.
@@ -165,7 +167,7 @@ def test_a_busy_provider_gets_exactly_one_retry_on_the_backup_model():
     busy = {"error": {"code": 503, "message": "Upstream error from Nvidia: "
                       "Service temporarily overloaded"}}
     answer = {"choices": [{"message": {"content": json.dumps(
-        {"placements": [{"runsheet": 0, "playlist": 0}]})}}]}
+        {"items": [{"playlist": 0, "runsheet": 0}]})}}]}
 
     def run(replies, backup):
         asked = []
@@ -213,7 +215,7 @@ def test_an_ai_placement_never_outranks_the_operator():
                 _media("Comp 1_1", "3"),
                 _media("IMG_4021", "1")]
     _, report = build_update_payload(
-        existing, [RUNSHEET[0]], ai_anchors={0: 1})
+        existing, [RUNSHEET[0]], sections={1: 0})
     assert report["by_recall"] == 1 and report["by_ai"] == 0
 
 
@@ -225,7 +227,7 @@ def test_a_slide_with_a_meaningless_name_can_still_be_placed_by_the_model():
     """"Final.png" has no usable word, so the name rule skipped it as a
     candidate — and the model's correct answer for it was dropped."""
     playlist = [_media("Final.png", "1"), _media("Worship loop", "2")]
-    _, report = build_update_payload(playlist, RUNSHEET[:1], ai_anchors={0: 0})
+    _, report = build_update_payload(playlist, RUNSHEET[:1], sections={0: 0})
     assert report["by_ai"] == 1
     assert report["placements"][0]["above"] == "Final.png"
 
@@ -237,7 +239,7 @@ def test_the_model_overrules_a_stale_name():
     runsheet = [{"parsed": {"type": "other", "title": "Offering"}}]
     _, by_name = build_update_payload(playlist, runsheet)
     assert by_name["placements"][0]["above"] == "Offering"
-    _, report = build_update_payload(playlist, runsheet, ai_anchors={0: 2})
+    _, report = build_update_payload(playlist, runsheet, sections={2: 0})
     assert report["placements"][0]["above"] == "IMG_7"
 
 
@@ -257,29 +259,43 @@ def _ai_pass(monkeypatch, raw, matched):
     def fake_align(matched, items, slide_text, known, *_a, **_k):
         seen.update(items=[i["id"]["name"] for i in items],
                     slide_text=slide_text, known=known)
-        return {0: 1}
+        return {0: 0}
 
     monkeypatch.setattr(playlist_mod, "align_playlist", fake_align)
     _, report = build_update_payload(raw, matched)
-    found, model = playlist_mod._ai_anchors("http://pp", "PL", raw, matched, report)
+    found, model = playlist_mod._ai_sections("http://pp", "PL", raw, matched,
+                                             report)
     assert model in (None, "m")         # the model asked, reported for the UI
     return found, seen
+
+
+def _header(name):
+    return {"id": {"uuid": "", "name": name, "index": 0}, "type": "header",
+            "target_uuid": "", "is_hidden": False, "is_pco": False,
+            "header_color": {}}
 
 
 def test_the_model_counts_positions_the_way_the_payload_builder_does(monkeypatch):
     """A re-run starts from a playlist that already has headers. Numbering
     by ProPresenter's index there put every AI placement a few slides off."""
-    header = {"id": {"uuid": "", "name": "↕ Notices", "index": 0},
-              "type": "header", "target_uuid": "", "is_hidden": False,
-              "is_pco": False, "header_color": {}}
-    raw = [header, _media("IMG_1", "1"), header, _media("IMG_2", "2")]
+    raw = [_header("↕ Notices"), _media("IMG_1", "1"),
+           _header("↕ Notices"), _media("IMG_2", "2")]
     found, seen = _ai_pass(monkeypatch, raw, RUNSHEET[:1])
-    assert seen["items"] == ["IMG_1", "IMG_2"]
+    assert seen["items"] == ["IMG_1", "IMG_2"]      # ↕ means "didn't know"
     assert seen["slide_text"] == {0: "text 1", 1: "text 3"}
-    assert found == {0: 1}
+    assert found == {0: 0}
 
 
-def test_only_songs_and_the_operator_are_facts_to_the_model(monkeypatch):
+def test_where_a_header_sits_is_shown_to_the_model_not_given_as_fact(monkeypatch):
+    """Slides get moved around the headers. Taking a header's spot as
+    settled told the model a shuffled slide was still what it used to be,
+    so a shuffled playlist could never be noticed."""
+    raw = [_header("Offering"), _media("IMG_1", "1")]
+    _, seen = _ai_pass(monkeypatch, raw, [RUNSHEET[0]])
+    assert seen["items"] == ["Offering", "IMG_1"] and seen["known"] == {}
+
+
+def test_only_songs_and_aliases_are_facts_to_the_model(monkeypatch):
     playlist = [_pres("Goodness Of God", "2"), _media("Offering", "3")]
     runsheet = [{"parsed": {"type": "song", "title": "Goodness of God"}},
                 {"parsed": {"type": "other", "title": "Offering"}}]
@@ -291,15 +307,12 @@ def test_the_model_is_asked_even_when_names_placed_everything(monkeypatch):
     playlist = [_media("Offering", "3")]
     runsheet = [{"parsed": {"type": "other", "title": "Offering"}}]
     found, seen = _ai_pass(monkeypatch, playlist, runsheet)
-    assert seen["known"] == {} and found == {0: 1}
+    assert seen["known"] == {} and found == {0: 0}
 
 
 def test_a_playlist_with_nothing_to_place_against_is_never_sent(monkeypatch):
     """Empty, or holding only headers: no answer could change anything."""
-    header = {"id": {"uuid": "", "name": "Offering", "index": 0},
-              "type": "header", "target_uuid": "", "is_hidden": False,
-              "is_pco": False, "header_color": {}}
-    for raw in ([], [header]):
+    for raw in ([], [_header("Offering")]):
         found, seen = _ai_pass(monkeypatch, raw, RUNSHEET[:1])
         assert found == {} and seen == {}
 
@@ -309,18 +322,20 @@ def test_agreeing_with_a_name_is_not_reported_as_reading_the_slide():
     is never read at all."""
     playlist = [_media("Offering Video.mp4", "1")]
     runsheet = [{"parsed": {"type": "other", "title": "Offering Video"}}]
-    _, report = build_update_payload(playlist, runsheet, ai_anchors={0: 0})
+    _, report = build_update_payload(playlist, runsheet, sections={0: 0})
     assert report["by_name"] == 1 and report["by_ai"] == 0
 
 
 # ── the write reuses what was confirmed ───────────────────────────────────
 
-def test_anchors_from_the_client_are_re_validated():
-    """They come back over HTTP. Same checks the model's own answer gets."""
-    sane = playlist_mod._sane_anchors
-    assert sane({"0": 1, "1": 3}, 3, 10) == {0: 1, 1: 3}
-    assert sane({"0": 5, "1": 2}, 3, 10) == {0: 5}      # backwards dropped
-    assert sane({"9": 1}, 3, 10) == {}                  # out of range
-    assert sane({"0": 99}, 3, 10) == {}                 # past the playlist
+def test_a_slide_reading_from_the_client_is_re_validated():
+    """It comes back over HTTP: `{slide: runsheet line}`, whole numbers in
+    range. Out of runsheet order is allowed — that is a shuffle."""
+    sane = playlist_mod._sane_sections
+    assert sane({"0": 1, "3": 2}, 3, 10) == {0: 1, 3: 2}
+    assert sane({"0": 2, "1": 0}, 3, 10) == {0: 2, 1: 0}
+    assert sane({"0": 9}, 3, 10) == {}                  # no such line
+    assert sane({"99": 0}, 3, 10) == {}                 # past the playlist
+    assert sane({"-1": 0, "0": -1}, 3, 10) == {}
     assert sane("not a dict", 3, 10) == {}
-    assert sane({"x": "y"}, 3, 10) == {}
+    assert sane({"x": "y", "1": None}, 3, 10) == {}

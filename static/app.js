@@ -647,9 +647,7 @@ function setPlaylistMode(mode) {
   document.getElementById('step-3-title').textContent =
     upd ? 'Add Section Headers' : 'Create Runsheet & Export';
   document.getElementById('step-3-desc').innerHTML = upd
-    ? 'Adds a coloured header for each runsheet item to the playlist you ' +
-      'picked. Your slides stay exactly where you put them — nothing is ' +
-      're-ordered, added or removed, and a backup is saved first.'
+    ? 'Adds a coloured header for each runsheet item to the playlist.'
     : 'The new playlist will appear in ProPresenter immediately. If you ' +
       'set an export folder in Settings, a <code>.playlist</code> backup ' +
       'file is saved there too.';
@@ -712,6 +710,7 @@ function _clearUpdatePlan() {
   _updatePlanSeq++;
   _updatePlan = null;
   document.getElementById('update-plan').hidden = true;
+  _closeReorder();
 }
 
 // ─── The template verdict banner ──────────────────────────────────────────
@@ -2020,7 +2019,6 @@ async function addSectionHeaders() {
     return;
   }
   _clearUpdatePlan();
-  const seq = _updatePlanSeq;
   // What this plan is FOR. The write sends exactly these, not whatever the
   // dropdown or the parse says by the time it runs.
   const target = {playlist_uuid: sel, playlist_name: _selectedPlaylistName(),
@@ -2029,33 +2027,42 @@ async function addSectionHeaders() {
   // The Parse step names the model when it can ("Using GPT-4.1 mini").
   const model = ((document.getElementById('parse-model') || {}).textContent || '')
     .replace(/^Using /, '');
-  const btn = document.getElementById('create-btn');
-  btn.disabled = true;
+  const plan = await _previewUpdate(target, {use_ai: ai}, ai
+    ? ['Reading your slides…', `Placing headers${model ? ' with ' + model : ''}…`]
+    : ['Working out where the headers go…']);
+  if (!plan) return;
+  if (plan.out_of_order && !plan.moved) return _askToReorder(plan);
+  await _proceedWithPlan(plan);
+}
+
+// Ask for the plan, with nothing written. `phases` narrate the wait: the
+// second one shows once the stills have been read and the model is on.
+async function _previewUpdate(target, extra, phases) {
+  const seq = _updatePlanSeq;
+  document.getElementById('create-btn').disabled = true;
   const loader = document.getElementById('create-loader');
   loader.hidden = false;
   const orb = Orb.mount(document.getElementById('create-orb'), 'working');
   setLoading('Adding section headers…');
-  _step3Phase(ai ? 'Reading your slides…' : 'Working out where the headers go…');
-  // Reading the stills takes a second or two; after that it's the model.
-  const later = ai && setTimeout(() =>
-    _step3Phase(`Placing headers${model ? ' with ' + model : ''}…`), 2500);
-  let plan = null;
+  _step3Phase(phases[0]);
+  const later = phases[1] && setTimeout(() => _step3Phase(phases[1]), 2500);
   try {
     const res = await fetch('/api/update_playlist/preview', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(_updateBody({...target, use_ai: ai}))
+      body: JSON.stringify(_updateBody({...target, ...extra}))
     }).then(r => r.json());
     // The playlist, runsheet or mode changed while this was working.
-    if (seq !== _updatePlanSeq) return;
+    if (seq !== _updatePlanSeq) return null;
     if (!res.ok) {
       document.getElementById('result-notice').innerHTML =
         `<div class="notice notice-err">❌ ${escapeHtml(res.error || 'Could not read that playlist.')}</div>`;
       setStatus('Nothing was changed.', 'var(--red)');
-      return;
+      return null;
     }
-    plan = {...res, target};
+    return {...res, target};
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
+    return null;
   } finally {
     clearTimeout(later);
     orb.stop();
@@ -2063,7 +2070,58 @@ async function addSectionHeaders() {
     _step3Phase('');
     _syncCreateButton();
   }
-  if (!plan) return;
+}
+
+// The playlist isn't in runsheet order. The runsheet wins — but moving
+// someone's slides is theirs to say yes to, so ask before anything is sent.
+let _reorderReturnFocus = null;
+
+function _askToReorder(plan) {
+  _updatePlan = plan;
+  document.getElementById('reorder-text').textContent =
+    `${plan.out_of_order} of your ${plan.content_count} slides are out of ` +
+    'runsheet order. Nothing is added or removed, and you can undo.';
+  document.getElementById('reorder-list').innerHTML = (plan.new_order || [])
+    .map(([header, name]) =>
+      `<li${header ? ' class="is-header"' : ''}>${escapeHtml(name)}</li>`).join('');
+  _reorderReturnFocus = document.activeElement;
+  document.getElementById('reorder-backdrop').classList.add('active');
+  document.getElementById('reorder-yes').focus();
+  setStatus('Your playlist isn’t in runsheet order.', 'var(--acc)');
+}
+
+function _closeReorder() {
+  const bd = document.getElementById('reorder-backdrop');
+  if (!bd || !bd.classList.contains('active')) return false;
+  bd.classList.remove('active');
+  if (_reorderReturnFocus && typeof _reorderReturnFocus.focus === 'function') {
+    _reorderReturnFocus.focus();
+  }
+  _reorderReturnFocus = null;
+  return true;
+}
+
+async function answerReorder(yes) {
+  const plan = _updatePlan;
+  if (!_closeReorder() || !plan) return;
+  if (!yes) return _proceedWithPlan(plan);
+  // Same reading, no second model call: only the order changes.
+  _updatePlan = null;
+  const next = await _previewUpdate(plan.target,
+    {reorder: true, ai_sections: plan.ai_sections},
+    ['Putting your slides in runsheet order…']);
+  if (next) await _proceedWithPlan(next);
+}
+
+// Escape, the backdrop or ✕: no answer means nothing is sent.
+function dismissReorder() {
+  if (_closeReorder()) cancelUpdate();
+}
+
+// Write the plan, unless there is something a person has to decide first:
+// nothing to change, or a playlist that's a template, live on screen, or
+// holds media ProPresenter may refuse.
+async function _proceedWithPlan(plan) {
   _updatePlan = plan;
   if (plan.no_change || (plan.unbinned || []).length
       || (plan.warnings || []).some(w => w === 'live' || w === 'template')) {
@@ -2137,8 +2195,9 @@ function _renderUpdatePlan(res) {
        ${loose!==1?'them':'it'} where ${loose!==1?'they belong':'it belongs'} in ProPresenter
        afterwards, and the app will remember next time. Moving a header never moves your media.`
       : ''}
-    <br><strong>Your ${res.content_count} slide${res.content_count!==1?'s':''} stay exactly as
-    ${res.content_count!==1?'they are':'it is'}</strong> — nothing re-ordered, added or removed.
+    <br><strong>Your ${res.content_count} slide${res.content_count!==1?'s':''}
+    ${res.moved ? 'will be put in runsheet order' : 'stay where they are'}</strong>
+    — nothing added or removed.
     ${res.headers_removed ? `The ${res.headers_removed} header${res.headers_removed!==1?'s':''}
        already in it ${res.headers_removed!==1?'are':'is'} replaced by the runsheet's.` : ''}
     </div>`;
@@ -2195,7 +2254,8 @@ async function confirmUpdate() {
       body: JSON.stringify(_updateBody({
         // The playlist, runsheet and placement the operator just confirmed.
         ...plan.target,
-        ai_anchors: plan.ai_anchors || {},
+        ai_sections: plan.ai_sections || {},
+        reorder: !!plan.moved,
         expect_fingerprint: plan.fingerprint,
         force: (plan.warnings || []).includes('live'),
       }))
@@ -2262,14 +2322,14 @@ function _renderUpdateResult(res, playlistName) {
   if (res.by_alias)  bits.push(`${res.by_alias} from aliases`);
   if (res.by_ai)     bits.push(`${res.by_ai} read off the slides`);
   if (res.by_name)   bits.push(`${res.by_name} matched by name`);
+  if (res.moved)     bits.push(`${res.moved} slide${res.moved!==1?'s':''} moved into runsheet order`);
   if (res.unplaced)  bits.push(`<span style="color:#fbbf24">↕ ${res.unplaced} to drag into place</span>`);
   let html = `<div class="notice notice-ok">
     ✅ <strong>Organised "${name}" — ${res.headers_added} section
     header${res.headers_added!==1?'s':''} added</strong><br>
     ${bits.join(' &nbsp;·&nbsp; ')}
     <br>✓ Checked after saving: all ${res.content_count} of your
-    item${res.content_count!==1?'s':''} ${res.content_count!==1?'are':'is'} still there,
-    in the same order.`;
+    slide${res.content_count!==1?'s':''} ${res.content_count!==1?'are':'is'} still there.`;
   if (res.unplaced) {
     html += `<br>Drag a <strong>↕</strong> header to where it belongs in
       ProPresenter — moving a header never moves your media, and next time
@@ -2769,7 +2829,7 @@ smInit();
 document.getElementById('prompt-textarea')
         .addEventListener('input', autoSavePromptDebounced);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closePromptModal(); closeHelp(); }
+  if (e.key === 'Escape') { closePromptModal(); closeHelp(); dismissReorder(); }
 });
 
 // ─── 11. Self-update ───────────────────────────────────────────────────────

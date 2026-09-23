@@ -8,7 +8,8 @@ countdown timers, and persists the Service Mate runsheet state.
 /api/update_playlist is the other direction: the operator already built
 a playlist full of media, and all they want from Runsheet Pilot is the
 runsheet's coloured section headers woven into it. It never creates,
-never re-orders and never removes — see propresenter/playlist_update.py
+never removes, and re-orders only when the operator says yes to putting
+the playlist in runsheet order — see propresenter/playlist_update.py
 for the merge and propresenter/update_safety.py for the snapshot and
 rollback that surround the write.
 
@@ -43,8 +44,8 @@ from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_playlist_dir, find_pp_root
 from ..propresenter.playlist import build_playlist_payload
 from ..propresenter.playlist_update import (
-    build_update_payload, is_header, verify_content_preserved,
-    visible_signature,
+    build_update_payload, is_header, is_placed_header,
+    verify_content_preserved, visible_signature,
 )
 from ..propresenter import update_safety as safety
 from ..propresenter.thumbnails import ocr_playlist_media
@@ -540,6 +541,15 @@ def _aliases():
     return (load_settings() or {}).get("template_aliases")
 
 
+def _runsheet(body: dict) -> list:
+    """The parsed runsheet from a request, lines only. Every index — the
+    model's, the placements', the slide reading's — counts these, so
+    anything that isn't a line is dropped here, once."""
+    matched = body.get("matched")
+    return [m for m in matched if isinstance(m, dict)] \
+        if isinstance(matched, list) else []
+
+
 def _resolve_target(base: str, client_uuid) -> tuple:
     """The playlist to act on, as PROPRESENTER names it.
 
@@ -591,93 +601,96 @@ def _read_target(base: str, playlist_uuid: str) -> list:
     return raw
 
 
-def _sane_anchors(raw_anchors, n_runsheet: int, n_items: int) -> dict:
-    """Clean the alignment result the client hands back to the write.
+def _sane_sections(raw_sections, n_runsheet: int, n_items: int) -> dict:
+    """The slide reading the client hands back, `{slide: runsheet line}`,
+    re-checked: whole numbers, in range.
 
-    The preview computes these and the write reuses them rather than
-    calling the model a second time — that is what keeps "press it
-    twice" a genuine no-op, and it means the operator confirms exactly
-    the placement that gets written. But it does arrive over HTTP, so
-    it is re-checked here the same way `parse_alignment` checks the
-    model: integers, in range, strictly increasing."""
-    if not isinstance(raw_anchors, dict):
-        return {}
-    # Coerce FIRST, then sort. Sorting by int() over the raw keys blows
-    # up on the first non-numeric one — a crash in the very function
-    # whose job is to make malformed input harmless.
-    pairs = []
-    for key, value in raw_anchors.items():
+    The preview computes it and the write reuses it rather than calling
+    the model a second time — that keeps "press it twice" a genuine no-op,
+    and the operator confirms exactly the plan that gets written. It
+    arrives over HTTP, so nothing about it is trusted; the worst a forged
+    one can do is file slides under the wrong lines, because
+    runsheet_order only ever permutes the slides already there."""
+    out = {}
+    for pos, n in (raw_sections.items() if isinstance(raw_sections, dict) else ()):
         try:
-            pairs.append((int(key), int(value)))
+            pos, n = int(pos), int(n)
         except (TypeError, ValueError):
             continue
-    out, last = {}, -1
-    for n, pos in sorted(pairs):
-        if not (0 <= n < n_runsheet) or not (0 <= pos < n_items) or pos <= last:
-            continue
-        out[n] = pos
-        last = pos
+        if 0 <= pos < n_items and 0 <= n < n_runsheet:
+            out[pos] = n
     return out
 
 
-def _ai_anchors(base: str, playlist_uuid: str, raw: list, matched: list,
-                report: dict) -> tuple:
-    """Read every still and ask a model where each runsheet line starts.
-    Returns (anchors, the model asked or None).
+def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
+                 report: dict) -> tuple:
+    """Read every still and ask a model which runsheet line each slide
+    belongs to. Returns ({slide: line}, the model asked or None).
 
     Media file names in a working playlist are often out of date, so a
     name match is NOT a fact here: the model sees each item's name and
     what its slide reads, and trusts the slide. The facts it works around
-    are the ones someone vouches for — recall (the operator dragged the
-    header there), an alias they taught, and a song, whose .pro name is
-    its title. Positions count only non-header items, as the payload
-    builder does; ProPresenter's own indexes count headers too. Entirely
-    best-effort: no key, model, OCR engine or answer returns {}."""
+    are the ones someone vouches for — an alias the operator taught, and
+    a song, whose .pro name is its title. Existing headers go in as
+    context rather than facts: when slides are moved around them, where
+    they sit stops meaning anything. Positions count only non-header
+    items, as the payload builder does; ProPresenter's own indexes count
+    headers too. Entirely best-effort: no key, model, OCR engine or
+    answer returns {}."""
     from ..settings import load_settings
     settings = load_settings() or {}
     or_key = (settings.get("or_key") or "").strip()
-    if not or_key:
-        return {}, None
     at = [i for i, it in enumerate(raw) if isinstance(it, dict) and not is_header(it)]
     kept = [raw[i] for i in at]
-    known = {p["index"]: p["above_index"] for p in report.get("placements", [])
-             if p.get("above_index") is not None
-             and (p.get("via") in ("recall", "alias")
+    if not or_key or not kept:
+        return {}, None
+    known = {p["above_index"]: p["index"] for p in report.get("placements", [])
+             if p.get("above_index") is not None and p.get("via") != "recall"
+             and (p.get("via") == "alias"
                   or (kept[p["above_index"]].get("type") or "").lower() == "presentation")}
-    if not kept or len(known) >= len(matched):
-        return {}, None                 # nothing to place, or all vouched for
+    if len(known) >= len(kept):
+        return known, None              # every slide already vouched for
     catalogue = fetch_catalogue()
     model = resolve_model((settings.get("or_model") or "").strip(), catalogue)
     if not model:
         return {}, None
     read = ocr_playlist_media(base, playlist_uuid, raw)     # by PP's index
     slide_text = {pos: read[i] for pos, i in enumerate(at) if i in read}
-    return align_playlist(matched, kept, slide_text, known, is_header,
-                          or_key, model,
-                          backup=next_usable_model(model, catalogue)), model
+    context = [it for it in raw if isinstance(it, dict)
+               and (not is_header(it) or is_placed_header(it))]
+    found = align_playlist(matched, context, slide_text, known, is_header,
+                           or_key, model,
+                           backup=next_usable_model(model, catalogue))
+    return ({**found, **known} if found else {}), model
 
 
 def _plan_update(base: str, playlist_uuid: str, matched: list,
-                 ai_anchors=None, use_ai: bool = False) -> dict:
+                 sections=None, use_ai: bool = False,
+                 reorder: bool = False) -> dict:
     """Work out the new playlist without sending anything.
 
     One engine for both the preview and the write, so what the operator
     confirms is what gets sent — a preview computed by different code
-    from the write is a preview of nothing."""
+    from the write is a preview of nothing. `sections` is a slide reading
+    the client hands back from the preview; `reorder` is the operator's
+    yes to putting the playlist in runsheet order."""
     playlist_uuid, playlist_name, playlists = _resolve_target(
         base, playlist_uuid)
     raw = _read_target(base, playlist_uuid)
-    items, report = build_update_payload(raw, matched, _aliases(), ai_anchors)
+    aliases = _aliases()
+    sections = _sane_sections(sections, len(matched),
+                              sum(1 for it in raw if isinstance(it, dict)
+                                  and not is_header(it)))
     ai_model = None
-    if use_ai and ai_anchors is None:
-        # Second pass, even when the names placed everything: a stale
-        # name "matches" just as confidently as a right one. The first
-        # pass is what tells the model which placements are vouched for.
-        found, ai_model = _ai_anchors(base, playlist_uuid, raw, matched, report)
-        if found:
-            ai_anchors = found
-            items, report = build_update_payload(
-                raw, matched, _aliases(), ai_anchors)
+    if use_ai and not sections:
+        # Asked even when the names placed everything: a stale name
+        # "matches" just as confidently as a right one. A first pass
+        # without the model says which placements are vouched for.
+        _, first = build_update_payload(raw, matched, aliases)
+        sections, ai_model = _ai_sections(base, playlist_uuid, raw, matched,
+                                          first)
+    items, report = build_update_payload(raw, matched, aliases, sections,
+                                         reorder)
     return {
         "uuid":         playlist_uuid,       # ProPresenter's, not the client's
         "name":         playlist_name,
@@ -685,7 +698,7 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
         "raw":          raw,
         "items":        items,
         "report":       report,
-        "ai_anchors":   ai_anchors or {},
+        "sections":     sections,
         "ai_model":     ai_model,            # the model that read the slides
         "fingerprint":  safety.fingerprint(raw),
         # Clicking the button twice is the most common operator
@@ -734,12 +747,14 @@ def api_update_playlist_preview():
     base = pp_base(body.get("host") or "localhost",
                    body.get("port") or "50001")
     playlist_uuid = (body.get("playlist_uuid") or "").strip()
-    matched = body.get("matched") or []
+    matched = _runsheet(body)
     if not matched:
         return jsonify({"error": "Parse a runsheet first."}), 200
     try:
         plan = _plan_update(base, playlist_uuid, matched,
-                            use_ai=bool(body.get("use_ai")))
+                            sections=body.get("ai_sections"),
+                            use_ai=bool(body.get("use_ai")),
+                            reorder=bool(body.get("reorder")))
     except UpdateAborted as e:
         return jsonify({"ok": False, "error": e.message,
                         "reason": e.reason}), 200
@@ -773,22 +788,31 @@ def api_update_playlist_preview():
         log.info("Media not in PP's Media bin for update: %s",
                  log_safe(", ".join(unbinned)))
 
+    rep = plan["report"]
+    # Out of runsheet order: what yes would look like, for the question.
+    new_order = []
+    if rep["out_of_order"] and not rep["moved"]:
+        alt, _ = build_update_payload(plan["raw"], matched, _aliases(),
+                                      plan["sections"], reorder=True)
+        new_order = [[is_header(it), ((it.get("id") or {}).get("name") or "")]
+                     for it in alt]
     return jsonify({
         "ok":          True,
         "no_change":   plan["no_change"],
         "fingerprint": plan["fingerprint"],
         "unbinned":    unbinned,
         "warnings":    warnings,
-        # Handed back so the write reuses this exact placement instead
-        # of calling the model again. Re-asking would cost a second
-        # request, could answer differently, and would mean the operator
-        # confirmed a plan that is not the one sent.
-        "ai_anchors":  plan["ai_anchors"],
+        # Handed back so the write reuses this exact reading instead of
+        # calling the model again. Re-asking would cost a second request,
+        # could answer differently, and would mean the operator confirmed
+        # a plan that is not the one sent.
+        "ai_sections": plan["sections"],
         "ai_model":    plan["ai_model"],
-        **{k: plan["report"][k] for k in
+        "new_order":   new_order,
+        **{k: rep[k] for k in
            ("anchored", "by_recall", "by_alias", "by_ai", "by_name",
             "unplaced", "headers_added", "headers_removed", "content_count",
-            "placements")},
+            "placements", "out_of_order", "moved")},
     })
 
 
@@ -806,7 +830,7 @@ def api_update_playlist():
     port = body.get("port") or "50001"
     base = pp_base(host, port)
     playlist_uuid = (body.get("playlist_uuid") or "").strip()
-    matched = body.get("matched") or []
+    matched = _runsheet(body)
     force = bool(body.get("force"))
     before = time.time()
     snap_path = None
@@ -822,13 +846,12 @@ def api_update_playlist():
                         **extra}), 200
 
     try:
-        # No `use_ai` here on purpose: the write reuses the placement the
+        # No `use_ai` here on purpose: the write reuses the reading the
         # operator just confirmed in the preview. Calling the model again
         # could return a different answer than the one on screen.
-        plan = _plan_update(
-            base, playlist_uuid, matched,
-            ai_anchors=_sane_anchors(body.get("ai_anchors"), len(matched),
-                                     10_000) or None)
+        plan = _plan_update(base, playlist_uuid, matched,
+                            sections=body.get("ai_sections"),
+                            reorder=bool(body.get("reorder")))
         # From here on only ProPresenter's own id and name are used — in
         # the URL, the snapshot filename, the rollback and the logs. The
         # client's strings stop at _resolve_target.
@@ -861,12 +884,14 @@ def api_update_playlist():
         http_ok = r.status_code < 400
 
         # Read back ALWAYS — a refusal is not proof that nothing landed.
+        # Checked against what was SENT: the same slides, in the order
+        # the operator chose (theirs, or the runsheet's if they said yes).
         after = fetch_pp_playlist_raw(base, playlist_uuid)
         if after is None:
             check = {"ok": False, "missing": [], "extra": [],
                      "reordered": False}
         else:
-            check = verify_content_preserved(plan["raw"], after)
+            check = verify_content_preserved(plan["items"], after)
 
         if not http_ok or not check["ok"]:
             # `check` carries media NAMES pulled straight out of
@@ -937,6 +962,7 @@ def api_update_playlist():
                     by_alias=rep["by_alias"],
                     by_ai=rep["by_ai"],
                     unplaced=rep["unplaced"],
+                    moved=rep["moved"],
                     timers=timer_result["created"])
         return jsonify({
             "ok":                 True,
@@ -951,6 +977,7 @@ def api_update_playlist():
             "by_name":            rep["by_name"],
             "unplaced":           rep["unplaced"],
             "content_count":      rep["content_count"],
+            "moved":              rep["moved"],
             "timers_created":     timer_result["created"],
             "timers_deleted":     timer_result["deleted"],
             "timers_no_duration": timer_result["no_duration"],

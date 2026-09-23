@@ -777,6 +777,25 @@
   </div>
 </div>
 
+<!-- Asked when the playlist being updated isn't in runsheet order. The
+     runsheet wins, but moving someone's slides is theirs to say yes to. -->
+<div id="reorder-backdrop" class="modal-backdrop" role="dialog" aria-modal="true"
+     aria-labelledby="reorder-title" onclick="if(event.target===this)dismissReorder()">
+  <div class="modal modal-reorder">
+    <h2 id="reorder-title">Put your playlist in runsheet order?</h2>
+    <p class="modal-hint" id="reorder-text"></p>
+    <details>
+      <summary class="modal-hint">See the new order</summary>
+      <ul class="reorder-list" id="reorder-list"></ul>
+    </details>
+    <div class="modal-actions">
+      <button class="btn btn-dim btn-sm" onclick="answerReorder(false)">Keep my order</button>
+      <button class="btn btn-grn" id="reorder-yes" onclick="answerReorder(true)">
+        Put in runsheet order</button>
+    </div>
+  </div>
+</div>
+
 <!-- Help — the whole app in three steps. For the volunteer who has never
      seen it and for the one who is stuck mid-Sunday. This slot used to be
      Quit; the app runs in its own window now, so the window's close button

@@ -3,8 +3,9 @@
 The other direction from `playlist.py`. That module builds a brand new
 playlist from a runsheet; this one takes a playlist full of media the
 operator has already assembled and ordered by hand, and adds the
-runsheet's coloured section headers to it without moving, adding or
-removing a single slide.
+runsheet's coloured section headers to it without adding or removing a
+single slide — or moving one, unless the playlist is out of runsheet
+order and the operator says yes to fixing that (see runsheet_order).
 
 Why it exists: rebuilding is the wrong tool once the media is in place.
 Re-creating the playlist means re-sorting and re-adding everything the
@@ -16,8 +17,8 @@ else changes.
 ProPresenter has no insert-item endpoint: the only write is
 `PUT /v1/playlist/{uuid}` with the complete items list, which REPLACES
 the playlist. Everything here is shaped by that one fact. The existing
-items are echoed back verbatim (see `echo_existing_item`), their order
-is never touched, and the route around this module snapshots and
+items are echoed back verbatim (see `echo_existing_item`), and the
+route around this module snapshots and
 verifies because a bad merge is not a bad suggestion — it is a
 destroyed playlist.
 
@@ -44,6 +45,7 @@ because the operator reads these at a glance mid-service.
 Pure functions only — no HTTP, no disk. `routes/playlist.py` owns the
 I/O and `update_safety.py` owns the snapshot/rollback."""
 
+import bisect
 import copy
 import re
 
@@ -155,6 +157,14 @@ def title_token_set(title: str) -> set:
 
 def is_header(item: dict) -> bool:
     return (item.get("type") or "").lower() == "header"
+
+
+def is_placed_header(item: dict) -> bool:
+    """A header someone put somewhere — not the banner or a ↕ this
+    module stacked because it didn't know where the line goes."""
+    name = ((item.get("id") or {}).get("name") or "").strip()
+    return (is_header(item) and name != BANNER_LABEL
+            and not name.startswith(UNPLACED_MARK.strip()))
 
 
 def identity_of(item: dict) -> tuple:
@@ -378,6 +388,38 @@ def choose_anchors(pairs: list) -> dict:
     return {p["n"]: p for p in reversed(chain)}
 
 
+def starts_of(sections: dict) -> dict:
+    """`{runsheet line: its first slide}` from `{slide: runsheet line}` —
+    where the slide-reading pass would put each header."""
+    out = {}
+    for pos in sorted(sections or {}):
+        out.setdefault(sections[pos], pos)
+    return out
+
+
+def moves_needed(sections: dict) -> int:
+    """How many slides must move for the playlist to follow the runsheet:
+    every filed slide outside the longest run already in runsheet order.
+    0 means it is in order."""
+    tails = []
+    for n in (sections[p] for p in sorted(sections or {})):
+        i = bisect.bisect_right(tails, n)
+        tails[i:i + 1] = [n]
+    return len(sections or {}) - len(tails)
+
+
+def runsheet_order(count: int, sections: dict) -> list:
+    """The slides' current positions, in runsheet order. A stable sort,
+    so slides of one line keep their order; a slide nobody could file
+    travels with the one above it, and anything before the first filed
+    slide stays on top. Always a permutation: nothing added or lost."""
+    keys, line = [], -1
+    for pos in range(count):
+        line = sections.get(pos, line)
+        keys.append(line)
+    return sorted(range(count), key=keys.__getitem__)
+
+
 def our_header_for(parsed: dict, placed: bool) -> dict:
     """The runsheet item's coloured header, marked when unplaced.
 
@@ -403,7 +445,7 @@ def banner_header() -> dict:
 
 
 def build_update_payload(existing: list, matched: list, aliases=None,
-                         ai_anchors=None) -> tuple:
+                         sections=None, reorder=False) -> tuple:
     """The complete items list to PUT back, plus a report on what it did.
 
     Returns `(items, report)`. `items` is the merged playlist: every
@@ -411,6 +453,12 @@ def build_update_payload(existing: list, matched: list, aliases=None,
     one coloured header per runsheet item woven in. `report` is what the
     preview card and the result notice are built from — this function
     decides, the route only reports.
+
+    `sections` is the slide-reading pass, `{slide: runsheet line}`. With
+    `reorder` — only ever because the operator said yes — a playlist
+    that is out of runsheet order is first put in it (see runsheet_order),
+    then placed as if it had always been that way: the old headers'
+    positions described the old order, so recall is dropped.
 
     Placement of a runsheet item with no anchor:
 
@@ -426,8 +474,16 @@ def build_update_payload(existing: list, matched: list, aliases=None,
     Nothing anchored at all is the same rule with no anchors to speak of
     — the whole runsheet stacks at the top, under a red banner."""
     kept, recalled = split_existing(existing)
+    sections = sections or {}
+    moves = moves_needed(sections)
+    if reorder and moves:
+        order = runsheet_order(len(kept), sections)
+        kept, recalled = [kept[p] for p in order], {}
+        sections = {new: sections[old] for new, old in enumerate(order)
+                    if old in sections}
     candidates = anchor_candidates(kept)
-    pairs = score_pairs(matched, candidates, aliases, recalled, ai_anchors)
+    pairs = score_pairs(matched, candidates, aliases, recalled,
+                        starts_of(sections))
     anchors = choose_anchors(pairs)
 
     items_in = [mi for mi in (matched or []) if isinstance(mi, dict)]
@@ -498,6 +554,9 @@ def build_update_payload(existing: list, matched: list, aliases=None,
                                if isinstance(it, dict) and is_header(it)),
         "content_count":  len(kept),
         "placements":     placements,
+        # Slides out of runsheet order, and how many this plan moves.
+        "out_of_order":   moves,
+        "moved":          moves if reorder else 0,
     }
     return out, report
 
@@ -529,10 +588,11 @@ def visible_signature(items) -> list:
 
 
 def verify_content_preserved(before: list, after: list) -> dict:
-    """Did the write keep every slide, in order?
+    """Did the write keep every slide, in the order intended?
 
-    `before` is the snapshot taken before the PUT; `after` is what PP
-    hands back when asked. Compares the non-header identity SEQUENCE, so
+    `before` is what that order should be — the items sent, or the
+    snapshot when checking a rollback; `after` is what PP hands back
+    when asked. Compares the non-header identity SEQUENCE, so
     a dropped slide, a duplicated one and a reordered one are all caught,
     while replacing the headers — the whole point of the write — is not
     mistaken for damage."""

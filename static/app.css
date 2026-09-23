@@ -1557,6 +1557,23 @@ body { animation: page-in .4s ease both; }
   .whatsnew-card, .whatsnew-wave, .whatsnew-notes li { animation: none; }
 }
 
+/* ─── Runsheet-order question ──────────────────────────────────────────── */
+/* .modal's blur and scale-in, sized to its few lines. */
+.modal-reorder { max-width: 440px; height: auto; }
+.modal-reorder h2 { font-size: 1.05rem; font-weight: 700; }
+.modal-reorder summary { cursor: pointer; }
+.reorder-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 14px;
+  max-height: 40vh;
+  overflow: auto;
+  font-size: 0.8rem;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.reorder-list .is-header { margin-left: -14px; color: var(--text); font-weight: 600; }
+
 /* ─── Help card ────────────────────────────────────────────────────────── */
 /* Reuses .modal-backdrop / .modal for the blur, the centred scale-in and
    the shadow, then overrides the editor-sized defaults. The numbered

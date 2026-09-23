@@ -15,7 +15,9 @@ from propresenterrunsheet.propresenter.playlist_update import (
     anchor_tokens,
     build_update_payload,
     echo_existing_item,
+    moves_needed,
     recall_key,
+    runsheet_order,
     split_existing,
     title_token_set,
     verify_content_preserved,
@@ -381,10 +383,102 @@ def test_a_lone_unplaced_header_at_the_top_is_not_recalled(top):
     write again instead of being a no-op."""
     first, _ = build_update_payload(
         [_media("Loop", "1"), _media("IMG_2", "2")],
-        [_item("Pre-service"), _item("Welcome")], ai_anchors={1: 1})
+        [_item("Pre-service"), _item("Welcome")], sections={1: 1})
     assert _names(first)[0] == UNPLACED_MARK + "Pre-service"
     _, recalled = split_existing(top + _as_pp_reads_it_back(first))
     assert "pre service" not in recalled
     second, _ = build_update_payload(_as_pp_reads_it_back(first),
                                      [_item("Pre-service"), _item("Welcome")])
     assert visible_signature(second) == visible_signature(first)
+
+
+# ── out of runsheet order ─────────────────────────────────────────────────
+# The owner's own test, live against ProPresenter (Sept 2026): ten slides
+# named File1..File19, shuffled. What the slide-reading pass answered is
+# SECTIONS — every slide filed right, both songs under Worship.
+
+LINES = ["Welcome", "Worship", "Announcements", "Giving and Tithing",
+         "Preach", "Response Moment and Prayer", "Close"]
+SHUFFLED = ["File7", "File1", "File11", "File13", "File15", "File3",
+            "File9", "File17", "File19", "File5"]
+SECTIONS = {0: 1, 1: 0, 2: 3, 3: 3, 4: 4, 5: 1, 6: 2, 7: 5, 8: 6, 9: 1}
+IN_ORDER = ["File1", "File7", "File3", "File5", "File9", "File11", "File13",
+            "File15", "File17", "File19"]
+
+
+def _shuffled():
+    return [_media(n, str(i)) for i, n in enumerate(SHUFFLED)]
+
+
+def test_moves_needed_counts_the_slides_a_person_would_have_to_drag():
+    assert moves_needed(SECTIONS) == 4
+    assert moves_needed({0: 0, 1: 1, 2: 1, 5: 3}) == 0
+    assert moves_needed({}) == 0
+
+
+def test_runsheet_order_follows_the_runsheet_and_keeps_a_line_together():
+    """Worship's three slides stay in the order the operator had them —
+    the runsheet doesn't say which song comes first; they did."""
+    order = runsheet_order(len(SHUFFLED), SECTIONS)
+    assert [SHUFFLED[p] for p in order] == IN_ORDER
+
+
+def test_a_slide_nobody_could_file_travels_with_the_one_above_it():
+    # 0 unfiled, on top; 1 → line 1; 2 unfiled, rides with 1; 3 → line 0.
+    assert runsheet_order(4, {1: 1, 3: 0}) == [0, 3, 1, 2]
+
+
+def test_a_shuffle_is_reported_but_only_fixed_on_yes():
+    items, rep = build_update_payload(_shuffled(), [_item(t) for t in LINES],
+                                      sections=SECTIONS)
+    assert [n for n in _names(_content(items))] == SHUFFLED
+    assert rep["out_of_order"] == 4 and rep["moved"] == 0 and rep["unplaced"] == 2
+
+    items, rep = build_update_payload(_shuffled(), [_item(t) for t in LINES],
+                                      sections=SECTIONS, reorder=True)
+    assert _names(items) == [
+        "Welcome", "File1", "Worship", "File7", "File3", "File5",
+        "Announcements", "File9", "Giving and Tithing", "File11", "File13",
+        "Preach", "File15", "Response Moment and Prayer", "File17",
+        "Close", "File19"]
+    assert rep["moved"] == 4 and rep["unplaced"] == 0
+
+
+def test_after_putting_it_in_order_pressing_again_changes_nothing():
+    """The next read files the same slides at their new positions — and
+    with no reading at all, recall alone must reproduce it."""
+    runsheet = [_item(t) for t in LINES]
+    first, _ = build_update_payload(_shuffled(), runsheet, sections=SECTIONS,
+                                    reorder=True)
+    back = _as_pp_reads_it_back(first)
+    now = {pos: SECTIONS[SHUFFLED.index(n)]
+           for pos, n in enumerate(_names(_content(back)))}
+    for sections in (now, {}):
+        again, rep = build_update_payload(back, runsheet, sections=sections,
+                                          reorder=True)
+        assert visible_signature(again) == visible_signature(first)
+        assert rep["out_of_order"] == 0
+
+
+def test_a_line_with_no_slide_keeps_its_place_through_a_second_run():
+    runsheet = [_item("Alpha"), _item("Beta"), _item("Gamma")]
+    first, _ = build_update_payload([_media("x", "1"), _media("y", "2")],
+                                      runsheet, sections={0: 2, 1: 0},
+                                      reorder=True)
+    assert _names(first) == ["Alpha", "y", UNPLACED_MARK + "Beta", "Gamma", "x"]
+    again, _ = build_update_payload(_as_pp_reads_it_back(first), runsheet,
+                                    sections={0: 0, 1: 2})
+    assert visible_signature(again) == visible_signature(first)
+
+
+def test_putting_it_in_order_never_adds_or_loses_a_slide():
+    """Whatever the reading says — including nonsense from a forged
+    request — the result holds exactly the slides that were there."""
+    import random
+    rng = random.Random(7)
+    existing = [_media(f"S{i}", str(i)) for i in range(12)]
+    for _ in range(200):
+        sections = {p: rng.randrange(4) for p in rng.sample(range(12), rng.randrange(13))}
+        items, _ = build_update_payload(existing, [_item(t) for t in "ABCD"],
+                                        sections=sections, reorder=True)
+        assert sorted(_names(_content(items))) == sorted(_names(existing))
