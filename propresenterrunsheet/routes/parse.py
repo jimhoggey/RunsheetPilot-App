@@ -581,6 +581,11 @@ def api_upload_and_parse():
                 # model worth it?" rather than an estimate from a
                 # pricing table.
                 "usage":       {"include": True},
+                # Runsheets carry people's names. Only route to providers
+                # that neither store nor train on requests — the owner's
+                # call, tested live (Sept 2026) on GPT-4.1 mini, Claude
+                # Haiku, OpenRouter Auto, and a PDF and a picture.
+                "provider":    {"data_collection": "deny"},
             }
             # JSON mode. The model picker has always filtered for models
             # that advertise structured output, but the request never

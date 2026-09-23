@@ -550,6 +550,17 @@ def test_a_paid_key_reads_the_pdf_itself_when_the_text_gave_nothing(
     assert calls[1]["plugins"][0]["id"] == "file-parser"
 
 
+def test_every_request_asks_for_providers_that_keep_nothing(
+        parse_client, isolated_state, monkeypatch):
+    """Runsheets carry names: the text call and the file read both refuse
+    providers that store or train on requests."""
+    _catalogue(monkeypatch, funded=True)
+    calls = []
+    _post_responses(parse_client, [_FakeResponse('{"items": []}'),
+                                   _FakeResponse(_RUNSHEET)], calls=calls)
+    assert [c.get("provider") for c in calls] == [{"data_collection": "deny"}] * 2
+
+
 def test_without_credit_a_failed_parse_is_not_sent_again(
         parse_client, isolated_state, monkeypatch):
     _catalogue(monkeypatch, funded=False)
