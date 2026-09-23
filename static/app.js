@@ -668,6 +668,7 @@ function setPlaylistMode(mode) {
   if (row) row.hidden = upd;
   const aiRow = document.getElementById('ai-place-row');
   if (aiRow) aiRow.hidden = !upd;
+  document.getElementById('results-wrap').classList.toggle('update-mode', upd);
   // On whenever there's a key to use: file names in a working playlist
   // are often stale, and only reading the slides gets past that.
   const ai = document.getElementById('ai-place');
@@ -1446,7 +1447,9 @@ function _showNextStepHint(count) {
   const text = document.getElementById('next-step-text');
   if (!hint || !text) return;
   const pick = NEXT_STEP_LINES[Math.floor(Math.random() * NEXT_STEP_LINES.length)];
-  text.innerHTML = pick(count);
+  text.innerHTML = playlistModeIsUpdate()
+    ? `${count} items ready. <strong>Add Section Headers</strong> puts them into your playlist.`
+    : pick(count);
   hint.hidden = false;
 }
 function _hideNextStepHint() {
@@ -1851,7 +1854,7 @@ async function createPlaylist() {
   // Update mode never creates. The single green button keeps working so
   // the operator's steps are unchanged — parse, check, press — but it
   // leads to a plan they confirm rather than straight to a write.
-  if (playlistModeIsUpdate()) return previewUpdate();
+  if (playlistModeIsUpdate()) return addSectionHeaders();
   const name = document.getElementById('playlist-name').value.trim();
   if (!name) { setStatus('Enter a service name on Step 3.', 'var(--red)'); return; }
 
@@ -1997,7 +2000,20 @@ function _selectedPlaylistName() {
   return opt ? opt.textContent.replace(/\s+—\s+\d+\s+item[\s\S]*$/, '') : '';
 }
 
-async function previewUpdate() {
+// What Step 3 is doing right now, in its pill and under the orb.
+function _step3Phase(text) {
+  const chip = document.getElementById('step3-phase');
+  if (chip) { chip.textContent = text; chip.hidden = !text; }
+  if (text) document.getElementById('create-orb-label').textContent = text;
+}
+
+// One click does it all: work out where the headers go (reading the
+// slides when AI placement is on), then write them. The backup, the check
+// after saving and the automatic rollback are what make that safe. The
+// plan is shown only when a person has to decide: nothing to change, or a
+// playlist that's a template, live on screen, or holds media ProPresenter
+// may refuse.
+async function addSectionHeaders() {
   const sel = document.getElementById('template-playlist').value;
   if (!sel) {
     setStatus('Pick the playlist you want to add headers to.', 'var(--red)');
@@ -2005,22 +2021,29 @@ async function previewUpdate() {
   }
   _clearUpdatePlan();
   const seq = _updatePlanSeq;
-  // What this plan is FOR. Confirm sends exactly these, not whatever the
-  // dropdown or the parse says by the time the operator clicks.
+  // What this plan is FOR. The write sends exactly these, not whatever the
+  // dropdown or the parse says by the time it runs.
   const target = {playlist_uuid: sel, playlist_name: _selectedPlaylistName(),
                   matched: matchedItems};
+  const ai = _aiPlacementOn();
+  // The Parse step names the model when it can ("Using GPT-4.1 mini").
+  const model = ((document.getElementById('parse-model') || {}).textContent || '')
+    .replace(/^Using /, '');
   const btn = document.getElementById('create-btn');
   btn.disabled = true;
   const loader = document.getElementById('create-loader');
   loader.hidden = false;
   const orb = Orb.mount(document.getElementById('create-orb'), 'working');
-  setLoading(_aiPlacementOn()
-    ? 'Reading the slides and working out where the headers go…'
-    : 'Working out where the headers go…');
+  setLoading('Adding section headers…');
+  _step3Phase(ai ? 'Reading your slides…' : 'Working out where the headers go…');
+  // Reading the stills takes a second or two; after that it's the model.
+  const later = ai && setTimeout(() =>
+    _step3Phase(`Placing headers${model ? ' with ' + model : ''}…`), 2500);
+  let plan = null;
   try {
     const res = await fetch('/api/update_playlist/preview', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(_updateBody({...target, use_ai: _aiPlacementOn()}))
+      body: JSON.stringify(_updateBody({...target, use_ai: ai}))
     }).then(r => r.json());
     // The playlist, runsheet or mode changed while this was working.
     if (seq !== _updatePlanSeq) return;
@@ -2030,20 +2053,28 @@ async function previewUpdate() {
       setStatus('Nothing was changed.', 'var(--red)');
       return;
     }
-    _updatePlan = {...res, target};
-    _renderUpdatePlan(res);
-    // The plan is the confirm step for an irreversible write — it must
-    // not appear silently below the fold.
-    document.getElementById('update-plan')
-            .scrollIntoView({behavior: 'smooth', block: 'start'});
-    setStatus('Check the plan below, then confirm.', 'var(--acc)');
+    plan = {...res, target};
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
   } finally {
+    clearTimeout(later);
     orb.stop();
     loader.hidden = true;
+    _step3Phase('');
     _syncCreateButton();
   }
+  if (!plan) return;
+  _updatePlan = plan;
+  if (plan.no_change || (plan.unbinned || []).length
+      || (plan.warnings || []).some(w => w === 'live' || w === 'template')) {
+    _renderUpdatePlan(plan);
+    document.getElementById('update-plan')
+            .scrollIntoView({behavior: 'smooth', block: 'start'});
+    setStatus(plan.no_change ? 'Already up to date.' : 'Check the note below first.',
+              'var(--acc)');
+    return;
+  }
+  await confirmUpdate();
 }
 
 function _renderUpdatePlan(res) {
@@ -2154,6 +2185,7 @@ async function confirmUpdate() {
   const orb = Orb.mount(document.getElementById('create-orb'), 'working');
   setStepState(3, 'busy');
   setLoading('Adding the headers in ProPresenter…');
+  _step3Phase('Adding the headers in ProPresenter…');
   try {
     const res = await fetch('/api/update_playlist', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -2180,6 +2212,7 @@ async function confirmUpdate() {
   } finally {
     orb.stop();
     loader.hidden = true;
+    _step3Phase('');
     _syncCreateButton();
   }
 }

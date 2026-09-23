@@ -544,6 +544,10 @@ input[type="checkbox"] {
   overflow: hidden;
   box-shadow: var(--sh-1);
 }
+/* Update mode matches and reuses nothing — it adds headers — so the
+   Matched / Reused and Score columns and Re-match would only mislead. */
+.results-wrap.update-mode :is(th, td):nth-child(n+4),
+.results-wrap.update-mode #rematch-btn { display: none; }
 table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
 th {
   text-align: left;
@@ -873,6 +877,19 @@ button:focus-visible {
   font-weight: 500;
   letter-spacing: 0;
 }
+
+/* A small pill in a step's header: the model in use, or what the step is
+   doing right now. */
+.step-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--acc-2);
+  background: var(--acc-soft);
+}
+.step-chip[hidden] { display: none; }
 
 /* ── Service Mate licensing (paid add-on) ─────────────────────────────── */
 /* Small pill next to the title: "Trial · 9 days", "Licensed", "Trial ended". */

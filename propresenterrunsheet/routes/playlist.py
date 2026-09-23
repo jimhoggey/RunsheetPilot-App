@@ -621,8 +621,9 @@ def _sane_anchors(raw_anchors, n_runsheet: int, n_items: int) -> dict:
 
 
 def _ai_anchors(base: str, playlist_uuid: str, raw: list, matched: list,
-                report: dict) -> dict:
+                report: dict) -> tuple:
     """Read every still and ask a model where each runsheet line starts.
+    Returns (anchors, the model asked or None).
 
     Media file names in a working playlist are often out of date, so a
     name match is NOT a fact here: the model sees each item's name and
@@ -636,7 +637,7 @@ def _ai_anchors(base: str, playlist_uuid: str, raw: list, matched: list,
     settings = load_settings() or {}
     or_key = (settings.get("or_key") or "").strip()
     if not or_key:
-        return {}
+        return {}, None
     at = [i for i, it in enumerate(raw) if isinstance(it, dict) and not is_header(it)]
     kept = [raw[i] for i in at]
     known = {p["index"]: p["above_index"] for p in report.get("placements", [])
@@ -644,16 +645,16 @@ def _ai_anchors(base: str, playlist_uuid: str, raw: list, matched: list,
              and (p.get("via") in ("recall", "alias")
                   or (kept[p["above_index"]].get("type") or "").lower() == "presentation")}
     if not kept or len(known) >= len(matched):
-        return {}                       # nothing to place, or all vouched for
+        return {}, None                 # nothing to place, or all vouched for
     catalogue = fetch_catalogue()
     model = resolve_model((settings.get("or_model") or "").strip(), catalogue)
     if not model:
-        return {}
+        return {}, None
     read = ocr_playlist_media(base, playlist_uuid, raw)     # by PP's index
     slide_text = {pos: read[i] for pos, i in enumerate(at) if i in read}
     return align_playlist(matched, kept, slide_text, known, is_header,
                           or_key, model,
-                          backup=next_usable_model(model, catalogue))
+                          backup=next_usable_model(model, catalogue)), model
 
 
 def _plan_update(base: str, playlist_uuid: str, matched: list,
@@ -667,11 +668,12 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
         base, playlist_uuid)
     raw = _read_target(base, playlist_uuid)
     items, report = build_update_payload(raw, matched, _aliases(), ai_anchors)
+    ai_model = None
     if use_ai and ai_anchors is None:
         # Second pass, even when the names placed everything: a stale
         # name "matches" just as confidently as a right one. The first
         # pass is what tells the model which placements are vouched for.
-        found = _ai_anchors(base, playlist_uuid, raw, matched, report)
+        found, ai_model = _ai_anchors(base, playlist_uuid, raw, matched, report)
         if found:
             ai_anchors = found
             items, report = build_update_payload(
@@ -684,6 +686,7 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
         "items":        items,
         "report":       report,
         "ai_anchors":   ai_anchors or {},
+        "ai_model":     ai_model,            # the model that read the slides
         "fingerprint":  safety.fingerprint(raw),
         # Clicking the button twice is the most common operator
         # behaviour there is, and the safest destructive write is the
@@ -781,6 +784,7 @@ def api_update_playlist_preview():
         # request, could answer differently, and would mean the operator
         # confirmed a plan that is not the one sent.
         "ai_anchors":  plan["ai_anchors"],
+        "ai_model":    plan["ai_model"],
         **{k: plan["report"][k] for k in
            ("anchored", "by_recall", "by_alias", "by_ai", "by_name",
             "unplaced", "headers_added", "headers_removed", "content_count",

@@ -261,7 +261,9 @@ def _ai_pass(monkeypatch, raw, matched):
 
     monkeypatch.setattr(playlist_mod, "align_playlist", fake_align)
     _, report = build_update_payload(raw, matched)
-    return playlist_mod._ai_anchors("http://pp", "PL", raw, matched, report), seen
+    found, model = playlist_mod._ai_anchors("http://pp", "PL", raw, matched, report)
+    assert model in (None, "m")         # the model asked, reported for the UI
+    return found, seen
 
 
 def test_the_model_counts_positions_the_way_the_payload_builder_does(monkeypatch):
