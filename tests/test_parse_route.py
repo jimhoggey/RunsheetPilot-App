@@ -482,8 +482,7 @@ def test_a_billed_parse_is_remembered_for_the_cost_per_runsheet(
     assert load_settings()["parse_costs"] == [{"model": "qwen/q", "usd": 0.000295}]
 
 
-@pytest.mark.parametrize("junk", ["x", {"a": 1}, 5])
-def test_recording_the_cost_never_fails_a_parse(parse_client, isolated_state, junk):
+def test_recording_the_cost_never_fails_a_parse(parse_client, isolated_state):
     """Bookkeeping after the fact: a malformed parse_costs on disk (or a
     failed write) must not turn a billed, successful parse into an error."""
     from propresenterrunsheet.settings import save_settings
@@ -492,10 +491,11 @@ def test_recording_the_cost_never_fails_a_parse(parse_client, isolated_state, ju
         def json(self):
             return {**super().json(), "usage": {"cost": 0.0003}}
 
-    save_settings({"parse_costs": junk})
     reply = json.dumps({"items": [{"type": "sermon", "title": "King Jesus"}]})
-    r = _post_responses(parse_client, [_Billed(reply)])
-    assert "error" not in r.get_json()
+    for junk in ("x", {"a": 1}, 5):
+        save_settings({"parse_costs": junk})
+        r = _post_responses(parse_client, [_Billed(reply)])
+        assert "error" not in r.get_json(), junk
 
 
 def test_a_non_finite_cost_is_not_recorded(parse_client, isolated_state):
