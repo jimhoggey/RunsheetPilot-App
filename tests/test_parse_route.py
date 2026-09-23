@@ -558,6 +558,38 @@ def test_without_credit_a_failed_parse_is_not_sent_again(
     assert "error" in r.get_json() and len(calls) == 1
 
 
+_RUNSHEET = json.dumps({"items": [{"type": "other", "title": "Welcome"}]})
+
+
+@pytest.mark.parametrize("first", ["", "I could not find a runsheet here."])
+def test_a_text_reply_that_isnt_json_still_gets_the_pdf_read(
+        parse_client, isolated_state, monkeypatch, first):
+    _catalogue(monkeypatch, funded=True)
+    r = _post_responses(parse_client, [_FakeResponse(first),
+                                       _FakeResponse(_RUNSHEET)])
+    assert r.get_json().get("read_pdf") is True
+
+
+def test_when_both_replies_are_prose_the_error_quotes_the_model(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    r = _post_responses(parse_client, [_FakeResponse("Nope."),
+                                       _FakeResponse("Still no.")])
+    assert "didn't return a runsheet" in r.get_json()["error"]
+
+
+def test_a_model_that_refused_json_mode_isnt_asked_for_it_again(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    refused = _FakeErrorResponse(400, {"error": {
+        "message": "response_format is not supported"}})
+    calls = []
+    r = _post_responses(parse_client, [refused, _FakeResponse('{"items": []}'),
+                                       _FakeResponse(_RUNSHEET)], calls=calls)
+    assert r.get_json().get("read_pdf") is True
+    assert "response_format" not in calls[2] and "plugins" in calls[2]
+
+
 def test_a_pdf_the_model_also_cannot_read_gives_the_usual_error(
         parse_client, isolated_state, monkeypatch):
     _catalogue(monkeypatch, funded=True)

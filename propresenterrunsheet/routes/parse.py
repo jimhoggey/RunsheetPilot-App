@@ -571,6 +571,7 @@ def api_upload_and_parse():
             )
 
         ai_t0 = time.time()
+        refused_json = None          # a model that 400'd on response_format
         resp = _openrouter_post(model)
         # Some free-tier providers advertise structured output and still
         # 400 on `response_format`. That is OUR parameter being refused,
@@ -582,6 +583,7 @@ def api_upload_and_parse():
         if resp.status_code == 400 and _rejects_response_format(resp):
             log.info(f"{log_safe(model)} rejected response_format — "
                      f"retrying without JSON mode")
+            refused_json = model
             resp = _openrouter_post(model, json_mode=False)
         failure = _provider_failure(resp)
         if failure:
@@ -651,7 +653,12 @@ def api_upload_and_parse():
         if used_model != model:
             log.info(f"OpenRouter routed {log_safe(model)} -> {log_safe(used_model)}")
         content = (body["choices"][0]["message"].get("content") or "")
-        items, service_name, service_type = parse_ai_response(content)
+        try:
+            items, service_name, service_type = parse_ai_response(content)
+            unreadable = None
+        except json.JSONDecodeError as e:
+            # Kept, not raised yet: reading the PDF (7a) may still rescue it.
+            items, service_name, service_type, unreadable = [], "", "", e
 
         # 7a. The text gave nothing. A key with credit gets a second look,
         # at the PDF itself: extraction flattens tables and columns, and
@@ -666,7 +673,8 @@ def api_upload_and_parse():
             try:
                 # A refusal, or a provider error dressed as a 200, has no
                 # choices — so it parses to nothing and changes nothing.
-                again = _openrouter_post(reader, pdf=pdf_bytes)
+                again = _openrouter_post(reader, json_mode=reader != refused_json,
+                                         pdf=pdf_bytes)
                 pdf_body = again.json() if again.status_code < 400 else {}
                 pdf_content = (((pdf_body.get("choices") or [{}])[0]
                                 .get("message") or {}).get("content") or "")
@@ -676,11 +684,17 @@ def api_upload_and_parse():
                 got = ([], "", "")
             if got[0]:
                 items, service_name, service_type = got
-                used_model = pdf_body.get("model") or reader
                 content, read_pdf = pdf_content, True
                 extra = dollars((pdf_body.get("usage") or {}).get("cost"))
                 if extra is not None:
-                    spent = (spent or 0.0) + extra
+                    # One runsheet, two calls: a total only when both were
+                    # billed to the same model, else the PDF read's own cost.
+                    same = reader == used_model
+                    spent = extra + ((spent or 0.0) if same else 0.0)
+                    cost_source = cost_source if same else "billed"
+                used_model = pdf_body.get("model") or reader
+        if unreadable is not None and not read_pdf:
+            raise unreadable
 
         # A reply can be perfectly valid JSON and still not be a runsheet —
         # `{"safety": "safe"}` parses fine and yields zero items. Without this

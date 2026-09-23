@@ -88,6 +88,12 @@ def test_a_pdf_goes_to_a_model_that_can_read_one():
         "anthropic/claude-haiku-4.5"
     assert m.pdf_reader({"data": [{"id": "text/only"}]}, "text/only") is None
     assert m.pdf_reader(None, "x") is None
+    # The catalogue is third-party data: odd shapes mean "can't", not a crash.
+    junk = {"data": [{"id": "a", "architecture": "text+file"},
+                     {"id": "b", "architecture": {"input_modalities": None}},
+                     {"id": "c", "architecture": {"input_modalities": "file"}},
+                     "not a model"]}
+    assert m.pdf_reader(junk, "a") is None
 
 
 def test_a_router_has_no_price_of_its_own():

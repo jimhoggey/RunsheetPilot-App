@@ -189,9 +189,13 @@ def pick_paid_model(catalogue: dict):
 def pdf_reader(catalogue: dict, current: str = None):
     """A model that can read a PDF itself: `current` when it can, else the
     first paid default that can. None when the catalogue lists neither."""
+    def reads_files(m):
+        arch = m.get("architecture") if isinstance(m, dict) else None
+        mods = arch.get("input_modalities") if isinstance(arch, dict) else None
+        return isinstance(mods, list) and "file" in mods
+
     reads = {m.get("id") for m in (catalogue or {}).get("data") or []
-             if isinstance(m, dict) and "file" in
-             ((m.get("architecture") or {}).get("input_modalities") or [])}
+             if reads_files(m)}
     return next((i for i in (current, *PAID_DEFAULTS) if i in reads), None)
 
 
