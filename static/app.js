@@ -204,12 +204,13 @@ async function loadModels(saved) {
     return o;
   };
 
-  // Automatic is FREE-ONLY by design — it must work on a fresh install
-  // with an unfunded key and must never start spending unasked. The
-  // label says so rather than leaving it to be discovered on a bill.
-  opt(sel, '', data.auto
-    ? `Automatic (free) — currently ${data.auto}`
-    : 'Automatic (free models)');
+  // Automatic is free-only on a key with no credit, so a fresh install
+  // never starts spending unasked; a funded key runs on the paid default.
+  // The label says which, rather than leaving it to be found on a bill.
+  const autoRec = (data.recommended || []).find(r => r.id === data.auto);
+  opt(sel, '', !data.auto ? 'Automatic (free models)'
+    : data.funded ? `Automatic — ${autoRec ? autoRec.label : data.auto}`
+    : `Automatic (free) — currently ${data.auto}`);
 
   // Paid picks appear only for a key that can actually pay for them.
   if ((data.recommended || []).length) {
@@ -376,8 +377,8 @@ function _modelNote(data) {
     return;
   }
   note.innerHTML = data.funded
-    ? 'Your key is funded, so the paid picks above are available. '
-      + '<strong>Automatic</strong> still only ever uses free models.'
+    ? 'Your key has credit, so <strong>Automatic</strong> uses a paid model. '
+      + 'It goes back to free models if the credit runs out.'
     : '<strong>Automatic</strong> picks the best free model each time. '
       + 'Add credit at openrouter.ai to unlock the recommended models — '
       + 'a runsheet costs a fraction of a cent.';
