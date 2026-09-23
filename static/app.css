@@ -795,7 +795,8 @@ button:focus-visible {
     var(--sh-1);
 }
 .step-card.state-active .step-badge {
-  background: linear-gradient(180deg, var(--acc-2), var(--acc));
+  /* Deeper than --acc-2 at the top: white on it was 2.5:1, hard to read. */
+  background: linear-gradient(180deg, #2563eb, #1d4ed8);
   color: #fff;
   border-color: var(--acc);
   box-shadow: 0 0 0 5px var(--acc-soft);
@@ -827,7 +828,9 @@ button:focus-visible {
 
 /* Busy: badge spinner. */
 .step-card.state-busy .step-badge {
-  background: var(--acc);
+  /* It had no colour of its own, so the number stayed dim grey on blue. */
+  background: #2563eb;
+  color: #fff;
   border-color: var(--acc);
   position: relative;
 }
@@ -1078,6 +1081,16 @@ button:focus-visible {
   color: var(--text);
   background: var(--card-2);
 }
+.model-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--acc-2);
+  background: var(--acc-soft);
+}
+.model-chip[hidden] { display: none; }
 .key-badge.is-ok   { color: var(--grn); background: var(--grn-soft); }
 .key-badge.is-warn { color: var(--org); background: var(--org-soft); }
 .key-badge.is-bad  { color: var(--red); background: var(--red-soft); }
