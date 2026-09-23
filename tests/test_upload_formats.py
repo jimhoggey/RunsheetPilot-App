@@ -188,11 +188,12 @@ def test_safe_ext_only_ever_returns_a_whitelisted_literal():
 def test_the_rejected_extension_is_sanitised_before_being_quoted_back():
     """The error message echoes the extension, so it must not carry
     whatever the caller put in the filename."""
-    from propresenterrunsheet.routes.parse import _display_ext
-    assert _display_ext("x.docx") == ".docx"
-    assert _display_ext("x.<script>alert(1)</script>") == ".scriptalert1scr"[:11]
-    assert "/" not in _display_ext("x.pd/../../etc")
-    assert _display_ext("noext") == ""
+    import propresenterrunsheet.routes.parse as parse_mod
+    assert parse_mod._display_ext("x.docx") == ".docx"
+    assert (parse_mod._display_ext("x.<script>alert(1)</script>")
+            == ".scriptalert1scr"[:11])
+    assert "/" not in parse_mod._display_ext("x.pd/../../etc")
+    assert parse_mod._display_ext("noext") == ""
 
 
 # ── the temp file must not survive ───────────────────────────────────────

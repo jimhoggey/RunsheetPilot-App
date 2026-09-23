@@ -45,12 +45,19 @@ CELL_GAP = "    "
 ROW_TOLERANCE = 0.6
 
 
+# The operator-facing remedy for OCRUnavailable. A constant rather than
+# read back out of the exception, so a caller can show it without ever
+# passing exception text to the client (CodeQL py/stack-trace-exposure).
+OCR_UNAVAILABLE_MESSAGE = (
+    "Reading text from images needs macOS 10.15+ or Windows 10+. "
+    "Upload a PDF instead.")
+
+
 class OCRUnavailable(RuntimeError):
     """No OS text-recognition engine on this platform.
 
-    Carries the operator-facing remedy as its message: there is nothing
-    to install, so the only useful advice is which platforms work and
-    what to upload instead.
+    There is nothing to install, so the only useful advice is which
+    platforms work and what to upload instead — OCR_UNAVAILABLE_MESSAGE.
     """
 
 
@@ -191,9 +198,7 @@ def pick_backend(platform: str = None):
         return _mac_backend
     if platform == "win32":
         return _windows_backend
-    raise OCRUnavailable(
-        "Reading text from images needs macOS 10.15+ or Windows 10+. "
-        "Upload a PDF instead.")
+    raise OCRUnavailable(OCR_UNAVAILABLE_MESSAGE)
 
 
 def image_to_text(path: str, backend=None) -> str:

@@ -322,6 +322,27 @@ def test_pp_base_refuses_with_a_message_an_operator_can_act_on():
     assert "localhost" in str(e.value)
 
 
+def test_pp_base_keeps_accepting_what_operators_actually_type():
+    """The port box is free text. Stray characters, a blank box and
+    PP's default all behave exactly as they did before the int change."""
+    assert pp_base("macbook", " 55416 ") == "http://192.168.1.20:55416"
+    assert pp_base("macbook", "50,001") == "http://192.168.1.20:50001"
+    assert pp_base("macbook", "") == "http://192.168.1.20:50001"
+    assert pp_base("macbook", None) == "http://192.168.1.20:50001"
+    assert pp_base("macbook", 50001) == "http://192.168.1.20:50001"
+
+
+@pytest.mark.parametrize("port", ["0", "65536", "99999999999999999999"])
+def test_pp_base_refuses_a_port_that_cannot_exist(port):
+    """Refused rather than silently swapped for 50001: a request to a
+    port the operator didn't type is worse than saying theirs can't
+    exist. Same exception as a bad host, so every route already turns
+    it into a plain message."""
+    with pytest.raises(UnreachableHost) as e:
+        pp_base("macbook", port)
+    assert "port" in str(e.value)
+
+
 def test_the_resolution_cache_expires(monkeypatch):
     """A machine that changes address is picked up after the TTL."""
     assert pp_base("macbook", "1") == "http://192.168.1.20:1"
@@ -433,11 +454,13 @@ def test_a_public_host_is_refused_by_every_route(client):
 def test_no_request_is_ever_made_to_a_public_host(client, monkeypatch):
     """The SSRF property, asserted at the wire rather than the message.
 
-    CodeQL flags the two `requests.get` calls that build a URL from
-    `pp_base(...)` as tainted, because its dataflow cannot see that
-    pp_base raises for anything outside loopback/LAN. This proves the
-    property directly: with a public or metadata host, no outbound
-    request is constructed at all.
+    CodeQL used to flag URLs built from `pp_base(...)` as tainted. The
+    trace (PR #127) showed the tainted value was the PORT — a regex-
+    filtered digit string — not the host, which is rebuilt from an
+    ipaddress object; pp_base now converts the port to an int. This test
+    proves the host half of the property directly, independent of any
+    analyser: with a public or metadata host, no outbound request is
+    constructed at all.
     """
     import requests
     attempted = []

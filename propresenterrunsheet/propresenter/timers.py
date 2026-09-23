@@ -12,6 +12,8 @@ PP's timer panel."""
 
 import logging
 
+from ..logging_setup import log_safe
+
 
 log = logging.getLogger("pp_runsheet")
 
@@ -39,9 +41,12 @@ def _delete_existing_rb_timers(base: str) -> int:
                 d = req.delete(f"{base}/v1/timer/{uuid}", timeout=4)
                 if d.ok:
                     deleted += 1
-                    log.info(f"Deleted old timer: {name}")
+                    # log_safe: timer names are free text (ours are built
+                    # from runsheet titles), so one with a newline in it
+                    # could forge a fake log line.
+                    log.info(f"Deleted old timer: {log_safe(name)}")
             except Exception:
-                log.exception(f"Failed to delete timer {uuid}")
+                log.exception(f"Failed to delete timer {log_safe(uuid)}")
     except Exception:
         log.exception("Failed to list timers for cleanup")
     return deleted
@@ -99,14 +104,17 @@ def _create_pp_timers(base: str, playlist_name: str, matched: list) -> dict:
                 created += 1
                 # idx is 1-based above; record under 0-based item index.
                 timer_names[idx - 1] = timer_name
-                log.info(f"Created timer: {timer_name}")
+                # log_safe: timer_name carries the runsheet item's title,
+                # which arrives in the request body.
+                log.info(f"Created timer: {log_safe(timer_name)}")
             else:
                 errors.append(f"{timer_name} → HTTP {r.status_code}")
-                log.warning(f"Timer create failed: {timer_name} → "
-                            f"{r.status_code} {r.text[:120]}")
+                log.warning(f"Timer create failed: {log_safe(timer_name)} → "
+                            f"{r.status_code} {log_safe(r.text, 120)}")
         except Exception as e:
             errors.append(f"{timer_name} → {type(e).__name__}")
-            log.exception(f"Timer create exception for {timer_name}")
+            log.exception(
+                f"Timer create exception for {log_safe(timer_name)}")
     return {
         "created":      created,
         "deleted":      deleted,

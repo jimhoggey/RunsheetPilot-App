@@ -9,9 +9,28 @@
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/graphify_nudge.py\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash_guard.py\" pre"
+          }
+        ]
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash_guard.py\" post",
+            "timeout": 120
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write",
         "hooks": [
