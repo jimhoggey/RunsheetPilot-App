@@ -30,6 +30,7 @@ the pool to a single model for no present benefit.
 """
 
 import logging
+import math
 import time
 
 log = logging.getLogger("pp_runsheet")
@@ -254,13 +255,27 @@ def recommended_models(catalogue: dict) -> list:
     return out
 
 
+def dollars(value):
+    """A money figure from OpenRouter as a finite, non-negative float, or
+    None. It is third-party data: a NaN written into settings.json would
+    make every later settings read unparseable in the browser."""
+    if isinstance(value, bool):
+        return None
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) and x >= 0 else None
+
+
 def measured_costs(parse_costs) -> dict:
     """{model id: average billed dollars per runsheet} from the costs the
     parse route recorded — what this install actually paid, not a guess."""
     by_model = {}
-    for c in parse_costs or []:
-        if isinstance(c, dict) and isinstance(c.get("usd"), (int, float)):
-            by_model.setdefault(str(c.get("model")), []).append(float(c["usd"]))
+    for c in parse_costs if isinstance(parse_costs, list) else []:
+        usd = dollars(c.get("usd")) if isinstance(c, dict) else None
+        if usd is not None:
+            by_model.setdefault(str(c.get("model")), []).append(usd)
     return {m: sum(v) / len(v) for m, v in by_model.items()}
 
 
@@ -271,16 +286,17 @@ def fetch_key_info(api_key: str, http_get=None, timeout=8) -> dict:
       funded      paid AND credit left. None when unknown; callers treat that
                   as not funded, because a paid model on an empty account
                   402s on the first parse — far worse than a shorter list
-      balance     dollars left to spend — the account's credit, capped by
-                  any limit set on the key itself; None if OpenRouter
-                  doesn't say
+      balance     dollars left to spend — the account's credit, lowered to
+                  any spending limit left on the key itself; None if the
+                  credit can't be read (a key's limit is not money)
+      capped      the key's own limit, not the account, is what's binding
       usage       dollars spent
       free_today  {"used", "limit", "remaining"} free-model requests today
 
     A paid account whose credit is used up is still "paid", but not
     funded (seen live: $5 bought, $5.01 used)."""
     out = {"state": "none", "funded": None, "usage": 0.0, "balance": None,
-           "free_today": None}
+           "capped": False, "free_today": None}
     if not (api_key or "").strip():
         return out
     if http_get is None:
@@ -301,23 +317,24 @@ def fetch_key_info(api_key: str, http_get=None, timeout=8) -> dict:
         return {**out, "state": "unknown"}
     daily = data.get("free_model_daily_requests")
     out.update(state="free" if free_tier else "paid", funded=not free_tier,
-               usage=float(data.get("usage") or 0.0),
+               usage=dollars(data.get("usage")) or 0.0,
                free_today=daily if isinstance(daily, dict) else None)
     if free_tier:
         return out
-    left = []
-    if data.get("limit") is not None and data.get("limit_remaining") is not None:
-        left.append(float(data["limit_remaining"]))      # a cap on this key
     try:
         credit = (http_get(CREDITS_URL, timeout=timeout, headers=auth)
                   .json() or {})["data"]
-        left.append(float(credit["total_credits"]) - float(credit["total_usage"]))
-        out["usage"] = float(credit["total_usage"])
+        total, used = dollars(credit["total_credits"]), dollars(credit["total_usage"])
     except Exception as e:
         log.info("Could not read OpenRouter credit (%s)", type(e).__name__)
-    if left:
-        out["balance"] = max(0.0, min(left))
-        out["funded"] = out["balance"] > 0
+        return out                  # paid, but how much is left is unknown
+    if total is None or used is None:
+        return out
+    balance = max(0.0, total - used)
+    cap = dollars(data.get("limit_remaining")) if data.get("limit") is not None else None
+    out.update(usage=used, capped=cap is not None and cap < balance,
+               balance=balance if cap is None else min(balance, cap))
+    out["funded"] = out["balance"] > 0
     return out
 
 

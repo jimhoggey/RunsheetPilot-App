@@ -482,6 +482,36 @@ def test_a_billed_parse_is_remembered_for_the_cost_per_runsheet(
     assert load_settings()["parse_costs"] == [{"model": "qwen/q", "usd": 0.000295}]
 
 
+@pytest.mark.parametrize("junk", ["x", {"a": 1}, 5])
+def test_recording_the_cost_never_fails_a_parse(parse_client, isolated_state, junk):
+    """Bookkeeping after the fact: a malformed parse_costs on disk (or a
+    failed write) must not turn a billed, successful parse into an error."""
+    from propresenterrunsheet.settings import save_settings
+
+    class _Billed(_FakeResponse):
+        def json(self):
+            return {**super().json(), "usage": {"cost": 0.0003}}
+
+    save_settings({"parse_costs": junk})
+    reply = json.dumps({"items": [{"type": "sermon", "title": "King Jesus"}]})
+    r = _post_responses(parse_client, [_Billed(reply)])
+    assert "error" not in r.get_json()
+
+
+def test_a_non_finite_cost_is_not_recorded(parse_client, isolated_state):
+    """NaN in settings.json would make every later settings read fail in
+    the browser — OpenRouter's reply is third-party data."""
+    from propresenterrunsheet.settings import load_settings
+
+    class _Weird(_FakeResponse):
+        def json(self):
+            return {**super().json(), "usage": {"cost": "NaN"}}
+
+    reply = json.dumps({"items": [{"type": "sermon", "title": "King Jesus"}]})
+    _post_responses(parse_client, [_Weird(reply)])
+    assert not load_settings().get("parse_costs")
+
+
 def test_valid_runsheet_still_parses_and_seeds_state(
         parse_client, isolated_state):
     reply = json.dumps({"service_name": "Sunday Morning",

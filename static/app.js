@@ -174,14 +174,20 @@ function setStepState(n, state) {
 //
 // Degrades quietly. If OpenRouter can't be reached we keep whatever is saved
 // as a single option so the user's choice survives and Settings still opens.
+let _modelsSeq = 0;
 async function loadModels(saved) {
   const sel  = document.getElementById('or-model');
   const note = document.getElementById('or-model-note');
   if (!sel) return;
+  const seq = ++_modelsSeq, shown = sel.value;
   let data = {models: [], auto: null, available: false};
   try {
     data = await fetch('/api/models').then(r => r.json());
   } catch (e) { /* offline — fall through to the degraded path below */ }
+  // A newer load (another key change) owns the dropdown now; and a model
+  // the operator picked while this one loaded is theirs to keep.
+  if (seq !== _modelsSeq) return;
+  if (sel.value !== shown) saved = sel.value;
 
   sel.innerHTML = '';
   const group = (label) => {
@@ -262,7 +268,10 @@ function _renderKeyStatus() {
     free:    [`Free key — free models only.${today}`, 'var(--muted)'],
   };
   let [html, color] = lines[k.state] || ['', ''];
-  if (k.state === 'paid' && k.balance === 0) {
+  if (k.state === 'paid' && k.balance === 0 && k.capped) {
+    [html, color] = ['⚠ This key\'s own spending limit is used up — raise it on '
+      + `openrouter.ai to use paid models. Free models still work.${today}`, 'var(--org)'];
+  } else if (k.state === 'paid' && k.balance === 0) {
     [html, color] = [`Free key — ${money(0)} credit, so free models only.${today}`, 'var(--muted)'];
   } else if (k.state === 'paid') {
     html = '✓ <strong>Paid key</strong>'
@@ -315,7 +324,7 @@ function applyOtherModel() {
   const box = document.getElementById('or-model-other');
   const id = box.querySelector('input').value.trim();
   const sel = document.getElementById('or-model');
-  if (!id) { sel.value = ''; box.hidden = true; saveSettings(); return; }
+  if (!id) { sel.value = ''; box.hidden = true; saveSettings(); _renderKeyStatus(); return; }
   let existing = Array.from(sel.options).find(o => o.value === id);
   if (!existing) {
     existing = document.createElement('option');

@@ -201,7 +201,21 @@ def test_a_spending_cap_on_the_key_is_what_is_left_when_it_is_lower():
     info = m.fetch_key_info("k", http_get=_openrouter(
         {"is_free_tier": False, "limit": 2, "limit_remaining": 1.5},
         {"total_credits": 5, "total_usage": 0.27}))
-    assert info["balance"] == pytest.approx(1.5)
+    assert info["balance"] == pytest.approx(1.5) and info["capped"] is True
+
+
+def test_a_key_limit_is_never_shown_as_money_when_credit_cant_be_read():
+    """The owner's key has a $50 monthly limit on an empty account. With
+    /credits unreadable, "$50.00 left" would be invented."""
+    info = m.fetch_key_info("k", http_get=_openrouter(
+        {"is_free_tier": False, "limit": 50, "limit_remaining": 50, "usage": 0}))
+    assert info["state"] == "paid" and info["balance"] is None
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", float("nan"), -1, True, None, "x"])
+def test_only_real_amounts_count_as_dollars(bad):
+    assert m.dollars(bad) is None
+    assert m.measured_costs([{"model": "a", "usd": bad}]) == {}
 
 
 def test_credit_used_up_is_not_funded():

@@ -23,7 +23,7 @@ from ..parsing.ai import (
     parse_ai_response,
 )
 from ..parsing.models import (
-    estimate_cost, fetch_catalogue, is_router, next_usable_model,
+    dollars, estimate_cost, fetch_catalogue, is_router, next_usable_model,
     resolve_model,
 )
 from .flags import matching_enabled
@@ -851,11 +851,16 @@ def api_upload_and_parse():
                     # never the service label: that is church content.
                     template_declined=template_declined)
         # What this parse really cost, so Settings can say what a runsheet
-        # costs on each model. Billed figures only; the last 20 are kept.
-        if cost_source == "billed":
-            save_settings({"parse_costs": (
-                (load_settings().get("parse_costs") or [])
-                + [{"model": used_model, "usd": round(spent, 8)}])[-20:]})
+        # costs on each model: billed figures only, the last 20. Bookkeeping
+        # — it must never turn a parse that worked into an error.
+        if cost_source == "billed" and dollars(spent) is not None:
+            try:
+                kept = load_settings().get("parse_costs")
+                save_settings({"parse_costs": (
+                    (kept if isinstance(kept, list) else [])
+                    + [{"model": used_model, "usd": round(spent, 8)}])[-20:]})
+            except Exception as e:
+                log.info("Could not record the parse cost (%s)", type(e).__name__)
 
         log.info(f"AI parsed {len(items)} runsheet items, "
                  f"suggested name: {log_safe(service_name)!r}")
