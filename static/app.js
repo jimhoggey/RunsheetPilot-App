@@ -103,8 +103,10 @@ function _renderBuildEstimate() {
 }
 // A bar paced by the learned average: fills to 92% over `secs`, holds
 // there until the work truly lands, then snaps full. Honest about being
-// an estimate, useful as an indication.
+// an estimate, useful as an indication. Reduced motion skips the bar;
+// the "~N seconds" beside the step still gives the estimate.
 function _startProgress(fill, secs) {
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   fill.parentElement.hidden = false;
   fill.style.transition = 'none';
   fill.style.width = '0';
@@ -2004,12 +2006,12 @@ async function createPlaylist() {
   loader.hidden = false;
   const orb = Orb.mount(document.getElementById('create-orb'), 'working');
   const fill = document.getElementById('create-progress');
-  _startProgress(fill, _avgSecs('build'));
   const t0 = performance.now();
   setStepState(3, 'busy');
   setLoading('Creating playlist in ProPresenter…');
 
   try {
+    _startProgress(fill, _avgSecs('build'));
     // The server exports to the folder SAVED in Settings, so a folder typed
     // a moment ago must be saved first. If it can't be, skip the export
     // rather than write to whatever folder was saved before.
@@ -2117,12 +2119,16 @@ async function createPlaylist() {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
     setStepState(3, 'active');
   } finally {
+    // Let the snap to full show before the loader goes. The button waits
+    // too, so a quick re-click can't have its loader hidden by this one.
     _finishProgress(fill);
-    orb.stop();
-    loader.hidden = true;
-    // The loader is shared with Add Section Headers, which has no bar.
-    fill.parentElement.hidden = true;
-    btn.disabled = false;
+    setTimeout(() => {
+      orb.stop();
+      loader.hidden = true;
+      // The loader is shared with Add Section Headers, which has no bar.
+      fill.parentElement.hidden = true;
+      btn.disabled = false;
+    }, 260);
   }
 }
 
