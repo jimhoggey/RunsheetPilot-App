@@ -211,7 +211,13 @@ def api_create_playlist():
     name = (body.get("name") or "").strip()
     matched = body.get("matched") or []
     do_matching = matching_enabled(body)
-    before = time.time()
+    before = lap_from = time.time()
+    steps = {}           # seconds per step, logged: where a slow build goes
+
+    def lap(step):
+        nonlocal lap_from
+        now = time.time()
+        steps[step], lap_from = round(now - lap_from, 1), now
 
     if not name:
         return jsonify({"error": "Playlist name required."}), 200
@@ -256,6 +262,7 @@ def api_create_playlist():
 
             bin_items = fetch_media_bin(base)
             unlinked = relink_media(matched, bin_items) if bin_items else []
+        lap("template and Media")
         if unlinked:
             log.info("Media not in PP's Media bin, left as headers: %s",
                      log_safe(", ".join(u["media_name"] for u in unlinked)))
@@ -341,6 +348,7 @@ def api_create_playlist():
                     "again — the app will rebuild everything fresh."}), 200
             unlinked = unlinked + dropped
         r2.raise_for_status()
+        lap("playlist")
 
         songs = sum(1 for mi in matched
                     if (mi.get("parsed") or {}).get("type") == "song"
@@ -395,6 +403,7 @@ def api_create_playlist():
                 log.exception("Playlist export failed (playlist itself "
                               "was created)")
                 export_path = None
+        lap("export")
 
         # 5. Optional: create duration-based countdown timers
         timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
@@ -402,10 +411,13 @@ def api_create_playlist():
         if body.get("create_timers"):
             timer_result = _create_pp_timers(
                 base, name, matched, key_only=bool(body.get("timers_key_only")))
+        lap("timers")
 
         # 6. Persist Service Mate runsheet state — what the GeekMagic clocks
         # display on the LAN.
         _write_sm_state(name, matched, timer_result)
+        log.info("Create took %.1fs — %s", time.time() - before,
+                 ", ".join(f"{k} {v}s" for k, v in steps.items()))
 
         log.info(f"Playlist created: '{log_safe(name)}' → {songs} songs, "
                  f"{headers} headers, "

@@ -92,6 +92,17 @@ def test_media_is_resolved_to_bin_identity_before_the_put(client, pp):
     assert body["unlinked"] == []
 
 
+def test_a_create_logs_how_long_each_step_took(client, pp, caplog):
+    """Builds are sometimes slow and nobody could say why: the log now
+    says which step the time went to."""
+    with caplog.at_level("INFO", logger="pp_runsheet"):
+        assert _create(client, [_matched("Welcome and Cards", "Welcome")])["ok"]
+    line = next(r.getMessage() for r in caplog.records
+                if r.getMessage().startswith("Create took"))
+    for step in ("template and Media", "playlist", "export", "timers"):
+        assert f"{step} " in line, line
+
+
 def test_media_not_in_bin_is_dropped_but_create_succeeds(client, pp):
     """The old behaviour was total failure with jargon advice. Now: the
     playlist is created, the header is there, and the response names the
