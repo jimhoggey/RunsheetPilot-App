@@ -6,7 +6,6 @@ side effects — no test here ever renames a real running binary or hits
 the network.
 """
 
-import json
 from pathlib import Path
 
 import pytest

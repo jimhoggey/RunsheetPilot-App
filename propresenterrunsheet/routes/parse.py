@@ -29,7 +29,7 @@ from ..parsing.models import (
 )
 from .flags import matching_enabled
 from ..parsing.ocr import (
-    OCRUnavailable, image_to_text, images_to_text,
+    OCR_UNAVAILABLE_MESSAGE, OCRUnavailable, image_to_text, images_to_text,
 )
 from ..parsing.pdf import extract_pdf_text, pdf_text_or_images, render_pdf_pages
 from ..parsing.timed_rows import rescue_missing_rows, service_header
@@ -39,8 +39,7 @@ from ..propresenter.net import UnreachableHost, pp_base
 from ..propresenter.templates import (
     auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlists,
     link_items_to_template, playlist_to_objects, playlist_to_sections,
-    resolve_object, resolve_section, resolve_with_aliases,
-    template_candidates,
+    resolve_section, resolve_with_aliases, template_candidates,
 )
 from ..service_mate.state import _ensure_item_cues, _write_runsheet_state
 from ..logging_setup import log_safe
@@ -63,11 +62,33 @@ ALLOWED_EXTS = PDF_EXTS + IMAGE_EXTS
 class UploadError(ValueError):
     """A failure whose message was written FOR the operator.
 
-    Exists so `_extracted_or_error` can tell OUR messages apart from a
+    Exists so `_extracted_or_error` can tell OUR failures apart from a
     third-party library's. ocrmac raises ValueError too ("Invalid image
     format…"), and passing that straight to the UI leaks internals while
     telling the operator nothing they can act on.
+
+    `_extracted_or_error` answers each subclass with a message it builds
+    itself rather than reading one back out of the exception, so no
+    exception text ever reaches the client (CodeQL
+    py/stack-trace-exposure) — not even ours.
     """
+
+
+class UnsupportedUpload(UploadError):
+    """The file type isn't one we read."""
+
+
+class UnreadablePdf(UploadError):
+    """A PDF with no text layer and nothing we could rasterise."""
+
+
+_UNREADABLE_PDF = ("Couldn't read any text from that PDF. If it's a scan, "
+                   "try a clearer copy or upload a screenshot instead.")
+
+
+def _unsupported_message(filename: str) -> str:
+    return (f"{_display_ext(filename) or 'That file'} isn't supported. "
+            "Upload a PDF, or a PNG or JPG screenshot of the runsheet.")
 
 
 def _safe_ext(filename: str) -> str:
@@ -104,9 +125,7 @@ def _upload_to_text(upload):
     """
     ext = _safe_ext(upload.filename)
     if not ext:
-        raise UploadError(
-            f"{_display_ext(upload.filename) or 'That file'} isn't supported. "
-            "Upload a PDF, or a PNG or JPG screenshot of the runsheet.")
+        raise UnsupportedUpload(_unsupported_message(upload.filename))
 
     # Keep the real extension: ocrmac opens by path, and a .pdf suffix on
     # a PNG is a trap for whoever debugs this next.
@@ -123,9 +142,7 @@ def _upload_to_text(upload):
             if (text or "").strip():
                 return text, "pdf"
             if not pages:
-                raise UploadError(
-                    "Couldn't read any text from that PDF. If it's a scan, "
-                    "try a clearer copy or upload a screenshot instead.")
+                raise UnreadablePdf(_UNREADABLE_PDF)
             return images_to_text(pages), "ocr"
         return image_to_text(str(tmp_path)), "ocr"
     finally:
@@ -170,9 +187,14 @@ def _extracted_or_error(upload):
     """
     try:
         text, source = _upload_to_text(upload)
-    except (OCRUnavailable, UploadError) as e:
-        # Both carry messages we wrote for this exact moment.
-        return "", "", str(e)
+    # Our own failures, each answered with a message built HERE rather
+    # than read back out of the exception — see UploadError.
+    except OCRUnavailable:
+        return "", "", OCR_UNAVAILABLE_MESSAGE
+    except UnsupportedUpload:
+        return "", "", _unsupported_message(upload.filename)
+    except UnreadablePdf:
+        return "", "", _UNREADABLE_PDF
     except Exception:
         # Everything else — including a bare ValueError from ocrmac or
         # Pillow — is logged in full and replaced. Library text is not
@@ -343,7 +365,11 @@ def _rate_limit_message(resp) -> str:
         limit_source = meta.get("limit_source") or ""
         reset_ms = int((meta.get("headers") or {}).get("X-RateLimit-Reset"))
     except Exception:
-        pass
+        # Whatever was read before the failure still picks the wording
+        # below. One INFO line (the logger runs at INFO, so DEBUG would be
+        # dropped) so a change to OpenRouter's 429 body shows up in the
+        # log; no traceback, since this can repeat on every limited parse.
+        log.info("429 body had no usable rate-limit metadata")
     if "daily" in limit_source:
         when = "tomorrow"
         if reset_ms:
@@ -353,7 +379,10 @@ def _rate_limit_message(resp) -> str:
                         reset_ms / 1000).date() != dt.date.today()
                     else "%-I:%M %p today")
             except Exception:
-                pass
+                # "%-I" is not portable (Windows rejects it); the message
+                # falls back to plain "tomorrow".
+                log.debug("Could not format the rate-limit reset time",
+                          exc_info=True)
         return ("You've used all 50 free AI requests for today — OpenRouter's "
                 "free tier daily limit, shared across every "
                 "API key on your account, so a different key or model "
@@ -1020,10 +1049,24 @@ def api_upload_and_parse():
         stats.track("parse_failed", reason="timeout", model=used_model)
         return jsonify({"error":
             "OpenRouter request timed out. Try again, or pick a faster model."}), 200
+    except req.exceptions.ConnectionError:
+        # Before the catch-all below, because "no internet" is the one
+        # failure with an obvious fix — and the catch-all's generic
+        # wording would send the operator off to change models instead.
+        stats.track("parse_failed", reason="offline", model=used_model)
+        return jsonify({"error":
+            "Couldn't reach OpenRouter. Check this computer's internet "
+            "connection, then try again."}), 200
     except Exception as e:
+        # The full detail goes to the log. The operator gets a message
+        # they can act on — raw exception text is library internals (and
+        # sometimes URLs) that mean nothing on a Sunday morning.
         log.exception("Parse failed")
         stats.report_error(e, where_kind="route", route="upload_and_parse")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error":
+            "Something went wrong while parsing the runsheet. Try again "
+            "in a moment, or pick a different model in Settings if it "
+            "keeps failing."}), 500
 
 
 @bp.route("/api/match", methods=["POST"])

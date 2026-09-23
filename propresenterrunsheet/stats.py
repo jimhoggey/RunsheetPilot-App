@@ -173,7 +173,8 @@ def enabled() -> bool:
         if load_settings().get("stats_enabled") is False:
             return False
     except Exception:
-        pass
+        pass        # unreadable settings must not break the caller; the
+                    # build/env rule above has already decided
     return True
 
 
@@ -281,9 +282,9 @@ def track(name: str, **props) -> None:
             "props": clean,
         })
     except queue.Full:
-        pass
+        pass        # fire and forget: a full queue drops the event, never waits
     except Exception:
-        pass
+        pass        # analytics never surface errors
 
 
 def flush(timeout: float = 3.0) -> None:
@@ -357,7 +358,8 @@ def report_error(exc, where_kind: str = "", **props) -> None:
               where_kind=where_kind or "unknown",
               **props)
     except Exception:
-        pass
+        pass        # called from except blocks: raising here would replace
+                    # the real error with an analytics one
 
 
 def _install_hooks() -> None:
@@ -371,7 +373,7 @@ def _install_hooks() -> None:
                 report_error(exc, where_kind="uncaught")
                 flush(2.0)
         except Exception:
-            pass
+            pass    # reporting must never stop the original hook below
         prior(exc_type, exc, tb)
 
     sys.excepthook = hook
@@ -385,12 +387,12 @@ def _install_hooks() -> None:
                     args.exc_value.__traceback__ = args.exc_traceback
                     report_error(args.exc_value, where_kind="thread")
             except Exception:
-                pass
+                pass    # reporting must never stop the original hook below
             prior_thread(args)
 
         threading.excepthook = thook
     except Exception:
-        pass
+        pass    # no thread hook here: thread crashes just go unreported
 
 
 # ── boot marker: catching "the app won't open" ───────────────────────────
@@ -406,19 +408,20 @@ def _check_boot_marker() -> None:
         if _BOOT_MARKER.exists():
             prior = ""
             try:
-                prior = (_BOOT_MARKER.read_text() or "").strip()[:40]
+                prior = (_BOOT_MARKER.read_text(encoding="utf-8")
+                         or "").strip()[:40]
             except Exception:
-                pass
+                pass    # unreadable marker: still report, as "unknown"
             track("startup_failed", prior_version=prior or "unknown")
     except Exception:
-        pass
+        pass    # a boot-marker problem must never hold up startup
 
 
 def mark_boot_pending() -> None:
     try:
-        _BOOT_MARKER.write_text(VERSION)
+        _BOOT_MARKER.write_text(VERSION, encoding="utf-8")
     except Exception:
-        pass
+        pass    # data dir not writable: we lose only the "won't open" signal
 
 
 def boot_ok() -> None:
@@ -426,7 +429,7 @@ def boot_ok() -> None:
     try:
         _BOOT_MARKER.unlink(missing_ok=True)
     except Exception:
-        pass
+        pass    # worst case is one false startup_failed on the next launch
 
 
 # ── start ────────────────────────────────────────────────────────────────

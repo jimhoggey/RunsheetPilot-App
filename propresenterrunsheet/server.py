@@ -70,9 +70,9 @@ def _cleanup_old_uploads(max_age_hours: int = 24) -> None:
                 if f.stat().st_mtime < cutoff:
                     f.unlink()
             except Exception:
-                pass
+                pass    # in use or already gone: the next launch tries again
     except Exception:
-        pass
+        log.debug("Old-upload cleanup skipped", exc_info=True)
 
 
 def _open_browser(port: int) -> None:
@@ -94,7 +94,7 @@ def _show_startup_error(title: str, message: str) -> None:
         messagebox.showerror(title, message)
         root.destroy()
     except Exception:
-        pass
+        pass    # no usable Tk: the error is already in the log and on stderr
 
 
 def _probe_webview() -> int:
@@ -387,7 +387,11 @@ def main(app=None) -> None:
     try:
         stats.start()
     except Exception:
-        pass
+        # Analytics must never stop the app booting — note it and carry on.
+        # INFO, not DEBUG: the pp_runsheet logger runs at INFO, so a debug
+        # line would vanish, and "why does this install send no events?"
+        # is exactly the question this answers. Once per launch.
+        log.info("Usage stats did not start", exc_info=True)
 
     try:
         # Belt-and-braces diagnostic: log the routes Flask actually sees
@@ -472,4 +476,4 @@ def main(app=None) -> None:
             stats.track("app_quit", seconds=stats.session_seconds())
             stats.flush(2.0)
         except Exception:
-            pass
+            pass    # quitting anyway: analytics must never hold up the exit

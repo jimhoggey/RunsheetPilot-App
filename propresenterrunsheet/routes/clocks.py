@@ -11,9 +11,7 @@ from ..service_mate.constants import (
     ROLE_ACCENT, SM_TESTCARD_FILENAME, SM_VERBOSITIES, SM_VERBOSITY_DEFAULT,
 )
 from ..service_mate.daemon import _CLOCKS_LOOP_LAST_PUSHED
-from ..service_mate.geekmagic import (
-    _probe_clock, _push_to_clock, _set_clock_brightness,
-)
+from ..service_mate.geekmagic import _push_to_clock, _set_clock_brightness
 from ..service_mate.render import _render_cue, _render_standby, _render_test_card
 from ..service_mate.state import (
     _read_clocks_config, _read_runsheet_state, _write_clocks_config,
@@ -94,6 +92,8 @@ def api_clocks_post():
         try:
             cfg["brightness"] = max(1, min(100, int(body["brightness"])))
         except Exception:
+            # Not a number (a blank field, say): keep the saved brightness
+            # rather than failing the rest of this save.
             pass
     if "enabled" in body:
         cfg["enabled"] = bool(body["enabled"])

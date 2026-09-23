@@ -177,7 +177,6 @@ function setStepState(n, state) {
 let _modelsSeq = 0;
 async function loadModels(saved) {
   const sel  = document.getElementById('or-model');
-  const note = document.getElementById('or-model-note');
   if (!sel) return;
   const seq = ++_modelsSeq, shown = sel.value;
   let data = {models: [], auto: null, available: false};
@@ -496,10 +495,21 @@ function autoSaveDebounced() {
   if (suppressAutoSave) return;
   setSaveDot('saving');
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveSettings, 500);
+  saveTimer = setTimeout(() => { saveTimer = null; saveSettings(); }, 500);
 }
 
-async function saveSettings() {
+// Every save goes through here, so flushSettings can wait on the latest.
+let _lastSave = Promise.resolve(true);
+function saveSettings() { return (_lastSave = _postSettings()); }
+
+// True once what's on screen is saved: sends a waiting autosave now, waits
+// for one in flight, and gives a failed save one more try.
+async function flushSettings() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; saveSettings(); }
+  return (await _lastSave) || saveSettings();
+}
+
+async function _postSettings() {
   const data = {
     pp_host:                 document.getElementById('pp-host2').value,
     pp_port:                 document.getElementById('pp-port2').value,
@@ -520,13 +530,16 @@ async function saveSettings() {
                                               && (a.template || '').trim()),
   };
   try {
-    await fetch('/api/settings', {method:'POST',
+    const r = await fetch('/api/settings', {method:'POST',
       headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     setSaveDot('saved');
     setTimeout(() => setSaveDot(''), 1500);
+    return true;
   } catch (e) {
     setSaveDot('');
-    setStatus('Could not save settings: ' + e, 'var(--red)');
+    setStatus('Could not save settings: ' + escapeHtml(String(e)), 'var(--red)');
+    return false;
   }
 }
 
@@ -567,7 +580,7 @@ function handleFileSelect(file) {
   dz.classList.add('has-file');
   dz.innerHTML = `
     <div style="font-size:1.8rem;margin-bottom:6px">✅</div>
-    <div style="font-weight:700;color:var(--grn)">${file.name}</div>
+    <div style="font-weight:700;color:var(--grn)">${escapeHtml(file.name)}</div>
     <div class="hint">${(file.size/1024).toFixed(0)} KB</div>`;
   // From here, "Start over" is the ONE way to change course — a second
   // hidden path (clicking the zone to swap files) made the state model
@@ -1679,6 +1692,10 @@ async function createPlaylist() {
   setLoading('Creating playlist in ProPresenter…');
 
   try {
+    // The server exports to the folder SAVED in Settings, so a folder typed
+    // a moment ago must be saved first. If it can't be, skip the export
+    // rather than write to whatever folder was saved before.
+    const saved = await flushSettings();
     const res = await fetch('/api/create_playlist', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -1686,7 +1703,7 @@ async function createPlaylist() {
         port:          document.getElementById('pp-port2').value,
         name,
         matched:       matchedItems,
-        export_dir:    document.getElementById('export-dir').value,
+        export:        saved && !!document.getElementById('export-dir').value.trim(),
         create_timers: document.getElementById('create-timers').checked,
         // The template parse resolved (or the one you pinned), NOT a bare
         // "Auto" for create to work out again from item titles. That
@@ -1763,8 +1780,11 @@ async function createPlaylist() {
       html += `<br><br>📁 <strong>.playlist file exported to:</strong><br>
         <code>${escapeHtml(res.export_path)}</code>`;
     } else if (document.getElementById('export-dir').value) {
-      html += `<br><br>⚠️ Could not find the exported file automatically.
-        Check your ProPresenter/Playlists/ folder.`;
+      html += saved
+        ? `<br><br>⚠️ Could not find the exported file automatically.
+           Check your ProPresenter/Playlists/ folder.`
+        : `<br><br>⚠️ Settings couldn't be saved, so no .playlist backup
+           was written.`;
     }
     html += '</div>';
     notice.innerHTML = html;

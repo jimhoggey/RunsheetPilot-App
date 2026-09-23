@@ -165,7 +165,7 @@ def _user_data_dir() -> Path:
         try:
             shutil.move(str(old), str(new))
         except Exception:
-            pass
+            pass    # best effort, see docstring: a fresh empty dir still works
 
     new.mkdir(parents=True, exist_ok=True)
     return new
@@ -192,4 +192,5 @@ if not getattr(sys, "frozen", False):
             SETTINGS_FILE.write_text(old.read_text(encoding="utf-8"),
                                      encoding="utf-8")
     except Exception:
-        pass
+        pass    # import time, nothing to log to yet: the app starts on
+                # defaults and Settings can re-enter them

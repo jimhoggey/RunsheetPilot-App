@@ -78,9 +78,21 @@ that it is short, and NOT that the lines underneath it are a list of
 volunteer names. The operator runs ProPresenter sections and countdown
 timers off every timed row, so a dropped row is a hole in the service.
 
+## NO TIMES ANYWHERE? Then every line with a duration is an item.
+Some runsheets give no time of day at all, only how long each part runs:
+
+    Welcome 10 min                              ← item
+    Worship 30 min                              ← item
+    Total 69 min                                ← NOT an item (a total)
+
+On such a runsheet, every line that carries a duration is a service item,
+in order — except a total. Never answer with no items because nothing
+starts with a time.
+
 ## LINES WITHOUT A TIME — that is where the skipping happens
 The skip rules below apply ONLY to lines that do NOT begin with a time.
-They can never remove a timed row.
+They can never remove a timed row, or a duration line on a runsheet
+with no times.
 
   • A "rostering" block of bare name lines with no time and no duration
     ("Pre Service Prayer: Taylor, Jordan", "Worship Leader: Rivera, Sam",
@@ -92,10 +104,11 @@ They can never remove a timed row.
     other weeks, tech notes, upcoming dates) — ignore it.
 
 ## BEFORE YOU ANSWER — count check
-Count the lines in the runsheet that begin with a time of day. Your
+Count the lines in the runsheet that begin with a time of day — or, on a
+runsheet with no times, the duration lines that aren't a total. Your
 `items` must contain at least that many entries (more is fine when songs
 are split out of a section's notes — see below). If you have fewer, you
-have dropped a timed row: go back and add it.
+have dropped a row: go back and add it.
 
 ## RETURN FORMAT — JSON object only, no markdown:
 
@@ -177,6 +190,8 @@ creation in ProPresenter.
                 "Praise and Worship" and match the wrong file.
                 ⚠ DO NOT use "song" for items that mention a person's name —
                 those are MC moments, not songs.
+                ⚠ A slot that names no song ("Reprise Song", "Response
+                Song", "Song 2") is not a song either — prayer_and_ministry.
 
 ## SONGS HIDDEN IN A SECTION'S NOTES  ← read this carefully
 Many runsheets do NOT list songs as their own rows. Instead ONE row names
@@ -227,16 +242,18 @@ for them. Both layouts appear in the wild, sometimes in the same church;
 handle whichever the runsheet in front of you uses, and never emit the
 same song twice.
 
-- mc_on_stage   An MC / host on stage: landing worship, welcome and
-                connection cards, culture moments, interviews, transitions.
-                Often has a person's name with a dash.
-                Examples: "Land Worship - Priya", "Welcome and Connection
-                Cards", "Culture Moment - Generosity - Ps Sarah",
-                "Meeting Land and Recap - Chris", an interview segment.
+- mc_on_stage   An MC / host on stage: EVERY welcome and every close —
+                a plain "Welcome" or "Close" line too, with no name — plus
+                landing worship, connection cards, culture moments,
+                interviews, transitions. Often has a person's name with a dash.
+                Examples: "Welcome", "Land Worship - Priya", "Welcome and
+                Connection Cards", "Culture Moment - Generosity - Ps Sarah",
+                "Meeting Land and Recap - Chris", "Close", an interview.
 
 - announcement  Information given to the congregation.
                 Examples: "Junior Youth Out", "Upcoming Dates",
                 "Celebrations", "Whats Your Next Step Moment".
+                Not a reading or a prayer, even when people are named.
 
 - sermon        The main preaching / message slot. Look for "Preach Title",
                 "Message", or a minister's name with a sermon topic.
@@ -245,7 +262,7 @@ same song twice.
                 The altar call / ministry moment (commonly right after the
                 sermon), a prayer time, or a ministry time — including the
                 "Worship and Ministry Time" block near the top of many
-                runsheets.
+                runsheets, and "Scripture Reading and Prayer - Sam".
 
 - other         Anything that fits none of the above: go live / streaming,
                 countdowns, music beds, section dividers, logistics,
