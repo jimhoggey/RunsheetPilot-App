@@ -877,6 +877,19 @@ button:focus-visible {
   letter-spacing: 0;
 }
 
+/* A small pill in a step's header: the model in use, or what the step is
+   doing right now. */
+.step-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--acc-2);
+  background: var(--acc-soft);
+}
+.step-chip[hidden] { display: none; }
+
 /* ── Service Mate licensing (paid add-on) ─────────────────────────────── */
 /* Small pill next to the title: "Trial · 9 days", "Licensed", "Trial ended". */
 .sm-license-badge {
@@ -1081,16 +1094,6 @@ button:focus-visible {
   color: var(--text);
   background: var(--card-2);
 }
-.model-chip {
-  font-size: 0.72rem;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 999px;
-  white-space: nowrap;
-  color: var(--acc-2);
-  background: var(--acc-soft);
-}
-.model-chip[hidden] { display: none; }
 .key-badge.is-ok   { color: var(--grn); background: var(--grn-soft); }
 .key-badge.is-warn { color: var(--org); background: var(--org-soft); }
 .key-badge.is-bad  { color: var(--red); background: var(--red-soft); }
