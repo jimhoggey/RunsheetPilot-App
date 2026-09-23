@@ -78,9 +78,21 @@ that it is short, and NOT that the lines underneath it are a list of
 volunteer names. The operator runs ProPresenter sections and countdown
 timers off every timed row, so a dropped row is a hole in the service.
 
+## NO TIMES ANYWHERE? Then every line with a duration is an item.
+Some runsheets give no time of day at all, only how long each part runs:
+
+    Welcome 10 min                              ← item
+    Worship 30 min                              ← item
+    Total 69 min                                ← NOT an item (a total)
+
+On such a runsheet, every line that carries a duration is a service item,
+in order — except a total. Never answer with no items because nothing
+starts with a time.
+
 ## LINES WITHOUT A TIME — that is where the skipping happens
 The skip rules below apply ONLY to lines that do NOT begin with a time.
-They can never remove a timed row.
+They can never remove a timed row, or a duration line on a runsheet
+with no times.
 
   • A "rostering" block of bare name lines with no time and no duration
     ("Pre Service Prayer: Taylor, Jordan", "Worship Leader: Rivera, Sam",
@@ -92,10 +104,11 @@ They can never remove a timed row.
     other weeks, tech notes, upcoming dates) — ignore it.
 
 ## BEFORE YOU ANSWER — count check
-Count the lines in the runsheet that begin with a time of day. Your
+Count the lines in the runsheet that begin with a time of day — or, on a
+runsheet with no times, the duration lines that aren't a total. Your
 `items` must contain at least that many entries (more is fine when songs
 are split out of a section's notes — see below). If you have fewer, you
-have dropped a timed row: go back and add it.
+have dropped a row: go back and add it.
 
 ## RETURN FORMAT — JSON object only, no markdown:
 
