@@ -193,15 +193,20 @@ def test_a_funded_key_reports_what_is_left_and_spent():
         {"is_free_tier": False, "limit": None, "usage": 0.1},
         {"total_credits": 5, "total_usage": 0.27}))
     assert info["state"] == "paid" and info["funded"] is True
-    assert info["balance"] == pytest.approx(4.73)
-    assert info["usage"] == pytest.approx(0.27)
+    assert info["balance"] == pytest.approx(4.73) == info["credit"]
+    assert info["usage"] == pytest.approx(0.27) and info["limit"] is None
 
 
-def test_a_spending_cap_on_the_key_is_what_is_left_when_it_is_lower():
+def test_a_weekly_limit_on_the_key_is_reported_beside_the_account_credit():
+    """The owner's key: $10 bought, $5.01 used, a $2 weekly limit on the key.
+    Both figures are shown; what can be spent now is the lower."""
     info = m.fetch_key_info("k", http_get=_openrouter(
-        {"is_free_tier": False, "limit": 2, "limit_remaining": 1.5},
-        {"total_credits": 5, "total_usage": 0.27}))
-    assert info["balance"] == pytest.approx(1.5) and info["capped"] is True
+        {"is_free_tier": False, "limit": 2, "limit_reset": "weekly",
+         "limit_remaining": 2},
+        {"total_credits": 10, "total_usage": 5.01273376}))
+    assert info["credit"] == pytest.approx(4.98726624)
+    assert info["limit"] == {"amount": 2.0, "remaining": 2.0, "reset": "weekly"}
+    assert info["balance"] == pytest.approx(2.0) and info["capped"] is True
 
 
 def test_a_key_limit_is_never_shown_as_money_when_credit_cant_be_read():
@@ -210,6 +215,59 @@ def test_a_key_limit_is_never_shown_as_money_when_credit_cant_be_read():
     info = m.fetch_key_info("k", http_get=_openrouter(
         {"is_free_tier": False, "limit": 50, "limit_remaining": 50, "usage": 0}))
     assert info["state"] == "paid" and info["balance"] is None
+
+
+# ── a paid key runs on a paid model ──────────────────────────────────────
+
+@pytest.fixture
+def funded(monkeypatch):
+    """key_is_funded, scripted; records whether it was asked at all."""
+    asked = []
+
+    def set_to(value):
+        monkeypatch.setattr(m, "key_is_funded",
+                            lambda key: asked.append(key) or value)
+        return asked
+    return set_to
+
+
+@pytest.mark.parametrize("configured", ["", "free/one:free"])
+def test_a_funded_key_turns_automatic_and_free_picks_into_gpt_4_1_mini(
+        funded, configured):
+    funded(True)
+    assert m.resolve_model(configured, CATALOGUE, api_key="k") == "openai/gpt-4.1-mini"
+
+
+def test_openrouter_auto_stands_in_when_gpt_4_1_mini_is_gone(funded):
+    funded(True)
+    cat = {"data": [d for d in CATALOGUE["data"] if d["id"] != "openai/gpt-4.1-mini"]
+                   + [{"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}}]}
+    assert m.resolve_model("", cat, api_key="k") == "openrouter/auto"
+
+
+def test_a_paid_model_chosen_deliberately_is_kept_and_the_key_not_checked(funded):
+    asked = funded(True)
+    assert m.resolve_model("anthropic/claude-haiku-4.5", CATALOGUE,
+                           api_key="k") == "anthropic/claude-haiku-4.5"
+    assert asked == []
+
+
+def test_without_credit_automatic_stays_free(funded):
+    funded(False)
+    assert m.resolve_model("", CATALOGUE, api_key="k") == "free/one:free"
+
+
+def test_models_route_offers_only_paid_models_to_a_funded_key(client, monkeypatch):
+    import propresenterrunsheet.routes.settings as settings_mod
+    from propresenterrunsheet.settings import save_settings
+
+    monkeypatch.setattr(settings_mod, "fetch_catalogue", lambda **_k: CATALOGUE)
+    monkeypatch.setattr(settings_mod, "fetch_key_info",
+                        lambda key: {"state": "paid", "funded": True, "balance": 2.0})
+    save_settings({"or_key": "k", "or_model": "free/one:free"})
+    body = client.get("/api/models").get_json()
+    assert body["auto"] == "openai/gpt-4.1-mini" and body["models"] == []
+    assert body["free_saved"] is True
 
 
 @pytest.mark.parametrize("bad", ["NaN", "Infinity", float("nan"), -1, True, None, "x"])

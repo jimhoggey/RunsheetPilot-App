@@ -245,16 +245,20 @@ async function loadModels(saved) {
   }
   sel.value = saved || '';
   _modelsData = data;
+  // A free model saved before the key had credit: parses already run on the
+  // paid pick (the server's rule), so show that by moving to Automatic.
+  if (data.free_saved) { sel.value = ''; saveSettings(); }
   _modelNote(data);
   _renderKeyStatus();
 }
 
 // Under the key box: free or paid, the money left, and what a runsheet
-// costs on the chosen model — so "$5 left" comes with "about 12,000
+// costs on the chosen model — so "$5 left" comes with "about 2,000
 // runsheets", not a guess at whether that's enough. A paid account with
 // its credit used up can only run free models, so it reads as free.
 let _modelsData = null;
 function _renderKeyStatus() {
+  _renderModelChip();
   const el = document.getElementById('or-key-status');
   const k = (_modelsData && _modelsData.key) || {};
   if (!el) return;
@@ -262,6 +266,10 @@ function _renderKeyStatus() {
   const today = k.free_today
     ? ` · ${Number(k.free_today.remaining)} of ${Number(k.free_today.limit)} free requests left today`
     : '';
+  const lim = k.limit;
+  const per = lim && {daily: ' daily', weekly: ' weekly', monthly: ' monthly'}[lim.reset] || '';
+  const limit = lim
+    ? `${money(lim.remaining)} of this key's ${money(lim.amount)}${per} limit left` : '';
   // [badge, tone, detail] — the badge reads at a glance in a busy panel.
   const [badge, tone, detail] =
       k.state === 'invalid' ? ['✕ Key not accepted', 'bad', 'Check it was pasted in full']
@@ -269,39 +277,61 @@ function _renderKeyStatus() {
     : k.state === 'free'    ? ['✓ Free key', 'ok', `Free models only${today}`]
     : k.state !== 'paid'    ? ['', '', '']
     : k.balance === 0 && k.capped
-      ? ['⚠ Key limit reached', 'warn', 'Raise it on openrouter.ai to use paid models']
+      ? ['⚠ Key limit reached', 'warn', `${limit} — free models until it resets`]
     : k.balance === 0       ? ['✓ Free key', 'ok', `No credit left${today}`]
     : ['✓ Paid key', 'ok',
-       (k.balance === null ? '' : `<strong>${money(k.balance)} left</strong>`
-         + (k.capped ? ' on this key\'s spending limit' : '') + ' · ')
-       + `${money(k.usage)} used` + _runsheetCost(k.balance)];
+       [k.credit === null ? '' : `<strong>${money(k.credit)} credit</strong>`, limit]
+         .filter(Boolean).join(' · ')];
+  const cost = k.state === 'paid' && k.balance ? _runsheetCost(k.balance, lim) : '';
   el.innerHTML = badge
     ? `<span class="key-badge${tone ? ' is-' + tone : ''}">${badge}</span>`
-      + `<span>${detail}</span>`
+      + `<span>${detail}</span>${cost}`
     : '';
   el.hidden = !badge;
 }
 
-// What one runsheet costs on the selected model, and how far the balance
-// goes: what this install was actually billed if it has used the model,
-// otherwise OpenRouter's list price for a typical runsheet.
-function _runsheetCost(balance) {
+// The model a parse will run on: the choice in Settings, or what Automatic
+// resolves to for this key.
+function _effectiveModel() {
+  const v = document.getElementById('or-model').value;
+  return v && v !== '__other__' ? v : (_modelsData || {}).auto || '';
+}
+
+function _modelName(id) {
+  const rec = ((_modelsData || {}).recommended || []).find(r => r.id === id);
+  if (rec) return rec.label;
+  const bare = String(id).split('/').pop();
+  return bare.endsWith(':free') ? bare.slice(0, -5) + ' (free)' : bare;
+}
+
+// On the Parse step: which model reads the runsheet, so it's never a guess.
+function _renderModelChip() {
+  const chip = document.getElementById('parse-model');
+  const id = _effectiveModel();
+  if (!chip) return;
+  chip.textContent = id ? 'Using ' + _modelName(id) : '';
+  chip.title = id;
+  chip.hidden = !id;
+}
+
+// What one runsheet costs on the model in use, and how far the spendable
+// balance goes: what this install was actually billed on it if it has
+// been used, otherwise OpenRouter's list price for a typical runsheet.
+function _runsheetCost(balance, lim) {
   const d = _modelsData || {};
-  const id = document.getElementById('or-model').value || d.auto;
+  const id = _effectiveModel();
   const measured = (d.key && d.key.measured) || {};
   const rec = (d.recommended || []).find(r => r.id === id);
-  const free = (d.models || []).some(m => m.id === id);
   const usd = id in measured ? measured[id]
-    : rec && rec.cost_per_parse != null ? rec.cost_per_parse
-    : free ? 0 : null;
+    : rec && rec.cost_per_parse != null ? rec.cost_per_parse : null;
   if (usd === null) return '';
   const line = t => `<span class="key-line">${t}</span>`;
-  if (usd === 0) return line('This model is free — runsheets cost nothing.');
-  const each = `$${Number(usd.toPrecision(2))} a runsheet`;
-  const runs = balance
-    ? ` — roughly ${Math.floor(balance / usd).toLocaleString()} runsheets left` : '';
-  return line(id in measured ? `${each} on this model (your average)${runs}.`
-                             : `About ${each} on this model${runs}.`);
+  const name = escapeHtml(_modelName(id));
+  if (usd === 0) return line(`${name} is free — runsheets cost nothing.`);
+  const when = lim && lim.reset === 'weekly' ? ' this week'
+    : lim && lim.reset === 'monthly' ? ' this month' : '';
+  return line(`${id in measured ? '' : 'About '}$${Number(usd.toPrecision(2))} a runsheet `
+    + `on ${name} — roughly ${Math.floor(balance / usd).toLocaleString()} more${when}.`);
 }
 
 // "Other…" swaps the dropdown for a text box so any OpenRouter id can be

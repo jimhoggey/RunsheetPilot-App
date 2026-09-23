@@ -363,8 +363,9 @@ def api_upload_and_parse():
     # Blank means "pick one for me". Also rescues installs still holding a
     # model id that OpenRouter has since retired. The catalogue is cached for
     # hours and the fetch fails soft, so this costs one HTTP round-trip on the
-    # first parse after launch and nothing afterwards.
-    model = resolve_model(configured, fetch_catalogue())
+    # first parse after launch and nothing afterwards. A key with credit runs
+    # on a paid model (see resolve_model).
+    model = resolve_model(configured, fetch_catalogue(), api_key=or_key)
 
     if not or_key:
         return jsonify({"error": "OpenRouter API key required."}), 400
