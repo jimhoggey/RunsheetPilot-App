@@ -24,6 +24,7 @@ Presentation-type items are untouched here — they PUT correctly by uuid
 """
 
 import logging
+from urllib.parse import quote
 
 log = logging.getLogger("pp_runsheet")
 
@@ -32,8 +33,31 @@ def _norm_name(name: str) -> str:
     return (name or "").strip().casefold()
 
 
+# PP returns at most this many items per call; `?start=` pages through the
+# rest (API docs, confirmed live). The cap only stops a runaway loop.
+_PAGE = 100
+_MAX_ITEMS = 10_000
+
+
+def _media_playlists(nodes):
+    """Every playlist in the Media sidebar, folders ("group") opened at
+    any depth — a playlist inside a folder holds bin media like any other."""
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        if node.get("type") == "group":
+            yield from _media_playlists(node.get("children"))
+        elif (node.get("id") or {}).get("uuid"):
+            yield node["id"]["uuid"]
+
+
 def fetch_media_bin(base: str, http_get=None) -> list:
     """Every media asset in every Media-bin playlist: [{"uuid","name"},…].
+
+    Reads every page of every playlist, inside folders too. Reading only
+    the first page of the top level left anything past item 100, or in a
+    folder, looking "not in Media" — on a production machine that dropped
+    five slides the operator had in Media from a new playlist.
 
     Returns [] on any failure — bin resolution is an upgrade, and a PP
     hiccup here must not block playlist creation (the caller just skips
@@ -45,20 +69,28 @@ def fetch_media_bin(base: str, http_get=None) -> list:
     try:
         r = http_get(f"{base}/v1/media/playlists", timeout=6)
         r.raise_for_status()
-        for mp in r.json() or []:
-            uuid = ((mp.get("id") or {}).get("uuid")) or ""
-            if not uuid:
-                continue
-            r2 = http_get(f"{base}/v1/media/playlist/{uuid}", timeout=6)
-            r2.raise_for_status()
-            for m in (r2.json() or {}).get("items") or []:
-                mid = m.get("id") or {}
-                # Keep the name EXACTLY as PP stores it — trailing spaces
-                # and all. PP matches media by byte-for-byte name, so
-                # stripping here silently 404s any media the operator
-                # named with stray whitespace (e.g. "Countdown ").
-                if mid.get("uuid") and (mid.get("name") or "").strip():
-                    out.append({"uuid": mid["uuid"], "name": mid["name"]})
+        for uuid in _media_playlists(r.json()):
+            # ProPresenter's own id, but still one path segment and no more.
+            segment, seen = quote(str(uuid), safe=""), set()
+            for start in range(0, _MAX_ITEMS, _PAGE):
+                r2 = http_get(f"{base}/v1/media/playlist/{segment}?start={start}",
+                              timeout=6)
+                r2.raise_for_status()
+                page = [m.get("id") or {} for m in
+                        (r2.json() or {}).get("items") or [] if isinstance(m, dict)]
+                fresh = [mid for mid in page if mid.get("uuid") not in seen]
+                for mid in fresh:
+                    seen.add(mid.get("uuid"))
+                    # Keep the name EXACTLY as PP stores it — trailing
+                    # spaces and all. PP matches media by byte-for-byte
+                    # name, so stripping here silently 404s any media the
+                    # operator named with stray whitespace ("Countdown ").
+                    if mid.get("uuid") and (mid.get("name") or "").strip():
+                        out.append({"uuid": mid["uuid"], "name": mid["name"]})
+                # A short page is the last one; a page with nothing new
+                # means `start` was ignored — stop rather than spin.
+                if len(page) < _PAGE or not fresh:
+                    break
     except Exception as e:
         log.warning("Could not read PP media bin (%s: %s) — media linking "
                     "will be skipped this run", type(e).__name__, e)

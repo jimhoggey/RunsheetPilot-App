@@ -21,6 +21,7 @@ from typing import Optional
 
 from ..logging_setup import log_safe
 from .library import resolve_library_name
+from .net import pp_id
 
 
 log = logging.getLogger("pp_runsheet")
@@ -129,7 +130,11 @@ def fetch_pp_playlist_raw(base: str, playlist_uuid: str) -> Optional[list]:
     which can include things that are not item-bearing playlists."""
     import requests as req
     try:
-        r = req.get(f"{base}/v1/playlist/{playlist_uuid}", timeout=6)
+        # pp_id: the uuid can come straight from the request body, and
+        # "../timer/…" would walk out of the playlist API. A bad one raises
+        # ValueError into the except below — a failed read (None), which
+        # fetch_pp_playlist_items turns into "no template".
+        r = req.get(f"{base}/v1/playlist/{pp_id(playlist_uuid)}", timeout=6)
         r.raise_for_status()
         data = r.json()
         if not isinstance(data, dict) or "items" not in data:

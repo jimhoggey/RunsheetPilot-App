@@ -26,6 +26,7 @@ by the sidebar's "Test connection" button."""
 
 import datetime as _dt
 import logging
+import os
 import re
 import shutil
 import time
@@ -65,6 +66,26 @@ from ..service_mate.state import (
 
 bp = Blueprint("playlist", __name__)
 log = logging.getLogger("pp_runsheet")
+
+# Characters that would let a playlist name act as a PATH rather than a
+# file name: both separators (whichever OS the name was typed on), the
+# colon ("C:x" on Windows is a path on another drive), and control
+# characters, which no file name should carry.
+_NOT_IN_FILE_NAME = re.compile(r"[\\/:\x00-\x1f]")
+
+
+def _export_file_name(name) -> str:
+    """The playlist name reduced to a plain file name for the export folder.
+
+    The name is whatever the operator typed, and it used to go into the
+    export path as-is — so "../../x" wrote the .playlist file outside the
+    folder they chose. Separators become dashes, so "Sunday 21/09" is
+    saved as "Sunday 21-09" instead of failing on a folder that doesn't
+    exist.
+    Leading dots go too: ".." is not a name, and a leading dot would hide
+    the file in Finder. Nothing usable left falls back to a plain default."""
+    safe = _NOT_IN_FILE_NAME.sub("-", str(name or "")).strip()
+    return safe.lstrip(". ") or "Playlist"
 
 
 def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
@@ -248,6 +269,34 @@ def api_create_playlist():
             playlist_id = pid.get("uuid") or pid.get("name") or name
         else:
             playlist_id = str(pid) or name
+        # This id goes into the URL PATH of the pushes below. PP normally
+        # answers with its own uuid, but the fallbacks reach the name the
+        # operator typed, and a name like "../timer/x" would walk out of
+        # the playlist API. pp_id lets only a plain id through.
+        #
+        # An ordinary name ("Sunday Service") is not a plain id — it has a
+        # space — so when PP answered without a uuid, ask PP for the uuid
+        # of the playlist it just made rather than refuse a create that
+        # used to work. Only when that also fails is it an error.
+        try:
+            playlist_id = pp_id(playlist_id)
+        except ValueError:
+            found = next((p["uuid"] for p in fetch_pp_playlists(base)
+                          if p.get("name") == name), "")
+            try:
+                playlist_id = pp_id(found)
+            except ValueError:
+                log.error("PP gave no usable id for the new playlist "
+                          "(got %s)", log_safe(playlist_id, 80))
+                stats.track("playlist_failed", reason="no_playlist_id",
+                            items=len(matched))
+                # Not "click Create again" on its own: the playlist exists,
+                # so a second create would leave two.
+                return jsonify({"error":
+                    "ProPresenter made the playlist but didn't say how to "
+                    "find it, so nothing was added to it. Delete the empty "
+                    "playlist it just made in ProPresenter, then click "
+                    "Create again."}), 200
 
         # 2. Build items list — pure function in propresenter/playlist.py
         items = build_playlist_payload(matched)
@@ -303,20 +352,49 @@ def api_create_playlist():
                       if (mi.get("parsed") or {}).get("type") != "song")
 
         # 4. Try to export the .playlist file
+        #
+        # The playlist is already built in ProPresenter by now, so a failed
+        # export must not fail the create: the catch-all at the bottom would
+        # tell the operator to click Create again and leave them with two
+        # playlists. An unplugged drive, a read-only folder or a Windows-
+        # invalid name all land here; the UI already says "Could not find
+        # the exported file" whenever export_path comes back empty.
+        #
+        # The folder is the one saved in Settings. The request only says
+        # WHETHER to export: a create call carrying a filesystem path would
+        # let whoever sends it choose where the app writes.
         export_path = None
-        export_dir = (body.get("export_dir") or "").strip()
+        export_dir = ""
+        if body.get("export"):
+            from ..settings import load_settings
+            export_dir = str(load_settings().get("export_dir") or "").strip()
         if export_dir:
-            pdir = find_playlist_dir(find_pp_root())
-            if pdir:
-                time.sleep(1.0)
-                candidates = [f for f in Path(pdir).iterdir()
-                              if f.is_file() and f.stat().st_mtime > before]
-                if candidates:
-                    newest = max(candidates, key=lambda f: f.stat().st_mtime)
-                    Path(export_dir).mkdir(parents=True, exist_ok=True)
-                    dest = Path(export_dir) / f"{name}.playlist"
-                    shutil.copy2(newest, dest)
-                    export_path = str(dest)
+            try:
+                pdir = find_playlist_dir(find_pp_root())
+                if pdir:
+                    time.sleep(1.0)
+                    candidates = [f for f in Path(pdir).iterdir()
+                                  if f.is_file()
+                                  and f.stat().st_mtime > before]
+                    if candidates:
+                        newest = max(candidates,
+                                     key=lambda f: f.stat().st_mtime)
+                        folder = os.path.normpath(export_dir)
+                        Path(folder).mkdir(parents=True, exist_ok=True)
+                        dest = os.path.normpath(os.path.join(
+                            folder, f"{_export_file_name(name)}.playlist"))
+                        # _export_file_name already keeps the name a plain
+                        # file name; this says so where CodeQL can see it.
+                        # join(folder, "") ends in exactly one separator,
+                        # so a drive root such as E:\ still works.
+                        if not dest.startswith(os.path.join(folder, "")):
+                            raise OSError("export name left the folder")
+                        shutil.copy2(newest, dest)
+                        export_path = dest
+            except OSError:
+                log.exception("Playlist export failed (playlist itself "
+                              "was created)")
+                export_path = None
 
         # 5. Optional: create duration-based countdown timers
         timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
@@ -329,11 +407,12 @@ def api_create_playlist():
         # display on the LAN.
         _write_sm_state(name, matched, timer_result)
 
-        log.info(f"Playlist created: '{name}' → {songs} songs, {headers} headers, "
+        log.info(f"Playlist created: '{log_safe(name)}' → {songs} songs, "
+                 f"{headers} headers, "
                  f"{needs_action} action-needed, {timer_result['created']} timers "
                  f"(deleted {timer_result['deleted']} old, "
                  f"{timer_result['no_duration']} skipped no-duration), "
-                 f"export={export_path}")
+                 f"export={log_safe(export_path, 500)}")
 
         # The numbers that describe a real run: how long the import took,
         # how much landed in ProPresenter, and how much of it is section
@@ -388,7 +467,16 @@ def api_create_playlist():
     except Exception as e:
         log.exception("Playlist create failed")
         stats.report_error(e, where_kind="route", route="create_playlist")
-        return jsonify({"error": str(e)}), 200
+        # Never hand the exception text to the page: it can carry paths
+        # and internals, and it tells a volunteer nothing they can act on.
+        # The full traceback is in the log line above.
+        # It can fire after PP already made the playlist (a failed push),
+        # so the advice has to cover the half-built one it may leave.
+        return jsonify({"error":
+            "Something went wrong creating the playlist. Check "
+            "ProPresenter is running and try again. If a half-built "
+            "playlist was left behind in ProPresenter, delete it "
+            "first."}), 200
 
 
 @bp.route("/api/test_connection", methods=["POST"])
@@ -511,7 +599,8 @@ def api_pp_playlists():
             raw = fetch_pp_playlist_items(base, p["uuid"])
             sections = playlist_to_sections(raw)
         except Exception:
-            log.exception(f"sections peek failed for {p.get('name')!r}")
+            log.exception("sections peek failed for %s",
+                          log_safe(repr(p.get("name"))))
             raw, sections = [], []
         enriched.append({
             **p,
@@ -652,7 +741,8 @@ def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
     if len(known) >= len(kept):
         return known, None              # every slide already vouched for
     catalogue = fetch_catalogue()
-    model = resolve_model((settings.get("or_model") or "").strip(), catalogue)
+    model = resolve_model((settings.get("or_model") or "").strip(), catalogue,
+                          api_key=or_key)       # a paid key runs on a paid model
     if not model:
         return {}, None
     read = ocr_playlist_media(base, playlist_uuid, raw)     # by PP's index

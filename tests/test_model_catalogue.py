@@ -11,10 +11,6 @@ a safety classifier that answers "User Safety: safe" instead of a runsheet.
 So we resolve the model from OpenRouter's live catalogue instead, and the
 filtering rules below are the ones that would have prevented both failures.
 """
-import json
-
-import pytest
-
 from propresenterrunsheet.parsing.models import (
     next_usable_model, pick_default_model, resolve_model, usable_models,
 )

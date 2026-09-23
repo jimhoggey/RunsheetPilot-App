@@ -30,6 +30,7 @@ the pool to a single model for no present benefit.
 """
 
 import logging
+import math
 import re
 import time
 
@@ -37,6 +38,7 @@ log = logging.getLogger("pp_runsheet")
 
 CATALOGUE_URL = "https://openrouter.ai/api/v1/models"
 KEY_URL = "https://openrouter.ai/api/v1/key"
+CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 # A curated shortlist for THIS workload, offered only when the key is
 # funded. Deliberately short: a wall of 300 models is not a choice, it is
@@ -46,6 +48,10 @@ KEY_URL = "https://openrouter.ai/api/v1/key"
 # fixed schema — which small INSTRUCT models do reliably and cheaply.
 # Reasoning models are the wrong tool and measurably worse here: the one
 # tested (gpt-oss-120b) took 230s on one run and forgot the title rule.
+#
+# The owner's call (Sept 2026): tune and test for GPT-4.1 mini, with
+# Claude Haiku as the alternative and OpenRouter Auto as the last resort —
+# fewer models, fewer ways to fail. Both named models also read a PDF.
 RECOMMENDED = [
     {
         "id": "openai/gpt-4.1-mini",
@@ -53,13 +59,6 @@ RECOMMENDED = [
         "why": "Built for structured extraction. Consistent run to run — "
                "the reason to pay is repeatability, not raw ability.",
         "starred": True,
-    },
-    {
-        "id": "qwen/qwen3-30b-a3b-instruct-2507",
-        "label": "Qwen3 30B Instruct",
-        "why": "Cheapest of these and the only one measured on a real "
-               "runsheet here: every timed row, titles normalised, twice.",
-        "starred": False,
     },
     {
         "id": "anthropic/claude-haiku-4.5",
@@ -207,15 +206,68 @@ def provider_failure(resp):
             "code": code if isinstance(code, int) else status}
 
 
-def resolve_model(configured: str, catalogue: dict):
+# With credit on the key, Automatic and any free pick run on these, first
+# available wins: the starred recommendation, Claude Haiku, then
+# OpenRouter's own router.
+PAID_DEFAULTS = ("openai/gpt-4.1-mini", "anthropic/claude-haiku-4.5",
+                 "openrouter/auto")
+
+
+def pick_paid_model(catalogue: dict):
+    """The model a funded key runs on, or None if neither is listed."""
+    ids = {m.get("id") for m in (catalogue or {}).get("data") or []
+           if isinstance(m, dict)}
+    return next((i for i in PAID_DEFAULTS if i in ids), None)
+
+
+def model_reading(catalogue: dict, current: str = None, modality: str = "file"):
+    """A model that can take `modality` ("file" for a PDF, "image" for a
+    picture) as input: `current` when it can, else the first paid default
+    that can. None when the catalogue lists neither."""
+    def reads(m):
+        arch = m.get("architecture") if isinstance(m, dict) else None
+        mods = arch.get("input_modalities") if isinstance(arch, dict) else None
+        return isinstance(mods, list) and modality in mods
+
+    able = {m.get("id") for m in (catalogue or {}).get("data") or [] if reads(m)}
+    return next((i for i in (current, *PAID_DEFAULTS) if i in able), None)
+
+
+def free_model_ids(catalogue: dict) -> set:
+    return {m.get("id") for m in (catalogue or {}).get("data") or []
+            if isinstance(m, dict) and _is_free(m)}
+
+
+_key_cache: dict = {}
+
+
+def key_is_funded(api_key: str) -> bool:
+    """fetch_key_info's `funded`, remembered for a minute — asked on every
+    parse, and it changes rarely."""
+    hit = _key_cache.get(api_key)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    funded = bool(fetch_key_info(api_key).get("funded"))
+    _key_cache.clear()
+    _key_cache[api_key] = (time.time(), funded)
+    return funded
+
+
+def resolve_model(configured: str, catalogue: dict, api_key: str = None):
     """Decide which model id to send, or None if there's nothing to send.
 
-    An explicitly configured model always wins — including paid ones, which
-    auto-selection filters out but which are a perfectly legitimate choice.
-    The one exception is a model that has vanished from the catalogue
-    entirely: that is the retired-default failure (`gemini-2.0-flash-exp:free`
-    404ing forever on installs that saved it), and recovering beats failing on
-    every parse until someone edits a setting they don't know exists.
+    With `api_key` and credit on it, Automatic or a free model becomes a
+    paid one (PAID_DEFAULTS): the owner's rule is that a paid key runs on a
+    paid model. A paid model chosen deliberately is kept. The key is only
+    looked up when that could change the answer.
+
+    Otherwise an explicitly configured model always wins — including paid
+    ones, which auto-selection filters out but which are a perfectly
+    legitimate choice. The one exception is a model that has vanished from
+    the catalogue entirely: that is the retired-default failure
+    (`gemini-2.0-flash-exp:free` 404ing forever on installs that saved it),
+    and recovering beats failing on every parse until someone edits a
+    setting they don't know exists.
 
     With no catalogue at all — offline, or the fetch failed — we keep whatever
     is configured rather than second-guessing it.
@@ -223,6 +275,10 @@ def resolve_model(configured: str, catalogue: dict):
     configured = (configured or "").strip()
     if catalogue is None:
         return configured or None
+    if api_key and (not configured or configured in free_model_ids(catalogue)):
+        paid = pick_paid_model(catalogue)
+        if paid and key_is_funded(api_key):
+            return paid
     if configured:
         known = {m.get("id") for m in (catalogue.get("data") or [])
                  if isinstance(m, dict)}
@@ -287,30 +343,93 @@ def recommended_models(catalogue: dict) -> list:
     return out
 
 
-def fetch_key_info(api_key: str, http_get=None, timeout=8) -> dict:
-    """Is this key funded? `{"funded": bool|None, "usage": float}`.
+def dollars(value):
+    """A money figure from OpenRouter as a finite, non-negative float, or
+    None. It is third-party data: a NaN written into settings.json would
+    make every later settings read unparseable in the browser."""
+    if isinstance(value, bool):
+        return None
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) and x >= 0 else None
 
-    funded=None means "couldn't tell" (offline, or the key is bad), and
-    the caller treats that as free-tier — showing paid models to someone
-    who can't use them produces a 402 on their first parse, which is a
-    much worse failure than a shorter list.
-    """
+
+def measured_costs(parse_costs) -> dict:
+    """{model id: average billed dollars per runsheet} from the costs the
+    parse route recorded — what this install actually paid, not a guess."""
+    by_model = {}
+    for c in parse_costs if isinstance(parse_costs, list) else []:
+        usd = dollars(c.get("usd")) if isinstance(c, dict) else None
+        if usd is not None:
+            by_model.setdefault(str(c.get("model")), []).append(usd)
+    return {m: sum(v) / len(v) for m, v in by_model.items()}
+
+
+def fetch_key_info(api_key: str, http_get=None, timeout=8) -> dict:
+    """What OpenRouter says about this key.
+
+      state       "none" | "unknown" (offline) | "invalid" | "free" | "paid"
+      funded      paid AND credit left. None when unknown; callers treat that
+                  as not funded, because a paid model on an empty account
+                  402s on the first parse — far worse than a shorter list
+      credit      dollars of credit left on the account; None if unreadable
+      limit       {"amount", "remaining", "reset"} — a spending limit set on
+                  the key itself, e.g. $2 "weekly"; None when there isn't one
+      balance     what can be spent right now: the credit, lowered to the
+                  key's remaining limit; None if the credit can't be read
+                  (a key's limit is not money)
+      capped      the key's own limit, not the account, is what's binding
+      usage       dollars spent
+      free_today  {"used", "limit", "remaining"} free-model requests today
+
+    A paid account whose credit is used up is still "paid", but not
+    funded (seen live: $5 bought, $5.01 used)."""
+    out = {"state": "none", "funded": None, "usage": 0.0, "balance": None,
+           "credit": None, "limit": None, "capped": False, "free_today": None}
     if not (api_key or "").strip():
-        return {"funded": None, "usage": 0.0}
+        return out
     if http_get is None:
         import requests
         http_get = requests.get
+    auth = {"Authorization": f"Bearer {api_key}"}
     try:
-        resp = http_get(KEY_URL, timeout=timeout,
-                        headers={"Authorization": f"Bearer {api_key}"})
+        resp = http_get(KEY_URL, timeout=timeout, headers=auth)
+        if resp.status_code in (401, 403):
+            return {**out, "state": "invalid"}
         resp.raise_for_status()
         data = (resp.json() or {}).get("data") or {}
     except Exception as e:
         log.info("Could not read OpenRouter key info (%s)", type(e).__name__)
-        return {"funded": None, "usage": 0.0}
+        return {**out, "state": "unknown"}
     free_tier = data.get("is_free_tier")
-    return {"funded": (None if free_tier is None else not free_tier),
-            "usage": float(data.get("usage") or 0.0)}
+    if free_tier is None:
+        return {**out, "state": "unknown"}
+    daily = data.get("free_model_daily_requests")
+    out.update(state="free" if free_tier else "paid", funded=not free_tier,
+               usage=dollars(data.get("usage")) or 0.0,
+               free_today=daily if isinstance(daily, dict) else None)
+    if free_tier:
+        return out
+    cap = dollars(data.get("limit_remaining")) if data.get("limit") is not None else None
+    if cap is not None:
+        out["limit"] = {"amount": dollars(data.get("limit")), "remaining": cap,
+                        "reset": str(data.get("limit_reset") or "")}
+    try:
+        credit = (http_get(CREDITS_URL, timeout=timeout, headers=auth)
+                  .json() or {})["data"]
+        total, used = dollars(credit["total_credits"]), dollars(credit["total_usage"])
+    except Exception as e:
+        log.info("Could not read OpenRouter credit (%s)", type(e).__name__)
+        return out                  # paid, but how much is left is unknown
+    if total is None or used is None:
+        return out
+    balance = max(0.0, total - used)
+    out.update(usage=used, credit=balance, capped=cap is not None and cap < balance,
+               balance=balance if cap is None else min(balance, cap))
+    out["funded"] = out["balance"] > 0
+    return out
 
 
 def fetch_catalogue(http_get=None, timeout=10, force=False):
@@ -339,5 +458,7 @@ def fetch_catalogue(http_get=None, timeout=10, force=False):
 
 
 def reset_cache():
-    """Drop the cached catalogue (tests, and the Settings 'refresh' action)."""
+    """Drop the cached catalogue and key status (tests, and the Settings
+    'refresh' action)."""
     _cache.update(at=0.0, catalogue=None)
+    _key_cache.clear()

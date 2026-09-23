@@ -203,14 +203,19 @@ function setStepState(n, state) {
 //
 // Degrades quietly. If OpenRouter can't be reached we keep whatever is saved
 // as a single option so the user's choice survives and Settings still opens.
+let _modelsSeq = 0;
 async function loadModels(saved) {
   const sel  = document.getElementById('or-model');
-  const note = document.getElementById('or-model-note');
   if (!sel) return;
+  const seq = ++_modelsSeq, shown = sel.value;
   let data = {models: [], auto: null, available: false};
   try {
     data = await fetch('/api/models').then(r => r.json());
   } catch (e) { /* offline — fall through to the degraded path below */ }
+  // A newer load (another key change) owns the dropdown now; and a model
+  // the operator picked while this one loaded is theirs to keep.
+  if (seq !== _modelsSeq) return;
+  if (sel.value !== shown) saved = sel.value;
 
   sel.innerHTML = '';
   const group = (label) => {
@@ -227,12 +232,13 @@ async function loadModels(saved) {
     return o;
   };
 
-  // Automatic is FREE-ONLY by design — it must work on a fresh install
-  // with an unfunded key and must never start spending unasked. The
-  // label says so rather than leaving it to be discovered on a bill.
-  opt(sel, '', data.auto
-    ? `Automatic (free) — currently ${data.auto}`
-    : 'Automatic (free models)');
+  // Automatic is free-only on a key with no credit, so a fresh install
+  // never starts spending unasked; a funded key runs on the paid default.
+  // The label says which, rather than leaving it to be found on a bill.
+  const autoRec = (data.recommended || []).find(r => r.id === data.auto);
+  opt(sel, '', !data.auto ? 'Automatic (free models)'
+    : data.funded ? `Automatic — ${autoRec ? autoRec.label : data.auto}`
+    : `Automatic (free) — currently ${data.auto}`);
 
   // Paid picks appear only for a key that can actually pay for them.
   if ((data.recommended || []).length) {
@@ -267,7 +273,94 @@ async function loadModels(saved) {
     opt(g, saved, data.available ? `${saved} — not in the lists above` : saved);
   }
   sel.value = saved || '';
+  _modelsData = data;
+  // A free model saved before the key had credit: parses already run on the
+  // paid pick (the server's rule), so show that by moving to Automatic.
+  if (data.free_saved) { sel.value = ''; saveSettings(); }
   _modelNote(data);
+  _renderKeyStatus();
+}
+
+// Under the key box: free or paid, the money left, and what a runsheet
+// costs on the chosen model — so "$5 left" comes with "about 2,000
+// runsheets", not a guess at whether that's enough. A paid account with
+// its credit used up can only run free models, so it reads as free.
+let _modelsData = null;
+function _renderKeyStatus() {
+  _renderModelChip();
+  const el = document.getElementById('or-key-status');
+  const k = (_modelsData && _modelsData.key) || {};
+  if (!el) return;
+  const money = n => '$' + Number(n).toFixed(2);
+  const today = k.free_today
+    ? ` · ${Number(k.free_today.remaining)} of ${Number(k.free_today.limit)} free requests left today`
+    : '';
+  const lim = k.limit;
+  const per = lim && {daily: ' daily', weekly: ' weekly', monthly: ' monthly'}[lim.reset] || '';
+  const limit = lim
+    ? `${money(lim.remaining)} of this key's ${money(lim.amount)}${per} limit left` : '';
+  // [badge, tone, detail] — the badge reads at a glance in a busy panel.
+  const [badge, tone, detail] =
+      k.state === 'invalid' ? ['✕ Key not accepted', 'bad', 'Check it was pasted in full']
+    : k.state === 'unknown' ? ['Couldn\'t check key', '', 'OpenRouter isn\'t reachable']
+    : k.state === 'free'    ? ['✓ Free key', 'ok', `Free models only${today}`]
+    : k.state !== 'paid'    ? ['', '', '']
+    : k.balance === 0 && k.capped
+      ? ['⚠ Key limit reached', 'warn', `${limit} — free models until it resets`]
+    : k.balance === 0       ? ['✓ Free key', 'ok', `No credit left${today}`]
+    : ['✓ Paid key', 'ok',
+       [k.credit === null ? '' : `<strong>${money(k.credit)} credit</strong>`, limit]
+         .filter(Boolean).join(' · ')];
+  const cost = k.state === 'paid' && k.balance ? _runsheetCost(k.balance, lim) : '';
+  el.innerHTML = badge
+    ? `<span class="key-badge${tone ? ' is-' + tone : ''}">${badge}</span>`
+      + `<span>${detail}</span>${cost}`
+    : '';
+  el.hidden = !badge;
+}
+
+// The model a parse will run on: the choice in Settings, or what Automatic
+// resolves to for this key.
+function _effectiveModel() {
+  const v = document.getElementById('or-model').value;
+  return v && v !== '__other__' ? v : (_modelsData || {}).auto || '';
+}
+
+function _modelName(id) {
+  const rec = ((_modelsData || {}).recommended || []).find(r => r.id === id);
+  if (rec) return rec.label;
+  const bare = String(id).split('/').pop();
+  return bare.endsWith(':free') ? bare.slice(0, -5) + ' (free)' : bare;
+}
+
+// On the Parse step: which model reads the runsheet, so it's never a guess.
+function _renderModelChip() {
+  const chip = document.getElementById('parse-model');
+  const id = _effectiveModel();
+  if (!chip) return;
+  chip.textContent = id ? 'Using ' + _modelName(id) : '';
+  chip.title = id;
+  chip.hidden = !id;
+}
+
+// What one runsheet costs on the model in use, and how far the spendable
+// balance goes: what this install was actually billed on it if it has
+// been used, otherwise OpenRouter's list price for a typical runsheet.
+function _runsheetCost(balance, lim) {
+  const d = _modelsData || {};
+  const id = _effectiveModel();
+  const measured = (d.key && d.key.measured) || {};
+  const rec = (d.recommended || []).find(r => r.id === id);
+  const usd = id in measured ? measured[id]
+    : rec && rec.cost_per_parse != null ? rec.cost_per_parse : null;
+  if (usd === null) return '';
+  const line = t => `<span class="key-line">${t}</span>`;
+  const name = escapeHtml(_modelName(id));
+  if (usd === 0) return line(`${name} is free — runsheets cost nothing.`);
+  const when = lim && lim.reset === 'weekly' ? ' this week'
+    : lim && lim.reset === 'monthly' ? ' this month' : '';
+  return line(`${id in measured ? '' : 'About '}$${Number(usd.toPrecision(2))} a runsheet `
+    + `on ${name} — roughly ${Math.floor(balance / usd).toLocaleString()} more${when}.`);
 }
 
 // "Other…" swaps the dropdown for a text box so any OpenRouter id can be
@@ -278,6 +371,7 @@ function onModelChange() {
   if (sel.value !== '__other__') {
     if (box) box.hidden = true;
     saveSettings();
+    _renderKeyStatus();                // the cost line is per model
     return;
   }
   box.hidden = false;
@@ -288,7 +382,7 @@ function applyOtherModel() {
   const box = document.getElementById('or-model-other');
   const id = box.querySelector('input').value.trim();
   const sel = document.getElementById('or-model');
-  if (!id) { sel.value = ''; box.hidden = true; saveSettings(); return; }
+  if (!id) { sel.value = ''; box.hidden = true; saveSettings(); _renderKeyStatus(); return; }
   let existing = Array.from(sel.options).find(o => o.value === id);
   if (!existing) {
     existing = document.createElement('option');
@@ -299,6 +393,7 @@ function applyOtherModel() {
   sel.value = id;
   box.hidden = true;
   saveSettings();
+  _renderKeyStatus();
 }
 
 function _modelNote(data) {
@@ -310,8 +405,8 @@ function _modelNote(data) {
     return;
   }
   note.innerHTML = data.funded
-    ? 'Your key is funded, so the paid picks above are available. '
-      + '<strong>Automatic</strong> still only ever uses free models.'
+    ? 'Your key has credit, so <strong>Automatic</strong> uses a paid model. '
+      + 'It goes back to free models if the credit runs out.'
     : '<strong>Automatic</strong> picks the best free model each time. '
       + 'Add credit at openrouter.ai to unlock the recommended models — '
       + 'a runsheet costs a fraction of a cent.';
@@ -402,6 +497,12 @@ async function loadSettings() {
     el.addEventListener('input', autoSaveDebounced);
     el.addEventListener('change', autoSaveDebounced);
   });
+  // A different key can change everything the model list and the key line
+  // say — free or paid, what's left — so re-check once it's saved.
+  document.getElementById('or-key').addEventListener('change', async () => {
+    await saveSettings();
+    loadModels(document.getElementById('or-model').value);
+  });
   // Library source radio set — each click updates libSourceMode + autosaves +
   // triggers a re-load so the operator sees the new source's items immediately.
   document.querySelectorAll('input[name="lib-source"]').forEach(rb => {
@@ -429,10 +530,21 @@ function autoSaveDebounced() {
   if (suppressAutoSave) return;
   setSaveDot('saving');
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveSettings, 500);
+  saveTimer = setTimeout(() => { saveTimer = null; saveSettings(); }, 500);
 }
 
-async function saveSettings() {
+// Every save goes through here, so flushSettings can wait on the latest.
+let _lastSave = Promise.resolve(true);
+function saveSettings() { return (_lastSave = _postSettings()); }
+
+// True once what's on screen is saved: sends a waiting autosave now, waits
+// for one in flight, and gives a failed save one more try.
+async function flushSettings() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; saveSettings(); }
+  return (await _lastSave) || saveSettings();
+}
+
+async function _postSettings() {
   const data = {
     pp_host:                 document.getElementById('pp-host2').value,
     pp_port:                 document.getElementById('pp-port2').value,
@@ -456,13 +568,16 @@ async function saveSettings() {
                                               && (a.template || '').trim()),
   };
   try {
-    await fetch('/api/settings', {method:'POST',
+    const r = await fetch('/api/settings', {method:'POST',
       headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     setSaveDot('saved');
     setTimeout(() => setSaveDot(''), 1500);
+    return true;
   } catch (e) {
     setSaveDot('');
-    setStatus('Could not save settings: ' + e, 'var(--red)');
+    setStatus('Could not save settings: ' + escapeHtml(String(e)), 'var(--red)');
+    return false;
   }
 }
 
@@ -521,7 +636,7 @@ function handleFileSelect(file) {
   dz.classList.add('has-file');
   dz.innerHTML = `
     <div style="font-size:1.8rem;margin-bottom:6px">✅</div>
-    <div style="font-weight:700;color:var(--grn)">${file.name}</div>
+    <div style="font-weight:700;color:var(--grn)">${escapeHtml(file.name)}</div>
     <div class="hint">${(file.size/1024).toFixed(0)} KB</div>`;
   // From here, "Start over" is the ONE way to change course — a second
   // hidden path (clicking the zone to swap files) made the state model
@@ -578,6 +693,11 @@ async function extractText(file) {
       _showOcrReview(res.text);
       setStatus('📝 Read your screenshot — check the text on Step 2, ' +
                 'fix anything odd, then <strong>🔍 Parse Runsheet</strong>.');
+    } else if (res.model_reads) {
+      // A key with credit: the AI reads the picture itself, so there is
+      // no OCR text to check first.
+      setStatus('Runsheet loaded — the AI will read the picture itself. ' +
+                'Click <strong>🔍 Parse Runsheet</strong> on Step 2.');
     } else {
       setStatus('Runsheet loaded — click <strong>🔍 Parse Runsheet</strong> ' +
                 'on Step 2.');
@@ -1679,13 +1799,15 @@ async function parseRunsheet() {
     // the Create button.
     setStepState(2, 'complete');
     setStepState(3, 'active');
+    // Recorded first: it redraws this step's meta with the time estimate,
+    // which used to overwrite the summary below the moment it appeared.
+    _recordParseTime((performance.now() - t0) / 1000);
     // The timed-row guard resynthesizes rows the AI dropped; say so, so
     // the operator knows why the count beats what the model returned.
     document.getElementById('step-2-meta').textContent =
-      res.rescued_rows > 0
-        ? `${matchedItems.length} items (${res.rescued_rows} recovered)`
-        : `${matchedItems.length} items`;
-    _recordParseTime((performance.now() - t0) / 1000);
+      `${matchedItems.length} items` +
+      (res.rescued_rows > 0 ? ` (${res.rescued_rows} recovered)` : '') +
+      (res.read_from ? ` · read from the ${res.read_from}` : '');
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
     setStepState(2, 'active');
@@ -1865,6 +1987,10 @@ async function createPlaylist() {
   setLoading('Creating playlist in ProPresenter…');
 
   try {
+    // The server exports to the folder SAVED in Settings, so a folder typed
+    // a moment ago must be saved first. If it can't be, skip the export
+    // rather than write to whatever folder was saved before.
+    const saved = await flushSettings();
     const res = await fetch('/api/create_playlist', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -1872,7 +1998,7 @@ async function createPlaylist() {
         port:          document.getElementById('pp-port2').value,
         name,
         matched:       matchedItems,
-        export_dir:    document.getElementById('export-dir').value,
+        export:        saved && !!document.getElementById('export-dir').value.trim(),
         create_timers: document.getElementById('create-timers').checked,
         timers_key_only: document.getElementById('timers-key-only').checked,
         // The template parse resolved (or the one you pinned), NOT a bare
@@ -1950,8 +2076,11 @@ async function createPlaylist() {
       html += `<br><br>📁 <strong>.playlist file exported to:</strong><br>
         <code>${escapeHtml(res.export_path)}</code>`;
     } else if (document.getElementById('export-dir').value) {
-      html += `<br><br>⚠️ Could not find the exported file automatically.
-        Check your ProPresenter/Playlists/ folder.`;
+      html += saved
+        ? `<br><br>⚠️ Could not find the exported file automatically.
+           Check your ProPresenter/Playlists/ folder.`
+        : `<br><br>⚠️ Settings couldn't be saved, so no .playlist backup
+           was written.`;
     }
     html += '</div>';
     notice.innerHTML = html;
