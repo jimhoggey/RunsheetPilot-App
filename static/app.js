@@ -1502,13 +1502,15 @@ async function parseRunsheet() {
     // the Create button.
     setStepState(2, 'complete');
     setStepState(3, 'active');
+    // Recorded first: it redraws this step's meta with the time estimate,
+    // which used to overwrite the summary below the moment it appeared.
+    _recordParseTime((performance.now() - t0) / 1000);
     // The timed-row guard resynthesizes rows the AI dropped; say so, so
     // the operator knows why the count beats what the model returned.
     document.getElementById('step-2-meta').textContent =
       `${matchedItems.length} items` +
       (res.rescued_rows > 0 ? ` (${res.rescued_rows} recovered)` : '') +
       (res.read_from ? ` · read from the ${res.read_from}` : '');
-    _recordParseTime((performance.now() - t0) / 1000);
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
     setStepState(2, 'active');
