@@ -36,6 +36,7 @@ log = logging.getLogger("pp_runsheet")
 
 CATALOGUE_URL = "https://openrouter.ai/api/v1/models"
 KEY_URL = "https://openrouter.ai/api/v1/key"
+CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 # A curated shortlist for THIS workload, offered only when the key is
 # funded. Deliberately short: a wall of 300 models is not a choice, it is
@@ -253,30 +254,71 @@ def recommended_models(catalogue: dict) -> list:
     return out
 
 
-def fetch_key_info(api_key: str, http_get=None, timeout=8) -> dict:
-    """Is this key funded? `{"funded": bool|None, "usage": float}`.
+def measured_costs(parse_costs) -> dict:
+    """{model id: average billed dollars per runsheet} from the costs the
+    parse route recorded — what this install actually paid, not a guess."""
+    by_model = {}
+    for c in parse_costs or []:
+        if isinstance(c, dict) and isinstance(c.get("usd"), (int, float)):
+            by_model.setdefault(str(c.get("model")), []).append(float(c["usd"]))
+    return {m: sum(v) / len(v) for m, v in by_model.items()}
 
-    funded=None means "couldn't tell" (offline, or the key is bad), and
-    the caller treats that as free-tier — showing paid models to someone
-    who can't use them produces a 402 on their first parse, which is a
-    much worse failure than a shorter list.
-    """
+
+def fetch_key_info(api_key: str, http_get=None, timeout=8) -> dict:
+    """What OpenRouter says about this key.
+
+      state       "none" | "unknown" (offline) | "invalid" | "free" | "paid"
+      funded      paid AND credit left. None when unknown; callers treat that
+                  as not funded, because a paid model on an empty account
+                  402s on the first parse — far worse than a shorter list
+      balance     dollars left to spend — the account's credit, capped by
+                  any limit set on the key itself; None if OpenRouter
+                  doesn't say
+      usage       dollars spent
+      free_today  {"used", "limit", "remaining"} free-model requests today
+
+    A paid account whose credit is used up is still "paid", but not
+    funded (seen live: $5 bought, $5.01 used)."""
+    out = {"state": "none", "funded": None, "usage": 0.0, "balance": None,
+           "free_today": None}
     if not (api_key or "").strip():
-        return {"funded": None, "usage": 0.0}
+        return out
     if http_get is None:
         import requests
         http_get = requests.get
+    auth = {"Authorization": f"Bearer {api_key}"}
     try:
-        resp = http_get(KEY_URL, timeout=timeout,
-                        headers={"Authorization": f"Bearer {api_key}"})
+        resp = http_get(KEY_URL, timeout=timeout, headers=auth)
+        if resp.status_code in (401, 403):
+            return {**out, "state": "invalid"}
         resp.raise_for_status()
         data = (resp.json() or {}).get("data") or {}
     except Exception as e:
         log.info("Could not read OpenRouter key info (%s)", type(e).__name__)
-        return {"funded": None, "usage": 0.0}
+        return {**out, "state": "unknown"}
     free_tier = data.get("is_free_tier")
-    return {"funded": (None if free_tier is None else not free_tier),
-            "usage": float(data.get("usage") or 0.0)}
+    if free_tier is None:
+        return {**out, "state": "unknown"}
+    daily = data.get("free_model_daily_requests")
+    out.update(state="free" if free_tier else "paid", funded=not free_tier,
+               usage=float(data.get("usage") or 0.0),
+               free_today=daily if isinstance(daily, dict) else None)
+    if free_tier:
+        return out
+    left = []
+    if data.get("limit") is not None and data.get("limit_remaining") is not None:
+        left.append(float(data["limit_remaining"]))      # a cap on this key
+    try:
+        credit = (http_get(CREDITS_URL, timeout=timeout, headers=auth)
+                  .json() or {})["data"]
+        left.append(float(credit["total_credits"]) - float(credit["total_usage"]))
+        out["usage"] = float(credit["total_usage"])
+    except Exception as e:
+        log.info("Could not read OpenRouter credit (%s)", type(e).__name__)
+    if left:
+        out["balance"] = max(0.0, min(left))
+        out["funded"] = out["balance"] > 0
+    return out
 
 
 def fetch_catalogue(http_get=None, timeout=10, force=False):

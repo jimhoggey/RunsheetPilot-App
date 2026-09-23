@@ -167,3 +167,69 @@ def test_an_unreachable_openrouter_means_unknown():
 def test_a_missing_tier_field_means_unknown():
     info = m.fetch_key_info("sk-or-x", http_get=_key_response({"data": {}}))
     assert info["funded"] is None
+
+
+# ── what Settings shows under the key ────────────────────────────────────
+
+def _openrouter(key, credits=None, key_status=200):
+    """/api/v1/key and /api/v1/credits answered separately."""
+    class R:
+        def __init__(self, payload, status=200):
+            self.status_code, self._payload = status, payload
+        def json(self): return self._payload
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise OSError(self.status_code)
+
+    def get(url, **_k):
+        if url == m.CREDITS_URL:
+            return R({"data": credits} if credits else {"error": {}}, 200 if credits else 403)
+        return R({"data": key}, key_status)
+    return get
+
+
+def test_a_funded_key_reports_what_is_left_and_spent():
+    info = m.fetch_key_info("k", http_get=_openrouter(
+        {"is_free_tier": False, "limit": None, "usage": 0.1},
+        {"total_credits": 5, "total_usage": 0.27}))
+    assert info["state"] == "paid" and info["funded"] is True
+    assert info["balance"] == pytest.approx(4.73)
+    assert info["usage"] == pytest.approx(0.27)
+
+
+def test_a_spending_cap_on_the_key_is_what_is_left_when_it_is_lower():
+    info = m.fetch_key_info("k", http_get=_openrouter(
+        {"is_free_tier": False, "limit": 2, "limit_remaining": 1.5},
+        {"total_credits": 5, "total_usage": 0.27}))
+    assert info["balance"] == pytest.approx(1.5)
+
+
+def test_credit_used_up_is_not_funded():
+    """Seen live: $5 added, $5.01 used. Offering paid models there would
+    402 on the first parse; Settings shows it as free."""
+    info = m.fetch_key_info("k", http_get=_openrouter(
+        {"is_free_tier": False, "limit": 50, "limit_remaining": 50,
+         "free_model_daily_requests": {"used": 19, "limit": 50, "remaining": 31}},
+        {"total_credits": 5, "total_usage": 5.01273376}))
+    assert info["balance"] == 0.0 and info["funded"] is False
+    assert info["free_today"]["remaining"] == 31
+
+
+def test_a_free_key_reports_todays_free_requests():
+    info = m.fetch_key_info("k", http_get=_openrouter(
+        {"is_free_tier": True,
+         "free_model_daily_requests": {"used": 1, "limit": 50, "remaining": 49}}))
+    assert info["state"] == "free" and info["funded"] is False
+    assert info["free_today"] == {"used": 1, "limit": 50, "remaining": 49}
+    assert info["balance"] is None
+
+
+def test_a_rejected_key_says_so():
+    info = m.fetch_key_info("k", http_get=_openrouter({}, key_status=401))
+    assert info["state"] == "invalid" and info["funded"] is None
+
+
+def test_measured_costs_average_per_model_and_skip_junk():
+    got = m.measured_costs([{"model": "a", "usd": 0.0002}, {"model": "a", "usd": 0.0004},
+                            {"model": "b", "usd": 0}, {"model": "c"}, "junk"])
+    assert got == {"a": pytest.approx(0.0003), "b": 0.0}

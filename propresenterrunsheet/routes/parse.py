@@ -43,7 +43,7 @@ from ..propresenter.templates import (
 )
 from ..service_mate.state import _ensure_item_cues, _write_runsheet_state
 from ..logging_setup import log_safe
-from ..settings import load_settings
+from ..settings import load_settings, save_settings
 
 
 bp = Blueprint("parse", __name__)
@@ -850,6 +850,12 @@ def api_upload_and_parse():
                     # rule is earning its place or over-firing. A bool,
                     # never the service label: that is church content.
                     template_declined=template_declined)
+        # What this parse really cost, so Settings can say what a runsheet
+        # costs on each model. Billed figures only; the last 20 are kept.
+        if cost_source == "billed":
+            save_settings({"parse_costs": (
+                (load_settings().get("parse_costs") or [])
+                + [{"model": used_model, "usd": round(spent, 8)}])[-20:]})
 
         log.info(f"AI parsed {len(items)} runsheet items, "
                  f"suggested name: {log_safe(service_name)!r}")

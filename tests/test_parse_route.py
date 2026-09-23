@@ -465,6 +465,23 @@ def test_sectioned_template_still_wins_over_object_fallback(
         "the LLM-tagged section (2 slides) must win over a 1-object match"
 
 
+def test_a_billed_parse_is_remembered_for_the_cost_per_runsheet(
+        parse_client, isolated_state):
+    """Settings says what a runsheet costs from what this install was
+    actually billed. Unbilled replies (no usage.cost) record nothing."""
+    from propresenterrunsheet.settings import load_settings
+
+    class _Billed(_FakeResponse):
+        def json(self):
+            return {**super().json(), "usage": {"cost": 0.000295}}
+
+    reply = json.dumps({"service_name": "Sunday",
+                        "items": [{"type": "sermon", "title": "King Jesus"}]})
+    _post(parse_client, reply)                      # not billed
+    _post_responses(parse_client, [_Billed(reply, model="qwen/q")], model="qwen/q")
+    assert load_settings()["parse_costs"] == [{"model": "qwen/q", "usd": 0.000295}]
+
+
 def test_valid_runsheet_still_parses_and_seeds_state(
         parse_client, isolated_state):
     reply = json.dumps({"service_name": "Sunday Morning",

@@ -238,7 +238,62 @@ async function loadModels(saved) {
     opt(g, saved, data.available ? `${saved} — not in the lists above` : saved);
   }
   sel.value = saved || '';
+  _modelsData = data;
   _modelNote(data);
+  _renderKeyStatus();
+}
+
+// Under the key box: free or paid, the money left, and what a runsheet
+// costs on the chosen model — so "$5 left" comes with "about 12,000
+// runsheets", not a guess at whether that's enough. A paid account with
+// its credit used up can only run free models, so it reads as free.
+let _modelsData = null;
+function _renderKeyStatus() {
+  const el = document.getElementById('or-key-status');
+  const k = (_modelsData && _modelsData.key) || {};
+  if (!el) return;
+  const money = n => '$' + Number(n).toFixed(2);
+  const today = k.free_today
+    ? ` ${Number(k.free_today.remaining)} of ${Number(k.free_today.limit)} free requests left today.`
+    : '';
+  const lines = {
+    invalid: ['✕ OpenRouter didn\'t accept this key — check it was pasted in full.', 'var(--red)'],
+    unknown: ['Couldn\'t check this key — OpenRouter isn\'t reachable right now.', 'var(--muted)'],
+    free:    [`Free key — free models only.${today}`, 'var(--muted)'],
+  };
+  let [html, color] = lines[k.state] || ['', ''];
+  if (k.state === 'paid' && k.balance === 0) {
+    [html, color] = [`Free key — ${money(0)} credit, so free models only.${today}`, 'var(--muted)'];
+  } else if (k.state === 'paid') {
+    html = '✓ <strong>Paid key</strong>'
+      + (k.balance === null ? '' : ` — <strong>${money(k.balance)} left</strong>`)
+      + ` · ${money(k.usage)} used.` + _runsheetCost(k.balance);
+    color = 'var(--grn)';
+  }
+  el.innerHTML = html;
+  el.style.color = color;
+  el.hidden = !html;
+}
+
+// What one runsheet costs on the selected model, and how far the balance
+// goes: what this install was actually billed if it has used the model,
+// otherwise OpenRouter's list price for a typical runsheet.
+function _runsheetCost(balance) {
+  const d = _modelsData || {};
+  const id = document.getElementById('or-model').value || d.auto;
+  const measured = (d.key && d.key.measured) || {};
+  const rec = (d.recommended || []).find(r => r.id === id);
+  const free = (d.models || []).some(m => m.id === id);
+  const usd = id in measured ? measured[id]
+    : rec && rec.cost_per_parse != null ? rec.cost_per_parse
+    : free ? 0 : null;
+  if (usd === null) return '';
+  if (usd === 0) return '<br>The selected model is free, so runsheets cost nothing.';
+  const each = '$' + Number(usd.toPrecision(2));
+  const runs = balance ? ` — about ${Math.floor(balance / usd).toLocaleString()} runsheets`
+    + ' with what\'s left' : '';
+  return `<br>A runsheet costs ${id in measured ? '' : 'about '}${each} on this model`
+    + `${id in measured ? ' (what yours have cost)' : ''}${runs}.`;
 }
 
 // "Other…" swaps the dropdown for a text box so any OpenRouter id can be
@@ -249,6 +304,7 @@ function onModelChange() {
   if (sel.value !== '__other__') {
     if (box) box.hidden = true;
     saveSettings();
+    _renderKeyStatus();                // the cost line is per model
     return;
   }
   box.hidden = false;
@@ -270,6 +326,7 @@ function applyOtherModel() {
   sel.value = id;
   box.hidden = true;
   saveSettings();
+  _renderKeyStatus();
 }
 
 function _modelNote(data) {
@@ -366,6 +423,12 @@ async function loadSettings() {
     if (!el) return;
     el.addEventListener('input', autoSaveDebounced);
     el.addEventListener('change', autoSaveDebounced);
+  });
+  // A different key can change everything the model list and the key line
+  // say — free or paid, what's left — so re-check once it's saved.
+  document.getElementById('or-key').addEventListener('change', async () => {
+    await saveSettings();
+    loadModels(document.getElementById('or-model').value);
   });
   // Library source radio set — each click updates libSourceMode + autosaves +
   // triggers a re-load so the operator sees the new source's items immediately.
