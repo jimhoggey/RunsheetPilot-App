@@ -246,10 +246,12 @@ same song twice.
                 Examples: "Land Worship - Priya", "Welcome and Connection
                 Cards", "Culture Moment - Generosity - Ps Sarah",
                 "Meeting Land and Recap - Chris", an interview segment.
+                A bare "Welcome" or "Close" line is the MC too.
 
 - announcement  Information given to the congregation.
                 Examples: "Junior Youth Out", "Upcoming Dates",
                 "Celebrations", "Whats Your Next Step Moment".
+                Not a reading or a prayer, even when people are named.
 
 - sermon        The main preaching / message slot. Look for "Preach Title",
                 "Message", or a minister's name with a sermon topic.
@@ -258,7 +260,7 @@ same song twice.
                 The altar call / ministry moment (commonly right after the
                 sermon), a prayer time, or a ministry time — including the
                 "Worship and Ministry Time" block near the top of many
-                runsheets.
+                runsheets, and "Scripture Reading and Prayer - Sam".
 
 - other         Anything that fits none of the above: go live / streaming,
                 countdowns, music beds, section dividers, logistics,
