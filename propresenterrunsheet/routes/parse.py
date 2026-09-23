@@ -664,9 +664,10 @@ def api_upload_and_parse():
             log.info(f"No items from the text — reading the PDF itself "
                      f"with {log_safe(reader)}")
             try:
+                # A refusal, or a provider error dressed as a 200, has no
+                # choices — so it parses to nothing and changes nothing.
                 again = _openrouter_post(reader, pdf=pdf_bytes)
-                pdf_body = (again.json() if again.status_code < 400
-                            and not _provider_failure(again) else {})
+                pdf_body = again.json() if again.status_code < 400 else {}
                 pdf_content = (((pdf_body.get("choices") or [{}])[0]
                                 .get("message") or {}).get("content") or "")
                 got = parse_ai_response(pdf_content)
