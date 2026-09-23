@@ -129,6 +129,7 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
     def fake_post(url, headers=None, json=None, timeout=0, **kw):
         captured["prompt"] = json["messages"][0]["content"]
         captured["temperature"] = json["temperature"]
+        captured["provider"] = json.get("provider")
         return _Reply()
 
     known = {1: 1}                        # the song, already filed
@@ -145,6 +146,8 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
     # Placement must not wobble between two runs of the same runsheet —
     # update mode treats an identical result as a no-op and skips the write.
     assert captured["temperature"] == 0
+    # Slide text carries names: providers that store or train are refused.
+    assert captured["provider"] == {"data_collection": "deny"}
 
     items, report = build_update_payload(PLAYLIST, RUNSHEET,
                                          sections={**found, **known})

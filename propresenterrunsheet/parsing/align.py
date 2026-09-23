@@ -257,7 +257,10 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
                       # same runsheet: update mode treats an identical
                       # result as a no-op and skips the write entirely.
                       "temperature": 0,
-                      "response_format": {"type": "json_object"}},
+                      "response_format": {"type": "json_object"},
+                      # Slide text and runsheet lines carry names: only
+                      # providers that neither store nor train on requests.
+                      "provider": {"data_collection": "deny"}},
                 timeout=_BUDGET_S)
 
         deadline = time.monotonic() + _BUDGET_S
