@@ -867,8 +867,8 @@ function _renderTemplateOptions() {
 
   if (upd) {
     status.innerHTML = sel.value
-      ? 'Adds coloured section headers to this playlist. Your media, its ' +
-        'order and everything else in it are left alone. ' +
+      ? 'Adds coloured section headers to this playlist. Nothing is added ' +
+        'or removed, and slides only move if you say so. ' +
         '<em>Goes back to Create for the next runsheet once the headers ' +
         'are written.</em>'
       : '<span style="color:var(--org)">Pick the playlist you want to add ' +
