@@ -272,7 +272,8 @@ function _renderKeyStatus() {
       ? ['⚠ Key limit reached', 'warn', 'Raise it on openrouter.ai to use paid models']
     : k.balance === 0       ? ['✓ Free key', 'ok', `No credit left${today}`]
     : ['✓ Paid key', 'ok',
-       (k.balance === null ? '' : `<strong>${money(k.balance)} left</strong> · `)
+       (k.balance === null ? '' : `<strong>${money(k.balance)} left</strong>`
+         + (k.capped ? ' on this key\'s spending limit' : '') + ' · ')
        + `${money(k.usage)} used` + _runsheetCost(k.balance)];
   el.innerHTML = badge
     ? `<span class="key-badge${tone ? ' is-' + tone : ''}">${badge}</span>`
