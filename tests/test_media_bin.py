@@ -160,6 +160,25 @@ def test_media_playlists_inside_folders_are_read():
     assert not any("/G1" in c for c in calls), "a folder has no items to ask for"
 
 
+def test_a_playlist_id_from_pp_stays_one_path_segment():
+    """The id comes from ProPresenter's reply; a malformed one must not be
+    able to walk the request to another endpoint."""
+    tree = [{"id": {"uuid": "../../v1/presentation/active?x="}, "type": "playlist"}]
+    calls = []
+
+    class _R:
+        def raise_for_status(self): pass
+        def json(self): return tree if not calls[1:] else {"items": []}
+
+    def fake_get(url, timeout=0):
+        calls.append(url)
+        return _R()
+
+    fetch_media_bin("http://pp", http_get=fake_get)
+    assert calls[1] == ("http://pp/v1/media/playlist/"
+                        "..%2F..%2Fv1%2Fpresentation%2Factive%3Fx%3D?start=0")
+
+
 def test_a_pp_that_ignores_paging_cant_loop_forever():
     names = [f"Slide {i}" for i in range(100)]
     get, calls = _paged_pp([{"id": {"uuid": "MP1"}, "type": "playlist"}],

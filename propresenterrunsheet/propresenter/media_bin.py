@@ -24,6 +24,7 @@ Presentation-type items are untouched here — they PUT correctly by uuid
 """
 
 import logging
+from urllib.parse import quote
 
 log = logging.getLogger("pp_runsheet")
 
@@ -69,9 +70,10 @@ def fetch_media_bin(base: str, http_get=None) -> list:
         r = http_get(f"{base}/v1/media/playlists", timeout=6)
         r.raise_for_status()
         for uuid in _media_playlists(r.json()):
-            seen = set()
+            # ProPresenter's own id, but still one path segment and no more.
+            segment, seen = quote(str(uuid), safe=""), set()
             for start in range(0, _MAX_ITEMS, _PAGE):
-                r2 = http_get(f"{base}/v1/media/playlist/{uuid}?start={start}",
+                r2 = http_get(f"{base}/v1/media/playlist/{segment}?start={start}",
                               timeout=6)
                 r2.raise_for_status()
                 page = [m.get("id") or {} for m in
