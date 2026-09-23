@@ -1500,9 +1500,9 @@ async function parseRunsheet() {
     // The timed-row guard resynthesizes rows the AI dropped; say so, so
     // the operator knows why the count beats what the model returned.
     document.getElementById('step-2-meta').textContent =
-      res.rescued_rows > 0
-        ? `${matchedItems.length} items (${res.rescued_rows} recovered)`
-        : `${matchedItems.length} items`;
+      `${matchedItems.length} items` +
+      (res.rescued_rows > 0 ? ` (${res.rescued_rows} recovered)` : '') +
+      (res.read_pdf ? ' · read from the PDF' : '');
     _recordParseTime((performance.now() - t0) / 1000);
   } catch (e) {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');

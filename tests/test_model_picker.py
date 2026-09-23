@@ -69,9 +69,25 @@ def test_recommendations_are_priced_from_the_live_catalogue():
     by_id = {r["id"]: r for r in m.recommended_models(CATALOGUE)}
     assert by_id["openai/gpt-4.1-mini"]["cost_per_parse"] == pytest.approx(
         0.0000004 * m._EST_PROMPT_TOKENS + 0.0000016 * m._EST_COMPLETION_TOKENS)
-    # Cheapest of the three real models, as observed on a live run.
-    assert (by_id["qwen/qwen3-30b-a3b-instruct-2507"]["cost_per_parse"]
-            < by_id["openai/gpt-4.1-mini"]["cost_per_parse"])
+    assert (by_id["openai/gpt-4.1-mini"]["cost_per_parse"]
+            < by_id["anthropic/claude-haiku-4.5"]["cost_per_parse"])
+
+
+def test_the_shortlist_is_the_owners_three():
+    """GPT-4.1 mini first, Claude Haiku as the alternative, OpenRouter Auto
+    as the last resort — and a paid key falls back in that same order."""
+    assert [r["id"] for r in m.RECOMMENDED] == list(m.PAID_DEFAULTS)
+
+
+def test_a_pdf_goes_to_a_model_that_can_read_one():
+    reads = {"architecture": {"input_modalities": ["text", "file"]}}
+    cat = {"data": [{"id": "anthropic/claude-haiku-4.5", **reads},
+                    {"id": "text/only"}]}
+    assert m.pdf_reader(cat, "text/only") == "anthropic/claude-haiku-4.5"
+    assert m.pdf_reader(cat, "anthropic/claude-haiku-4.5") == \
+        "anthropic/claude-haiku-4.5"
+    assert m.pdf_reader({"data": [{"id": "text/only"}]}, "text/only") is None
+    assert m.pdf_reader(None, "x") is None
 
 
 def test_a_router_has_no_price_of_its_own():
@@ -238,10 +254,11 @@ def test_a_funded_key_turns_automatic_and_free_picks_into_gpt_4_1_mini(
     assert m.resolve_model(configured, CATALOGUE, api_key="k") == "openai/gpt-4.1-mini"
 
 
-def test_openrouter_auto_stands_in_when_gpt_4_1_mini_is_gone(funded):
+def test_haiku_then_openrouter_auto_stand_in_when_gpt_4_1_mini_is_gone(funded):
     funded(True)
-    cat = {"data": [d for d in CATALOGUE["data"] if d["id"] != "openai/gpt-4.1-mini"]
-                   + [{"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}}]}
+    cat = {"data": [d for d in CATALOGUE["data"] if d["id"] != "openai/gpt-4.1-mini"]}
+    assert m.resolve_model("", cat, api_key="k") == "anthropic/claude-haiku-4.5"
+    cat["data"] = [d for d in cat["data"] if d["id"] != "anthropic/claude-haiku-4.5"]
     assert m.resolve_model("", cat, api_key="k") == "openrouter/auto"
 
 

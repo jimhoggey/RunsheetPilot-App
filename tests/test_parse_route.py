@@ -512,6 +512,60 @@ def test_a_non_finite_cost_is_not_recorded(parse_client, isolated_state):
     assert not load_settings().get("parse_costs")
 
 
+# ── reading the PDF itself ────────────────────────────────────────────────
+
+def _catalogue(monkeypatch, funded):
+    """A catalogue with a free text-only model and GPT-4.1 mini, which
+    reads files; the key funded or not."""
+    import propresenterrunsheet.routes.parse as parse_mod
+    from propresenterrunsheet.parsing import models as models_mod
+    cat = {"data": [
+        {"id": "test/model:free", "pricing": {"prompt": "0", "completion": "0"},
+         "supported_parameters": ["structured_outputs"],
+         "architecture": {"input_modalities": ["text"]}},
+        {"id": "openai/gpt-4.1-mini",
+         "pricing": {"prompt": "0.0000004", "completion": "0.0000016"},
+         "architecture": {"input_modalities": ["text", "image", "file"]}}]}
+    monkeypatch.setattr(parse_mod, "fetch_catalogue", lambda *_a, **_k: cat)
+    for mod in (parse_mod, models_mod):
+        monkeypatch.setattr(mod, "key_is_funded", lambda _k: funded)
+
+
+def test_a_paid_key_reads_the_pdf_itself_when_the_text_gave_nothing(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    calls = []
+    r = _post_responses(parse_client, [
+        _FakeResponse('{"items": []}'),
+        _FakeResponse(json.dumps({"items": [{"type": "other",
+                                             "title": "Welcome"}]}))],
+        calls=calls)
+    body = r.get_json()
+    assert body.get("read_pdf") is True, body
+    assert "Welcome" in [i["title"] for i in body["items"]]
+    text, pdf = calls[1]["messages"][0]["content"]
+    assert calls[1]["model"] == "openai/gpt-4.1-mini"
+    assert pdf["file"]["file_data"].startswith("data:application/pdf;base64,")
+    assert calls[1]["plugins"][0]["id"] == "file-parser"
+
+
+def test_without_credit_a_failed_parse_is_not_sent_again(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=False)
+    calls = []
+    r = _post_responses(parse_client, [_FakeResponse('{"items": []}')],
+                        calls=calls)
+    assert "error" in r.get_json() and len(calls) == 1
+
+
+def test_a_pdf_the_model_also_cannot_read_gives_the_usual_error(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    r = _post_responses(parse_client, [_FakeResponse('{"items": []}'),
+                                       _FakeResponse("not json at all")])
+    assert "returned no runsheet items" in r.get_json()["error"]
+
+
 def test_valid_runsheet_still_parses_and_seeds_state(
         parse_client, isolated_state):
     reply = json.dumps({"service_name": "Sunday Morning",

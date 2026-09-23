@@ -9,6 +9,7 @@ playlist creation.
 /api/match runs each parsed song title through fuzzy_match against the
 library."""
 
+import base64
 import datetime as _dt
 import json
 import logging
@@ -23,8 +24,8 @@ from ..parsing.ai import (
     parse_ai_response,
 )
 from ..parsing.models import (
-    dollars, estimate_cost, fetch_catalogue, is_router, next_usable_model,
-    resolve_model,
+    dollars, estimate_cost, fetch_catalogue, is_router, key_is_funded,
+    next_usable_model, pdf_reader, resolve_model,
 )
 from .flags import matching_enabled
 from ..parsing.ocr import (
@@ -129,6 +130,23 @@ def _upload_to_text(upload):
         return image_to_text(str(tmp_path)), "ocr"
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+# Bigger than any runsheet; a PDF past this isn't sent to the model whole.
+_PDF_READ_MAX = 8 * 1024 * 1024
+
+
+def _pdf_bytes(upload):
+    """The uploaded PDF itself, for the model to read when its text parsed
+    to nothing. None for an image, an oversized file or an unreadable one."""
+    if _safe_ext(upload.filename) not in PDF_EXTS:
+        return None
+    try:
+        upload.stream.seek(0)
+        data = upload.stream.read(_PDF_READ_MAX + 1)
+    except Exception:
+        return None
+    return data if 0 < len(data) <= _PDF_READ_MAX else None
 
 
 def _extracted_or_error(upload):
@@ -384,6 +402,7 @@ def api_upload_and_parse():
     # and a misbehaving model was impossible to identify.
     used_model = model
     content = ""
+    pdf_bytes = None
 
     try:
         # 4. Get the runsheet text. Either the operator already reviewed
@@ -396,6 +415,7 @@ def api_upload_and_parse():
             raw, _source, error = _extracted_or_error(upload)
             if error:
                 return jsonify({"error": error}), 400
+            pdf_bytes = _pdf_bytes(upload)
 
         # 5. Assemble the prompt — user-customised or default, plus the
         # Service Mate cue addendum so the model also emits per-role cues.
@@ -503,12 +523,23 @@ def api_upload_and_parse():
         # — that is not the operator's key/credit/model-id problem, so it gets
         # one retry on the next-ranked free model and an honest message,
         # before the per-status mapping below gets a chance to misdiagnose it.
-        def _openrouter_post(model_id, json_mode=True):
+        def _openrouter_post(model_id, json_mode=True, pdf=None):
             log.info(f"OpenRouter request: model={log_safe(model_id)}, "
-                     f"raw_chars={len(raw)}, json_mode={json_mode}")
+                     f"raw_chars={len(raw)}, json_mode={json_mode}, "
+                     f"pdf={pdf is not None}")
+            # With `pdf`, the model reads the page itself instead of our
+            # extracted text — see step 7a.
+            content_ = prompt if pdf is None else [
+                {"type": "text", "text": assemble_prompt(
+                    prompt_template, "(The runsheet is the attached PDF.)",
+                    library_names=section_names)},
+                {"type": "file", "file": {
+                    "filename":  "runsheet.pdf",
+                    "file_data": "data:application/pdf;base64,"
+                                 + base64.b64encode(pdf).decode()}}]
             body = {
                 "model":       model_id,
-                "messages":    [{"role": "user", "content": prompt}],
+                "messages":    [{"role": "user", "content": content_}],
                 "temperature": 0.1,
                 # Ask for the real billed cost of this call. Free models
                 # report 0, so this is the honest answer to "is the paid
@@ -524,6 +555,9 @@ def api_upload_and_parse():
             # that failure mode on every model that honours it.
             if json_mode:
                 body["response_format"] = {"type": "json_object"}
+            if pdf is not None:
+                body["plugins"] = [{"id": "file-parser",
+                                    "pdf": {"engine": "native"}}]
             return req.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -618,6 +652,34 @@ def api_upload_and_parse():
             log.info(f"OpenRouter routed {log_safe(model)} -> {log_safe(used_model)}")
         content = (body["choices"][0]["message"].get("content") or "")
         items, service_name, service_type = parse_ai_response(content)
+
+        # 7a. The text gave nothing. A key with credit gets a second look,
+        # at the PDF itself: extraction flattens tables and columns, and
+        # the page layout is often what the model needed. Only ever on a
+        # failed parse, so a working runsheet never pays for it twice.
+        read_pdf = False
+        reader = (pdf_reader(fetch_catalogue(), used_model)
+                  if not items and pdf_bytes else None)
+        if reader and key_is_funded(or_key):
+            log.info(f"No items from the text — reading the PDF itself "
+                     f"with {log_safe(reader)}")
+            try:
+                again = _openrouter_post(reader, pdf=pdf_bytes)
+                pdf_body = (again.json() if again.status_code < 400
+                            and not _provider_failure(again) else {})
+                pdf_content = (((pdf_body.get("choices") or [{}])[0]
+                                .get("message") or {}).get("content") or "")
+                got = parse_ai_response(pdf_content)
+            except Exception:
+                log.info("Reading the PDF itself failed", exc_info=True)
+                got = ([], "", "")
+            if got[0]:
+                items, service_name, service_type = got
+                used_model = pdf_body.get("model") or reader
+                content, read_pdf = pdf_content, True
+                extra = dollars((pdf_body.get("usage") or {}).get("cost"))
+                if extra is not None:
+                    spent = (spent or 0.0) + extra
 
         # A reply can be perfectly valid JSON and still not be a runsheet —
         # `{"safety": "safe"}` parses fine and yields zero items. Without this
@@ -845,6 +907,7 @@ def api_upload_and_parse():
                     rescued=rescued_rows,
                     template_links=resolved_section_hits + resolved_object_hits,
                     source="text" if reviewed_text.strip() else "file",
+                    read_pdf=read_pdf,
                     matching=do_matching,
                     # How often Auto has to say "none of these are for
                     # this service" — the measure of whether the decline
@@ -868,6 +931,7 @@ def api_upload_and_parse():
         return jsonify({
             "items":          items,
             "rescued_rows":   rescued_rows,
+            "read_pdf":       read_pdf,
             "filename":       upload_name,
             "suggested_name": service_name,
             # The template verdict, resolved ONCE here and carried by the

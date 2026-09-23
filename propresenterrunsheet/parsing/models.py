@@ -47,6 +47,10 @@ CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 # fixed schema — which small INSTRUCT models do reliably and cheaply.
 # Reasoning models are the wrong tool and measurably worse here: the one
 # tested (gpt-oss-120b) took 230s on one run and forgot the title rule.
+#
+# The owner's call (Sept 2026): tune and test for GPT-4.1 mini, with
+# Claude Haiku as the alternative and OpenRouter Auto as the last resort —
+# fewer models, fewer ways to fail. Both named models also read a PDF.
 RECOMMENDED = [
     {
         "id": "openai/gpt-4.1-mini",
@@ -54,13 +58,6 @@ RECOMMENDED = [
         "why": "Built for structured extraction. Consistent run to run — "
                "the reason to pay is repeatability, not raw ability.",
         "starred": True,
-    },
-    {
-        "id": "qwen/qwen3-30b-a3b-instruct-2507",
-        "label": "Qwen3 30B Instruct",
-        "why": "Cheapest of these and the only one measured on a real "
-               "runsheet here: every timed row, titles normalised, twice.",
-        "starred": False,
     },
     {
         "id": "anthropic/claude-haiku-4.5",
@@ -176,8 +173,10 @@ def next_usable_model(current: str, catalogue: dict):
 
 
 # With credit on the key, Automatic and any free pick run on these, first
-# available wins: the starred recommendation, then OpenRouter's own router.
-PAID_DEFAULTS = ("openai/gpt-4.1-mini", "openrouter/auto")
+# available wins: the starred recommendation, Claude Haiku, then
+# OpenRouter's own router.
+PAID_DEFAULTS = ("openai/gpt-4.1-mini", "anthropic/claude-haiku-4.5",
+                 "openrouter/auto")
 
 
 def pick_paid_model(catalogue: dict):
@@ -185,6 +184,15 @@ def pick_paid_model(catalogue: dict):
     ids = {m.get("id") for m in (catalogue or {}).get("data") or []
            if isinstance(m, dict)}
     return next((i for i in PAID_DEFAULTS if i in ids), None)
+
+
+def pdf_reader(catalogue: dict, current: str = None):
+    """A model that can read a PDF itself: `current` when it can, else the
+    first paid default that can. None when the catalogue lists neither."""
+    reads = {m.get("id") for m in (catalogue or {}).get("data") or []
+             if isinstance(m, dict) and "file" in
+             ((m.get("architecture") or {}).get("input_modalities") or [])}
+    return next((i for i in (current, *PAID_DEFAULTS) if i in reads), None)
 
 
 def free_model_ids(catalogue: dict) -> set:
