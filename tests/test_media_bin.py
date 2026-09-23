@@ -116,6 +116,58 @@ def test_fetch_media_bin_flattens_all_media_playlists():
         ("55C08096", "Welcome"), ("AAA111", "Countdown")}
 
 
+def _paged_pp(tree, playlists, honour_start=True):
+    """A fake PP: `tree` is the Media sidebar, `playlists` maps uuid → item
+    names, served 100 at a time from `?start=` as the real API does."""
+    from urllib.parse import parse_qs, urlparse
+
+    class _R:
+        def __init__(self, payload): self._p = payload
+        def raise_for_status(self): pass
+        def json(self): return self._p
+
+    calls = []
+
+    def fake_get(url, timeout=0):
+        calls.append(url)
+        u = urlparse(url)
+        if u.path.endswith("/v1/media/playlists"):
+            return _R(tree)
+        names = playlists[u.path.rsplit("/", 1)[-1]]
+        start = int(parse_qs(u.query).get("start", ["0"])[0]) if honour_start else 0
+        return _R({"items": [{"id": {"uuid": f"U-{n}", "name": n}}
+                             for n in names[start:start + 100]]})
+    return fake_get, calls
+
+
+def test_every_page_of_a_big_media_playlist_is_read():
+    """PP returns at most 100 items a call. Reading one page left item 101
+    onwards "not in Media" — five slides dropped from a new playlist on a
+    production machine, though the operator had them all in Media."""
+    names = [f"Slide {i}" for i in range(250)]
+    get, calls = _paged_pp([{"id": {"uuid": "MP1"}, "type": "playlist"}],
+                           {"MP1": names})
+    assert [m["name"] for m in fetch_media_bin("http://pp", http_get=get)] == names
+    assert len(calls) == 1 + 3
+
+
+def test_media_playlists_inside_folders_are_read():
+    tree = [{"id": {"uuid": "G1", "name": "Series"}, "type": "group", "children": [
+        {"id": {"uuid": "MP2", "name": "Summit"}, "type": "playlist", "children": []}]}]
+    get, calls = _paged_pp(tree, {"MP2": ["WTSSF_Summit2026_Screen_QR_1920x1080"]})
+    assert [m["name"] for m in fetch_media_bin("http://pp", http_get=get)] == [
+        "WTSSF_Summit2026_Screen_QR_1920x1080"]
+    assert not any("/G1" in c for c in calls), "a folder has no items to ask for"
+
+
+def test_a_pp_that_ignores_paging_cant_loop_forever():
+    names = [f"Slide {i}" for i in range(100)]
+    get, calls = _paged_pp([{"id": {"uuid": "MP1"}, "type": "playlist"}],
+                           {"MP1": names}, honour_start=False)
+    assert len(fetch_media_bin("http://pp", http_get=get)) == 100
+    assert len(calls) == 1 + 2
+
+
 def test_fetch_media_bin_returns_empty_on_any_failure():
     def broken_get(url, timeout=0):
         raise OSError("PP not running")
