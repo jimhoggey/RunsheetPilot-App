@@ -79,7 +79,7 @@
       </div>
     </div>
     <button class="btn btn-dim btn-sm btn-full" onclick="testConnection2()" style="margin-bottom:8px">⚡ Test connection</button>
-    <div id="pp-conn-status" style="font-size:.72rem;color:var(--muted);line-height:1.5">
+    <div id="pp-conn-status" hidden style="font-size:.72rem;color:var(--muted);line-height:1.5">
       Enable Network in ProPresenter → Preferences → Integrations.
     </div>
   </div>
@@ -202,10 +202,7 @@
       <div class="step-meta" id="step-2-meta">~12 seconds</div>
     </div>
     <div class="step-body">
-      <p class="step-desc">
-        We send the runsheet text to OpenRouter and extract the service items
-        (songs, MC moments, sermon, etc.) into a structured list.
-      </p>
+      <p class="step-desc">Reads your runsheet into a list.</p>
 
       <!-- OCR review — shown ONLY for screenshots and scanned PDFs, where
            the text came from the OS text-recognition engine and may have
@@ -316,11 +313,7 @@
       <div class="step-meta" id="step-3-meta"></div>
     </div>
     <div class="step-body">
-      <p class="step-desc" id="step-3-desc">
-        The new playlist will appear in ProPresenter immediately. If you
-        set an export folder in Settings, a <code>.playlist</code> backup
-        file is saved there too.
-      </p>
+      <p class="step-desc" id="step-3-desc">Builds the playlist in ProPresenter.</p>
       <div class="row" style="align-items:stretch;gap:12px">
         <div style="flex:1">
           <label for="playlist-name" id="playlist-name-label">Service name (also the playlist name in PP)</label>

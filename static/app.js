@@ -648,11 +648,9 @@ function setPlaylistMode(mode) {
     upd ? 'Add Section Headers' : 'Create Runsheet & Export';
   document.getElementById('step-3-desc').innerHTML = upd
     ? 'Adds a coloured header for each runsheet item to the playlist.'
-    : 'The new playlist will appear in ProPresenter immediately. If you ' +
-      'set an export folder in Settings, a <code>.playlist</code> backup ' +
-      'file is saved there too.';
+    : 'Builds the playlist in ProPresenter.';
   document.getElementById('playlist-name-label').textContent = upd
-    ? 'Service name (for countdown timers and clocks — the playlist keeps its own name)'
+    ? 'Service name'
     : 'Service name (also the playlist name in PP)';
   document.getElementById('create-btn').textContent =
     upd ? '✓ Add Section Headers' : '✓ Create Runsheet & Export File';
@@ -867,10 +865,7 @@ function _renderTemplateOptions() {
 
   if (upd) {
     status.innerHTML = sel.value
-      ? 'Adds coloured section headers to this playlist. Nothing is added ' +
-        'or removed, and slides only move if you say so. ' +
-        '<em>Goes back to Create for the next runsheet once the headers ' +
-        'are written.</em>'
+      ? 'Adds the runsheet’s headers to this playlist.'
       : '<span style="color:var(--org)">Pick the playlist you want to add ' +
         'headers to.</span>';
     return;
@@ -1104,6 +1099,8 @@ document.addEventListener('keydown', (e) => {
 function setPPDot(ok) {
   const dot = document.getElementById('pp-dot');
   if (dot) dot.className = 'pp-dot ' + (ok ? 'ok' : 'bad');
+  // The "turn on Network" tip is only worth reading when PP didn't answer.
+  document.getElementById('pp-conn-status').hidden = ok;
 }
 
 // ─── What's new (once per version) ────────────────────────────────────────
@@ -2312,34 +2309,22 @@ function _renderUpdateResult(res, playlistName) {
   setStepState(3, 'complete');
   document.getElementById('step-3-meta').textContent =
     `✓ ${res.headers_added} headers added`;
-  const bits = [];
-  if (res.by_recall) bits.push(`${res.by_recall} remembered`);
-  if (res.by_alias)  bits.push(`${res.by_alias} from aliases`);
-  if (res.by_ai)     bits.push(`${res.by_ai} read off the slides`);
-  if (res.by_name)   bits.push(`${res.by_name} matched by name`);
-  if (res.moved)     bits.push(`${res.moved} slide${res.moved!==1?'s':''} moved into runsheet order`);
-  if (res.unplaced)  bits.push(`<span style="color:#fbbf24">↕ ${res.unplaced} to drag into place</span>`);
+  // What happened, what's left to do, and Undo. Everything else was checked
+  // (and would be said loudly if it had failed) — it needn't be read.
+  const plural = (n, word) => `${n} ${word}${n !== 1 ? 's' : ''}`;
   let html = `<div class="notice notice-ok">
-    ✅ <strong>Organised "${name}" — ${res.headers_added} section
-    header${res.headers_added!==1?'s':''} added</strong><br>
-    ${bits.join(' &nbsp;·&nbsp; ')}
-    <br>✓ Checked after saving: all ${res.content_count} of your
-    slide${res.content_count!==1?'s':''} ${res.content_count!==1?'are':'is'} still there.`;
+    ✅ <strong>${plural(res.headers_added, 'header')} added to "${name}"</strong>` +
+    (res.moved ? ` · ${plural(res.moved, 'slide')} moved` : '');
   if (res.unplaced) {
-    html += `<br>Drag a <strong>↕</strong> header to where it belongs in
-      ProPresenter — moving a header never moves your media, and next time
-      the app will put it there for you.`;
+    html += `<br><span style="color:#fbbf24" title="Drag a ↕ header to where it
+      belongs in ProPresenter — the app remembers it next time.">↕ ${res.unplaced}
+      to drag into place</span>`;
   }
   if (res.timers_created) {
-    const cleared = res.timers_deleted
-      ? `${res.timers_deleted} old cleared &nbsp;·&nbsp; ` : '';
-    html += `<br>⏱ ${cleared}<strong>${res.timers_created} countdown
-      timer${res.timers_created!==1?'s':''}</strong> ready in PP's Timer panel.`;
+    html += `<br>⏱ ${plural(res.timers_created, 'countdown timer')} ready.`;
   }
   if (res.snapshot_path) {
-    html += `<br><br>📁 <strong>Backup saved first:</strong><br>
-      <code style="font-size:.72rem">${escapeHtml(res.snapshot_path)}</code>
-      <br><button class="btn btn-dim btn-sm" style="margin-top:8px"
+    html += `<br><button class="btn btn-dim btn-sm" style="margin-top:8px"
         onclick="restoreSnapshot()">↺ Undo this change</button>`;
   }
   html += '</div>';
