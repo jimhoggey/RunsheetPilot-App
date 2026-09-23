@@ -240,3 +240,139 @@ def test_risk_radar_routes_the_release_workflow_to_the_build_reviewer():
 
 def test_risk_radar_stays_silent_on_ordinary_files():
     assert _radar("/r/propresenterrunsheet/parsing/ocr.py", "x = 1") == ""
+
+
+# ── bash_guard: source edits stay on the Edit/Write path ───────────────────
+#
+# Every other hook here fires on Edit|Write only, so a source file changed
+# through the shell skips the whole safety net. PR #127 was written that
+# way and CodeQL found 22 problems these checks would have pointed at.
+
+_REPO = HOOKS.parent.parent
+
+
+def _pre(cmd, cwd=None):
+    out = _run("bash_guard.py", {"tool_input": {"command": cmd},
+                                 "cwd": str(cwd or _REPO)}, cwd=_REPO)
+    return out
+
+
+def _guard_run(mode, payload):
+    proc = subprocess.run(
+        [sys.executable, str(HOOKS / "bash_guard.py"), mode],
+        input=json.dumps(payload), capture_output=True, text=True,
+        cwd=str(_REPO), timeout=60)
+    assert proc.returncode == 0
+    return proc.stdout
+
+
+def _denied(cmd, cwd=None):
+    out = _guard_run("pre", {"tool_input": {"command": cmd},
+                             "cwd": str(cwd or _REPO)})
+    if not out.strip():
+        return False
+    return json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("cmd", [
+    # Every shape the update-existing-playlist work actually used.
+    "cat > propresenterrunsheet/x.py <<'EOF'\nprint(1)\nEOF",
+    "echo hi >> static/app.js",
+    "sed -i '' 's/a/b/' templates/index.html",
+    "sed -i.bak 's/a/b/' propresenterrunsheet/net.py",
+    "printf x | tee tests/test_new.py",
+    "cp /tmp/x.py propresenterrunsheet/x.py",
+    ("python3 - <<'PY'\nfrom pathlib import Path\n"
+     "p = Path(\"static/app.js\")\ns = p.read_text()\np.write_text(s)\nPY"),
+    "python3 -c \"open('propresenterrunsheet/a.py','w').write('x')\"",
+    "perl -pi -e 's/a/b/' propresenterrunsheet/stats.py",
+    # A variable that resolves INTO the repo is still a repo write.
+    "D=static; echo x > \"$D/app.js\"",
+])
+def test_bash_guard_refuses_shell_writes_into_source(cmd):
+    assert _denied(cmd), cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    # Reading, testing, git, and writing OUTSIDE the repo all stay open.
+    "cat propresenterrunsheet/net.py",
+    "sed -n '1,20p' static/app.js",
+    "grep -rn pp_base propresenterrunsheet",
+    ".venv/bin/python -m pytest -q 2>&1 | tail -3",
+    "git checkout -b some-branch origin/main",
+    "git diff main...HEAD -- static/app.js",
+    "echo x > /tmp/scratch.txt",
+    ("python3 - <<'PY'\nimport json\nd = json.load(open('graphify-out/graph.json'))\n"
+     "open('/tmp/out.json','w').write(json.dumps(d))\nPY"),
+    "ls > /dev/null 2>&1",
+    "echo '{\"a\": 1.5}' > /tmp/x.json",
+    # A variable pointing outside the repo. Refused before the fix: the
+    # guard read "$SP/..." as a relative path inside the repo.
+    ("SP=/tmp/rp-scratch; curl -s http://127.0.0.1:1/v1/playlists "
+     "> \"$SP/playlists.json\""),
+    "echo x > \"$TMPDIR/probe.txt\"",
+    # A `>` inside quotes is text. Refused before the fix as a write into
+    # a file named "=1.0.1".
+    "uv pip install --python .venv/bin/python \"ocrmac>=1.0.1\"",
+    "python3 -c \"print(3 > 2)\"",
+    "grep -n 'a > b' static/app.js",
+    # A heredoc body is data. This exact commit was refused before the
+    # fix, because its message mentioned tee, sed -i and a redirect.
+    ("git commit -q -F - <<'EOF'\nStop edits slipping past (redirects, tee,\n"
+     "sed -i, `cat > static/app.js`) into the tree.\nEOF\ngit log --oneline -1"),
+])
+def test_bash_guard_leaves_everything_else_alone(cmd):
+    assert not _denied(cmd), cmd
+
+
+def test_bash_guard_refusal_says_what_to_do_instead():
+    out = _guard_run("pre", {"tool_input": {"command": "echo x > static/a.css"},
+                             "cwd": str(_REPO)})
+    reason = json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Edit or Write" in reason
+
+
+def test_bash_guard_post_is_silent_when_nothing_changed():
+    payload = {"tool_input": {"command": "ls"}, "session_id": "t-quiet",
+               "cwd": str(_REPO)}
+    _guard_run("pre", payload)
+    assert _guard_run("post", payload).strip() == ""
+
+
+def _load_guard():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("bash_guard",
+                                                  HOOKS / "bash_guard.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("cmd, is_git", [
+    ("git checkout main", True),
+    ("cd /repo && git merge x", True),
+    ("cd a&&cd b && GIT_DIR=/x/.git FOO= git status", True),
+    ("gitk", False),
+    ("cd /repo && python3 x.py", False),
+    ("FOO=git make", False),
+])
+def test_bash_guard_recognises_git_behind_cd_and_env_prefixes(cmd, is_git):
+    assert _load_guard()._is_git(cmd) is is_git
+
+
+def test_bash_guard_git_check_is_linear_on_hostile_input():
+    """The shape CodeQL reported for the old pattern: many '!==! '."""
+    import time
+    guard = _load_guard()
+    for hostile in ("!==! " * 20_000, "cd a&&" * 20_000, "A=b " * 20_000 + "x"):
+        t = time.perf_counter()
+        guard._is_git(hostile)
+        assert time.perf_counter() - t < 1.0
+
+
+def test_bash_guard_survives_junk_input():
+    for mode in ("pre", "post"):
+        proc = subprocess.run(
+            [sys.executable, str(HOOKS / "bash_guard.py"), mode],
+            input="not json", capture_output=True, text=True, timeout=30)
+        assert proc.returncode == 0 and proc.stdout == ""

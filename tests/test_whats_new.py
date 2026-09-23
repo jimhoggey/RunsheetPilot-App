@@ -140,7 +140,6 @@ def test_recent_notes_headline_is_the_first_bullet():
 def test_release_notes_endpoint_spans_versions_and_marks_nothing_seen(
         fresh_settings):
     """Reading the changelog must not consume the after-update popup."""
-    from propresenterrunsheet.settings import load_settings
     before = load_settings().get("last_seen_version")
 
     r = fresh_settings.get("/api/release_notes")

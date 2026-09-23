@@ -48,11 +48,11 @@ if __name__ == "__main__" and "propresenter_app" not in sys.modules:
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 
-# Side-effect imports: `propresenterrunsheet/__init__.py` configures
+# Importing any submodule runs `propresenterrunsheet/__init__.py` first,
+# and that is the side effect everything below depends on: it configures
 # logging and loads the propresenter / service_mate / parsing sub-packages
-# before we touch them, so anything below this line can safely use them.
-import propresenterrunsheet  # noqa: F401
-
+# before we touch them. So this first import doubles as the package
+# bootstrap — keep it above anything else from the package.
 from propresenterrunsheet.logging_setup import log
 from propresenterrunsheet.routes import register_blueprints
 
@@ -93,11 +93,16 @@ try:
             _stats.report_error(exception, where_kind="request",
                                 route=(_rq.endpoint or "unknown"))
         except Exception:
-            pass
+            # Reporting must never raise inside Flask's error path — that
+            # would bury the real exception under this one.
+            log.debug("Couldn't report a request exception", exc_info=True)
 
     _got_request_exception.connect(_report_request_exception, app)
 except Exception:
-    pass
+    # Crash reporting is an extra, not a requirement: if the signal isn't
+    # available the app still starts, and _unhandled below still logs
+    # every crash to app.log.
+    log.debug("Crash reporting hook not installed", exc_info=True)
 
 # A host outside loopback/LAN is a refusal, not a crash: pp_base raises
 # and this turns it into the same shape every other route error uses, so
@@ -140,52 +145,55 @@ def _unhandled(e):
 register_blueprints(app)
 
 
-# ── Re-export shim for tests + legacy callers ─────────────────────────────────
+# ── Re-export shim for tests + CI ─────────────────────────────────────────────
 # `tests/conftest.py` and `tests/test_*.py` poke a couple of dozen helpers as
-# `app_module.<name>`. Re-exporting them here lets the tests stay unchanged
-# even though the source of truth has moved into the package.
+# `app_module.<name>`, and CI's smoke step reads `propresenter_app.VERSION`.
+# Re-exporting them here lets those stay unchanged even though the source of
+# truth has moved into the package.
+#
+# The list is exactly what something reads through this module; everything
+# else was trimmed. `__all__` below is what marks these as deliberate
+# re-exports rather than unused imports — a name added here must be added
+# there too.
 
-from propresenterrunsheet.config import (  # noqa: E402, F401
-    APP_NAME, DATA_DIR, DEFAULT_PORT, LOG_FILE, PORT_RANGE,
-    SETTINGS_FILE, UPLOAD_FOLDER, VERSION,
-)
-from propresenterrunsheet.parsing import (  # noqa: E402, F401
-    DEFAULT_PROMPT, _DURATION_RE, _TIME_RE,
-    _extract_duration_min, _extract_time_str, extract_pdf_text,
+from propresenterrunsheet.config import VERSION  # noqa: E402
+from propresenterrunsheet.parsing import (  # noqa: E402
+    DEFAULT_PROMPT, _extract_duration_min, _extract_time_str,
     parse_ai_response,
 )
-from propresenterrunsheet.propresenter import (  # noqa: E402, F401
-    ACTION_NEEDED_COLOR, TYPE_COLORS,
-    _RB_TIMER_PREFIX, _UUID_RE,
-    _color_dict, _color_for_type, _create_pp_timers,
-    _delete_existing_rb_timers, _norm, _pp_candidates, _uuid_from_binary,
-    auto_detect_template_uuid, build_playlist_payload, fetch_pp_playlist_items,
-    fetch_pp_playlists, find_library_dirs, find_playlist_dir, find_pp_root,
-    fuzzy_match, playlist_to_sections, resolve_library_name, resolve_section,
-    scan_library,
+from propresenterrunsheet.propresenter import (  # noqa: E402
+    _norm, auto_detect_template_uuid, build_playlist_payload, fuzzy_match,
+    playlist_to_sections, resolve_library_name, resolve_section,
 )
-from propresenterrunsheet.service_mate import (  # noqa: E402, F401
-    CLOCKS_CONFIG_FILE, LIGHTS_CUES, ROLE_ACCENT, ROLE_CUE_TABLES,
-    RUNSHEET_STATE_FILE, SCREEN_CUES, SM_FILENAME, SM_FONTS, SM_H,
-    SM_JPEG_QUALITY, SM_LOOP_INTERVAL_S, SM_PP_POLL_EVERY_N_TICKS,
-    SM_TESTCARD_FILENAME, SM_ULTRA_IMAGE_THEME, SM_VERBOSITIES,
-    SM_VERBOSITY_DEFAULT, SM_W, SOUND_CUES,
+from propresenterrunsheet.service_mate import (  # noqa: E402
     _CLOCKS_LOOP_LAST_PUSHED, _CLOCK_THEME_SET,
-    _clean_header_name, _clocks_loop, _clocks_loop_tick,
-    _compute_remaining_seconds, _cue_for, _default_clocks_config,
+    _clean_header_name, _compute_remaining_seconds, _cue_for,
     _ensure_item_cues, _format_mmss, _maybe_advance_from_pp,
     _next_visible_item, _parse_pp_time, _pp_active_section_index,
-    _pp_get_playlist_items, _probe_clock, _push_to_clock,
-    _read_clocks_config, _read_runsheet_state, _render_cue,
-    _render_cue_compact, _render_cue_detailed, _render_standby,
-    _render_test_card, _resolve_current, _set_clock_brightness,
-    _sm_font, _text_width, _write_clocks_config, _write_runsheet_state,
-    start_clocks_loop,
-)
-from propresenterrunsheet.settings import (  # noqa: E402, F401
-    _default_settings, load_settings, save_settings,
+    _render_cue, _render_standby, _render_test_card,
+    _sm_font, _text_width,
 )
 from propresenterrunsheet.server import main  # noqa: E402
+
+__all__ = [
+    "app",
+    # config
+    "VERSION",
+    # parsing
+    "DEFAULT_PROMPT", "_extract_duration_min", "_extract_time_str",
+    "parse_ai_response",
+    # propresenter
+    "_norm", "auto_detect_template_uuid", "build_playlist_payload",
+    "fuzzy_match", "playlist_to_sections", "resolve_library_name",
+    "resolve_section",
+    # service_mate
+    "_CLOCKS_LOOP_LAST_PUSHED", "_CLOCK_THEME_SET",
+    "_clean_header_name", "_compute_remaining_seconds", "_cue_for",
+    "_ensure_item_cues", "_format_mmss", "_maybe_advance_from_pp",
+    "_next_visible_item", "_parse_pp_time", "_pp_active_section_index",
+    "_render_cue", "_render_standby", "_render_test_card",
+    "_sm_font", "_text_width",
+]
 
 
 if __name__ == "__main__":

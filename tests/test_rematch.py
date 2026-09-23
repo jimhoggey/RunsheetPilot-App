@@ -10,8 +10,6 @@ also the honest fix for a free tier capped at 50 AI requests a day.
 route calls it to rescue items PP was closed for; /api/match calls it
 with force=True when the operator hits Re-match.
 """
-import pytest
-
 from propresenterrunsheet.propresenter.templates import (
     link_items_to_template,
 )

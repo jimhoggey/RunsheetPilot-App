@@ -168,6 +168,6 @@ def build_state_payload(role, verbosity, state, ends_at, now, brightness=None):
         try:
             payload["brightness"] = max(1, min(100, int(brightness)))
         except (TypeError, ValueError):
-            pass
+            pass          # not a number: leave it out, as if none was set
 
     return payload

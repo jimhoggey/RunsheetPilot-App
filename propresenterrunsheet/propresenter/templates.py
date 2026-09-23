@@ -19,7 +19,9 @@ import logging
 import re
 from typing import Optional
 
+from ..logging_setup import log_safe
 from .library import resolve_library_name
+from .net import pp_id
 
 
 log = logging.getLogger("pp_runsheet")
@@ -97,12 +99,16 @@ def fetch_pp_playlist_items(base: str, playlist_uuid: str) -> list:
     "no augmentation, parse normally". Caller is responsible for caching."""
     import requests as req
     try:
-        r = req.get(f"{base}/v1/playlist/{playlist_uuid}", timeout=6)
+        # pp_id: the uuid can come straight from the request body, and
+        # "../timer/…" would walk out of the playlist API. A bad one raises
+        # ValueError into the except below — "no template", like any
+        # other failure here.
+        r = req.get(f"{base}/v1/playlist/{pp_id(playlist_uuid)}", timeout=6)
         r.raise_for_status()
         return r.json().get("items") or []
     except Exception:
-        log.debug(f"fetch_pp_playlist_items({playlist_uuid}) failed",
-                  exc_info=True)
+        log.debug(f"fetch_pp_playlist_items({log_safe(playlist_uuid)}) "
+                  f"failed", exc_info=True)
         return []
 
 
