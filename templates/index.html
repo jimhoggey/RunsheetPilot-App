@@ -170,6 +170,8 @@
     <div class="step-header">
       <div class="step-badge"><span class="step-num">2</span></div>
       <div class="step-title">Parse with AI</div>
+      <!-- Which model reads the runsheet. Filled by _renderModelChip(). -->
+      <span class="step-chip" id="parse-model" hidden></span>
       <div class="step-meta" id="step-2-meta">~12 seconds</div>
     </div>
     <div class="step-body">
@@ -487,13 +489,16 @@
         <h3>OpenRouter AI</h3>
         <p class="settings-hint">
           The model that reads your runsheet PDF. Leave this on
-          <strong>Automatic</strong> and the app picks a working free one for
+          <strong>Automatic</strong> and the app picks a working one for
           you — the list comes from OpenRouter as you open this, so it never
           goes stale.
         </p>
         <div class="field">
           <label for="or-key">API key</label>
           <input id="or-key" type="password" placeholder="sk-or-…" autocomplete="off">
+          <!-- Free or paid, credit left, and what a runsheet costs on the
+               chosen model. Filled by _renderKeyStatus() in app.js. -->
+          <div class="key-status" id="or-key-status" role="status" hidden></div>
         </div>
         <div class="field">
           <label for="or-model">Model</label>

@@ -83,8 +83,9 @@ def _provider_error_body(provider="Darkbloom", code=401):
 # (test_item_types.py) can drive the parse route too.
 
 
-def _post_responses(client, responses, model="test/model:free", calls=None):
-    """Upload the fake PDF with OpenRouter's replies fully scripted.
+def _post_responses(client, responses, model="test/model:free", calls=None,
+                    upload=(b"%PDF-1.4 fake", "service.pdf")):
+    """Upload the fake PDF (or `upload`) with OpenRouter's replies scripted.
 
     `responses` are handed out one per POST, in order — the retry tests need
     a failure followed by a success. Pass a `calls` list to capture each
@@ -104,7 +105,7 @@ def _post_responses(client, responses, model="test/model:free", calls=None):
     try:
         return client.post(
             "/api/upload_and_parse",
-            data={"pdf": (io.BytesIO(b"%PDF-1.4 fake"), "service.pdf"),
+            data={"pdf": (io.BytesIO(upload[0]), upload[1]),
                   "or_key": "sk-or-test", "or_model": model},
             content_type="multipart/form-data")
     finally:
@@ -461,6 +462,199 @@ def test_sectioned_template_still_wins_over_object_fallback(
     assert lib["header"]["name"] == "Culture"
     assert len(lib["items"]) == 2, \
         "the LLM-tagged section (2 slides) must win over a 1-object match"
+
+
+def test_a_billed_parse_is_remembered_for_the_cost_per_runsheet(
+        parse_client, isolated_state):
+    """Settings says what a runsheet costs from what this install was
+    actually billed. Unbilled replies (no usage.cost) record nothing."""
+    from propresenterrunsheet.settings import load_settings
+
+    class _Billed(_FakeResponse):
+        def json(self):
+            return {**super().json(), "usage": {"cost": 0.000295}}
+
+    reply = json.dumps({"service_name": "Sunday",
+                        "items": [{"type": "sermon", "title": "King Jesus"}]})
+    _post(parse_client, reply)                      # not billed
+    _post_responses(parse_client, [_Billed(reply, model="qwen/q")], model="qwen/q")
+    assert load_settings()["parse_costs"] == [{"model": "qwen/q", "usd": 0.000295}]
+
+
+def test_recording_the_cost_never_fails_a_parse(parse_client, isolated_state):
+    """Bookkeeping after the fact: a malformed parse_costs on disk (or a
+    failed write) must not turn a billed, successful parse into an error."""
+    from propresenterrunsheet.settings import save_settings
+
+    class _Billed(_FakeResponse):
+        def json(self):
+            return {**super().json(), "usage": {"cost": 0.0003}}
+
+    reply = json.dumps({"items": [{"type": "sermon", "title": "King Jesus"}]})
+    for junk in ("x", {"a": 1}, 5):
+        save_settings({"parse_costs": junk})
+        r = _post_responses(parse_client, [_Billed(reply)])
+        assert "error" not in r.get_json(), junk
+
+
+def test_a_non_finite_cost_is_not_recorded(parse_client, isolated_state):
+    """NaN in settings.json would make every later settings read fail in
+    the browser — OpenRouter's reply is third-party data."""
+    from propresenterrunsheet.settings import load_settings
+
+    class _Weird(_FakeResponse):
+        def json(self):
+            return {**super().json(), "usage": {"cost": "NaN"}}
+
+    reply = json.dumps({"items": [{"type": "sermon", "title": "King Jesus"}]})
+    _post_responses(parse_client, [_Weird(reply)])
+    assert not load_settings().get("parse_costs")
+
+
+# ── reading the PDF itself ────────────────────────────────────────────────
+
+def _catalogue(monkeypatch, funded):
+    """A catalogue with a free text-only model and GPT-4.1 mini, which
+    reads files; the key funded or not."""
+    import propresenterrunsheet.routes.parse as parse_mod
+    from propresenterrunsheet.parsing import models as models_mod
+    cat = {"data": [
+        {"id": "test/model:free", "pricing": {"prompt": "0", "completion": "0"},
+         "supported_parameters": ["structured_outputs"],
+         "architecture": {"input_modalities": ["text"]}},
+        {"id": "openai/gpt-4.1-mini",
+         "pricing": {"prompt": "0.0000004", "completion": "0.0000016"},
+         "architecture": {"input_modalities": ["text", "image", "file"]}}]}
+    monkeypatch.setattr(parse_mod, "fetch_catalogue", lambda *_a, **_k: cat)
+    for mod in (parse_mod, models_mod):
+        monkeypatch.setattr(mod, "key_is_funded", lambda _k: funded)
+
+
+def test_a_paid_key_reads_the_pdf_itself_when_the_text_gave_nothing(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    calls = []
+    r = _post_responses(parse_client, [
+        _FakeResponse('{"items": []}'),
+        _FakeResponse(json.dumps({"items": [{"type": "other",
+                                             "title": "Welcome"}]}))],
+        calls=calls)
+    body = r.get_json()
+    assert body.get("read_from") == "PDF", body
+    assert "Welcome" in [i["title"] for i in body["items"]]
+    text, pdf = calls[1]["messages"][0]["content"]
+    assert calls[1]["model"] == "openai/gpt-4.1-mini"
+    assert pdf["file"]["file_data"].startswith("data:application/pdf;base64,")
+    assert calls[1]["plugins"][0]["id"] == "file-parser"
+
+
+def test_every_request_asks_for_providers_that_keep_nothing(
+        parse_client, isolated_state, monkeypatch):
+    """Runsheets carry names: the text call and the file read both refuse
+    providers that store or train on requests."""
+    _catalogue(monkeypatch, funded=True)
+    calls = []
+    _post_responses(parse_client, [_FakeResponse('{"items": []}'),
+                                   _FakeResponse(_RUNSHEET)], calls=calls)
+    assert [c.get("provider") for c in calls] == [{"data_collection": "deny"}] * 2
+
+
+def test_without_credit_a_failed_parse_is_not_sent_again(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=False)
+    calls = []
+    r = _post_responses(parse_client, [_FakeResponse('{"items": []}')],
+                        calls=calls)
+    assert "error" in r.get_json() and len(calls) == 1
+
+
+_RUNSHEET = json.dumps({"items": [{"type": "other", "title": "Welcome"}]})
+
+
+def test_a_text_reply_that_isnt_json_still_gets_the_pdf_read(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    for first in ("", "I could not find a runsheet here."):
+        r = _post_responses(parse_client, [_FakeResponse(first),
+                                           _FakeResponse(_RUNSHEET)])
+        assert r.get_json().get("read_from") == "PDF", repr(first)
+
+
+def test_when_both_replies_are_prose_the_error_quotes_the_model(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    r = _post_responses(parse_client, [_FakeResponse("Nope."),
+                                       _FakeResponse("Still no.")])
+    assert "didn't return a runsheet" in r.get_json()["error"]
+
+
+def test_a_model_that_refused_json_mode_isnt_asked_for_it_again(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    refused = _FakeErrorResponse(400, {"error": {
+        "message": "response_format is not supported"}})
+    calls = []
+    r = _post_responses(parse_client, [refused, _FakeResponse('{"items": []}'),
+                                       _FakeResponse(_RUNSHEET)], calls=calls)
+    assert r.get_json().get("read_from") == "PDF"
+    assert "response_format" not in calls[2] and "plugins" in calls[2]
+
+
+# ── a screenshot, on a key with credit ────────────────────────────────────
+
+_PNG = (b"\x89PNG\r\n\x1a\n fake", "runsheet.png")
+
+
+def _ocr(monkeypatch, text="9:30 AM Go Live\n9:31 AM Countdown"):
+    import propresenterrunsheet.routes.parse as parse_mod
+    monkeypatch.setattr(parse_mod, "image_to_text", lambda _p: text)
+
+
+def test_a_paid_key_sends_a_screenshot_to_the_model_as_the_picture(
+        parse_client, isolated_state, monkeypatch):
+    """Local OCR dropped the small grey numbers of a table, live; the
+    model reading the picture itself doesn't."""
+    _catalogue(monkeypatch, funded=True)
+    _ocr(monkeypatch)
+    calls = []
+    r = _post_responses(parse_client, [_FakeResponse(_RUNSHEET)], calls=calls,
+                        upload=_PNG)
+    assert r.get_json().get("read_from") == "picture"
+    text, picture = calls[0]["messages"][0]["content"]
+    assert picture["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "plugins" not in calls[0] and len(calls) == 1
+
+
+def test_without_credit_a_screenshot_is_read_by_ocr_as_before(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=False)
+    _ocr(monkeypatch)
+    calls = []
+    r = _post_responses(parse_client, [_FakeResponse(_RUNSHEET)], calls=calls,
+                        upload=_PNG)
+    assert not r.get_json().get("read_from")
+    assert "9:30 AM Go Live" in calls[0]["messages"][0]["content"]
+
+
+def test_no_ocr_review_when_the_model_will_read_the_picture(
+        parse_client, isolated_state, monkeypatch):
+    from propresenterrunsheet.settings import save_settings
+    save_settings({"or_key": "sk-or-test"})
+    _ocr(monkeypatch)
+    for funded, review in ((True, False), (False, True)):
+        _catalogue(monkeypatch, funded=funded)
+        r = parse_client.post("/api/extract_text",
+                              data={"file": (io.BytesIO(_PNG[0]), _PNG[1])},
+                              content_type="multipart/form-data").get_json()
+        assert (r["needs_review"], r["model_reads"]) == (review, not review)
+
+
+def test_a_pdf_the_model_also_cannot_read_gives_the_usual_error(
+        parse_client, isolated_state, monkeypatch):
+    _catalogue(monkeypatch, funded=True)
+    r = _post_responses(parse_client, [_FakeResponse('{"items": []}'),
+                                       _FakeResponse("not json at all")])
+    assert "returned no runsheet items" in r.get_json()["error"]
 
 
 def test_valid_runsheet_still_parses_and_seeds_state(

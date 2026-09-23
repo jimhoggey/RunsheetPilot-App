@@ -11,8 +11,8 @@ from flask import Blueprint, jsonify, request
 from ..config import DATA_DIR, VERSION, WHATS_NEW, recent_release_notes
 from ..parsing.ai import DEFAULT_PROMPT
 from ..parsing.models import (
-    fetch_catalogue, fetch_key_info, pick_default_model,
-    recommended_models, usable_models,
+    fetch_catalogue, fetch_key_info, free_model_ids, measured_costs,
+    pick_default_model, pick_paid_model, recommended_models, usable_models,
 )
 from ..propresenter.paths import find_library_dirs, find_pp_root
 from ..settings import load_settings, save_settings
@@ -44,25 +44,36 @@ def get_models():
     # showing them to someone who can't pay produces a 402 on their first
     # parse, which is a far worse first impression than a shorter list.
     # Unknown (offline, bad key) is treated as not funded.
-    key = (load_settings().get("or_key") or "").strip()
-    info = fetch_key_info(key)
+    settings = load_settings()
+    info = fetch_key_info((settings.get("or_key") or "").strip())
     funded = bool(info.get("funded"))
+    # For the line under the key in Settings: free or paid, what's left,
+    # and what a runsheet has really cost on each model this install used.
+    key = {**info, "measured": measured_costs(settings.get("parse_costs"))}
 
     if not catalogue:
         return jsonify({"models": [], "auto": None, "available": False,
-                        "recommended": [], "funded": funded})
-    models = [{"id": m["id"],
-               "name": m.get("name") or m["id"],
-               "context_length": m.get("context_length") or 0}
-              for m in usable_models(catalogue)]
+                        "recommended": [], "funded": funded, "key": key})
+    # A key with credit runs on a paid model (resolve_model), so the free
+    # list is not offered and Automatic names the paid pick. Without credit
+    # — including a weekly limit used up — Automatic is free-only, as it
+    # must be on a fresh install.
+    paid = pick_paid_model(catalogue) if funded else None
+    models = [] if paid else [
+        {"id": m["id"], "name": m.get("name") or m["id"],
+         "context_length": m.get("context_length") or 0}
+        for m in usable_models(catalogue)]
+    saved = (settings.get("or_model") or "").strip()
     return jsonify({"models": models,
-                    # Automatic is FREE-ONLY, by design: it must work on
-                    # a fresh install with an unfunded key, and it must
-                    # never start spending without being asked.
-                    "auto": pick_default_model(catalogue),
+                    "auto": paid or pick_default_model(catalogue),
+                    # A free model saved from before the key had credit:
+                    # parses already run on `auto`, so the page moves the
+                    # setting to Automatic to show that.
+                    "free_saved": bool(paid and saved in free_model_ids(catalogue)),
                     "recommended": recommended_models(catalogue) if funded
                                    else [],
                     "funded": funded,
+                    "key": key,
                     "available": True})
 
 
