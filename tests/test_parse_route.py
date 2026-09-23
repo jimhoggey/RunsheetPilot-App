@@ -561,13 +561,13 @@ def test_without_credit_a_failed_parse_is_not_sent_again(
 _RUNSHEET = json.dumps({"items": [{"type": "other", "title": "Welcome"}]})
 
 
-@pytest.mark.parametrize("first", ["", "I could not find a runsheet here."])
 def test_a_text_reply_that_isnt_json_still_gets_the_pdf_read(
-        parse_client, isolated_state, monkeypatch, first):
+        parse_client, isolated_state, monkeypatch):
     _catalogue(monkeypatch, funded=True)
-    r = _post_responses(parse_client, [_FakeResponse(first),
-                                       _FakeResponse(_RUNSHEET)])
-    assert r.get_json().get("read_pdf") is True
+    for first in ("", "I could not find a runsheet here."):
+        r = _post_responses(parse_client, [_FakeResponse(first),
+                                           _FakeResponse(_RUNSHEET)])
+        assert r.get_json().get("read_pdf") is True, repr(first)
 
 
 def test_when_both_replies_are_prose_the_error_quotes_the_model(
