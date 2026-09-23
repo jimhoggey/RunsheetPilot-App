@@ -228,7 +228,7 @@ The app stores its config and logs **outside** the source tree so they survive a
 | Mac | `~/Library/Application Support/Runsheet Pilot/` |
 | Windows | `%APPDATA%\Runsheet Pilot\` |
 
-Files in there: `settings.json` (includes your OpenRouter API key — gitignored, never committed), `app.log` (rotated, 512 KB × 3), `runsheet_state.json` (Service Mate cue state), `clocks.json` (Service Mate clock IPs).
+Files in there: `settings.json` (includes your OpenRouter API key — gitignored, never committed), `app.log` (rotated, 512 KB × 3), `runsheet_state.json` (Service Mate cue state), `clocks.json` (Service Mate clock IPs), and `playlist_backups/` — a copy of each playlist taken right before "Update an existing playlist" writes to it, as JSON plus a plain-text list of the item names. These hold your playlist and media names; like everything else here they stay on your machine. The newest 20 are kept.
 
 ## Anonymous usage stats
 

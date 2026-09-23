@@ -68,6 +68,13 @@ _HDR_PAREN_TIME_RE = re.compile(
     r"\s*\(\s*\d{1,2}:\d{2}\s*[AaPp][Mm]\s*\)\s*$"
 )
 _HDR_BOOK_RE = re.compile(r"^📖\s*")
+# Update mode marks a header it could not line up with existing media so
+# the operator can spot it in PP and drag it into place. It must be
+# stripped here too: this matcher scores a live PP header against the
+# runsheet title with difflib at a 0.6 threshold, and every decoration
+# left on the name drags that ratio down on a playlist update mode has
+# just made trackable.
+_HDR_UNPLACED_RE = re.compile(r"^[↕⇅]\s*")
 
 
 def _clean_header_name(name: str) -> str:
@@ -77,6 +84,7 @@ def _clean_header_name(name: str) -> str:
         return ""
     s = name
     s = _HDR_ACTION_RE.sub("", s)
+    s = _HDR_UNPLACED_RE.sub("", s)
     s = _HDR_BOOK_RE.sub("", s)
     s = _HDR_TIME_TAIL_RE.sub("", s)
     s = _HDR_PAREN_TIME_RE.sub("", s)

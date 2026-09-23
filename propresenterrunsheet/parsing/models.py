@@ -31,6 +31,7 @@ the pool to a single model for no present benefit.
 
 import logging
 import math
+import re
 import time
 
 log = logging.getLogger("pp_runsheet")
@@ -170,6 +171,39 @@ def next_usable_model(current: str, catalogue: dict):
     if current in ids:
         ids = ids[ids.index(current) + 1:]
     return next((i for i in ids if i != current), None)
+
+
+# "Upstream error from Nvidia: Service temporarily overloaded" → "Nvidia".
+_UPSTREAM_NAME_RE = re.compile(r"Upstream error from ([^:]{1,40}):")
+
+
+def provider_failure(resp):
+    """{"provider", "code"} when OpenRouter relays an upstream provider's
+    failure, else None. It comes in two shapes, both seen live:
+
+      • an error status naming `metadata.provider_name` (Darkbloom's 401,
+        2026-08-03). A real key rejection never names a provider.
+      • HTTP 200 with `error` instead of `choices` ("Upstream error from
+        Nvidia: Service temporarily overloaded", 2026-09-22). A 2xx means
+        the key, credit and model were accepted, so it is the provider's.
+    """
+    try:
+        body = resp.json()
+        err = body["error"]
+        provider = (err.get("metadata") or {}).get("provider_name")
+    except Exception:           # not JSON, or no error object: not ours
+        return None
+    status = getattr(resp, "status_code", 200)
+    if status < 400:
+        if body.get("choices"):
+            return None
+        named = _UPSTREAM_NAME_RE.search(str(err.get("message") or ""))
+        provider = provider or (named and named.group(1)) or "the model's provider"
+    if not provider:
+        return None
+    code = err.get("code")
+    return {"provider": provider,
+            "code": code if isinstance(code, int) else status}
 
 
 # With credit on the key, Automatic and any free pick run on these, first

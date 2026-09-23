@@ -11,6 +11,7 @@ the operator can quickly find the right timer at the right moment in
 PP's timer panel."""
 
 import logging
+import re
 
 from ..logging_setup import log_safe
 
@@ -52,9 +53,29 @@ def _delete_existing_rb_timers(base: str) -> int:
     return deleted
 
 
-def _create_pp_timers(base: str, playlist_name: str, matched: list) -> dict:
+# What "key parts only" keeps (a setting): the sermon, the worship block
+# and any games — the stretches someone on stage actually runs to time.
+# A notice never counts, and an MC moment that merely mentions worship
+# ("Land Worship - Priya") doesn't either; games led by named people are
+# often typed as the MC, and still count.
+_GAMES_RE = re.compile(r"\bgames?\b", re.IGNORECASE)
+_WORSHIP_RE = re.compile(r"\b(worship|preach(?:ing)?|sermon)\b", re.IGNORECASE)
+
+
+def is_key_part(parsed: dict) -> bool:
+    ptype = (parsed.get("type") or "").lower()
+    title = parsed.get("title") or ""
+    if ptype in ("sermon", "announcement"):
+        return ptype == "sermon"
+    return bool(_GAMES_RE.search(title)) or (
+        ptype != "mc_on_stage" and bool(_WORSHIP_RE.search(title)))
+
+
+def _create_pp_timers(base: str, playlist_name: str, matched: list,
+                      key_only: bool = False) -> dict:
     """Cleanup previous [RB] timers, then create one *duration-based* countdown
-    timer in PP for every matched item that has a duration.
+    timer in PP for every matched item that has a duration — or, with
+    `key_only`, for the key parts alone (see is_key_part).
 
     See the module docstring for why timers are duration-based.
 
@@ -78,6 +99,8 @@ def _create_pp_timers(base: str, playlist_name: str, matched: list) -> dict:
         if ptype in ("song", "scripture"):
             # Songs are presentations (PP shows song length naturally);
             # scripture is brief; skip both for timer creation.
+            continue
+        if key_only and not is_key_part(p):
             continue
         total_items += 1
         dur_min = _extract_duration_min(p)

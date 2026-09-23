@@ -5,6 +5,22 @@
 .playlist file to the user's chosen folder, optionally creates [RB]
 countdown timers, and persists the Service Mate runsheet state.
 
+/api/update_playlist is the other direction: the operator already built
+a playlist full of media, and all they want from Runsheet Pilot is the
+runsheet's coloured section headers woven into it. It never creates,
+never removes, and re-orders only when the operator says yes to putting
+the playlist in runsheet order — see propresenter/playlist_update.py
+for the merge and propresenter/update_safety.py for the snapshot and
+rollback that surround the write.
+
+The two are deliberately separate routes rather than a mode flag on
+one. Their doctrines are inverted: when ProPresenter refuses the items,
+create strips the unlinkable ones and carries on, because the operator
+must end up with a playlist; update aborts with nothing written,
+because the operator already HAS one and it is the thing at risk.
+Threading a flag through create's recovery ladder is how the
+destructive path would inherit the forgiving path's instincts.
+
 /api/test_connection is a one-call ping to PP's /v1/libraries — used
 by the sidebar's "Test connection" button."""
 
@@ -21,18 +37,31 @@ from flask import Blueprint, jsonify, request
 from .flags import matching_enabled
 from .. import stats
 from ..logging_setup import log_safe
-from ..propresenter.media_bin import fetch_media_bin, relink_media
+from ..propresenter.media_bin import (
+    fetch_media_bin, relink_media, unresolvable_media,
+)
 from ..propresenter.discovery import resolve_port
 from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_playlist_dir, find_pp_root
 from ..propresenter.playlist import build_playlist_payload
+from ..propresenter.playlist_update import (
+    build_update_payload, is_header, is_placed_header,
+    verify_content_preserved, visible_signature,
+)
+from ..propresenter import update_safety as safety
+from ..propresenter.thumbnails import ocr_playlist_media
+from ..parsing.align import align_playlist
+from ..parsing.models import fetch_catalogue, next_usable_model, resolve_model
+from ..propresenter.update_safety import UpdateAborted
 from ..propresenter.templates import (
-    auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlists,
-    playlist_to_objects, playlist_to_sections, resolve_object,
-    resolve_with_aliases,
+    auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlist_raw,
+    fetch_pp_playlists, playlist_to_objects, playlist_to_sections,
+    resolve_object, resolve_with_aliases, template_uuids,
 )
 from ..propresenter.timers import _create_pp_timers
-from ..service_mate.state import _ensure_item_cues, _write_runsheet_state
+from ..service_mate.state import (
+    _ensure_item_cues, _read_runsheet_state, _write_runsheet_state,
+)
 
 
 bp = Blueprint("playlist", __name__)
@@ -129,6 +158,47 @@ def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
     except Exception:
         log.exception("Create-time template re-match failed; continuing")
         return 0
+
+
+def _write_sm_state(name, matched, timer_result, keep_position=False) -> None:
+    """Persist the Service Mate runsheet state — what the GeekMagic clocks
+    display on the LAN. We strip the "match" wrappers and keep only the
+    parsed items, plus stamp each item with the exact PP timer name we
+    created for it (so auto-track can match by name later).
+
+    Shared by create and update mode. `keep_position` is update mode's
+    concession to being run mid-service: when the item list is unchanged
+    from what is already on disk, the live clock's position is preserved,
+    so re-running at 10:05 to fix one header does not send every clock
+    in the building back to the top of the service. Never fatal — clocks
+    are an add-on and a failure here must not fail the playlist."""
+    try:
+        timer_names = (timer_result or {}).get("timer_names") or {}
+        sm_items = []
+        for i, mi in enumerate(matched):
+            p = dict((mi.get("parsed") or {}))
+            if i in timer_names:
+                p["pp_timer_name"] = timer_names[i]
+            _ensure_item_cues(p)
+            sm_items.append(p)
+        current_index, started_at = 0, _dt.datetime.now().isoformat()
+        if keep_position:
+            prev = _read_runsheet_state() or {}
+            prev_titles = [(it or {}).get("title")
+                           for it in (prev.get("items") or [])]
+            if prev_titles == [it.get("title") for it in sm_items]:
+                current_index = prev.get("current_index", 0) or 0
+                started_at = prev.get("current_started_at") or started_at
+        _write_runsheet_state({
+            "service_name":       name,
+            "items":              sm_items,
+            "current_index":      current_index,
+            "current_started_at": started_at,
+            "auto_track":         {"enabled": True},
+        })
+        log.info(f"Service Mate state written: {len(sm_items)} items")
+    except Exception:
+        log.exception("Service Mate state write failed (non-fatal)")
 
 
 @bp.route("/api/create_playlist", methods=["POST"])
@@ -330,32 +400,12 @@ def api_create_playlist():
         timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
                         "total_items": 0, "errors": [], "timer_names": {}}
         if body.get("create_timers"):
-            timer_result = _create_pp_timers(base, name, matched)
+            timer_result = _create_pp_timers(
+                base, name, matched, key_only=bool(body.get("timers_key_only")))
 
         # 6. Persist Service Mate runsheet state — what the GeekMagic clocks
-        # display on the LAN. We strip the "match" wrappers and keep only the
-        # parsed items, plus stamp each item with the exact PP timer name we
-        # created for it (so auto-track can match by name later).
-        try:
-            timer_names = (timer_result or {}).get("timer_names") or {}
-            sm_items = []
-            for i, mi in enumerate(matched):
-                p = dict((mi.get("parsed") or {}))
-                if i in timer_names:
-                    p["pp_timer_name"] = timer_names[i]
-                _ensure_item_cues(p)
-                sm_items.append(p)
-            sm_state = {
-                "service_name":       name,
-                "items":              sm_items,
-                "current_index":      0,
-                "current_started_at": _dt.datetime.now().isoformat(),
-                "auto_track":         {"enabled": True},
-            }
-            _write_runsheet_state(sm_state)
-            log.info(f"Service Mate state written: {len(sm_items)} items")
-        except Exception:
-            log.exception("Service Mate state write failed (non-fatal)")
+        # display on the LAN.
+        _write_sm_state(name, matched, timer_result)
 
         log.info(f"Playlist created: '{log_safe(name)}' → {songs} songs, "
                  f"{headers} headers, "
@@ -527,19 +577,586 @@ def api_pp_playlists():
     # For every playlist, count how many sections it would give us if
     # used as a template. Operators glance at this to spot their actual
     # template playlist vs. a one-shot service playlist.
+    #
+    # `item_count` / `header_count` are what the UPDATE picker reads. A
+    # hand-built service playlist has no sections at all, so without
+    # them every option in update mode would read "(no sections)" — the
+    # picker would carry no information in the one mode it exists for.
+    # The items are already fetched for the sections peek, so this costs
+    # no extra HTTP.
+    #
+    # `is_template` separates the playlists the app builds runsheets FROM
+    # (named "… Library" / "… Template", or pinned by the operator) from
+    # everything else, so the dropdown can group them instead of burying
+    # three templates among forty services.
+    from ..settings import load_settings
+    pinned = ((load_settings() or {}).get("template_playlist_uuid") or "")
+    templates = template_uuids(playlists, pinned)
+    named = template_uuids(playlists)          # by name alone, no pin
     enriched = []
     for p in playlists:
         try:
-            sections = playlist_to_sections(
-                fetch_pp_playlist_items(base, p["uuid"]))
+            raw = fetch_pp_playlist_items(base, p["uuid"])
+            sections = playlist_to_sections(raw)
         except Exception:
             log.exception("sections peek failed for %s",
                           log_safe(repr(p.get("name"))))
-            sections = []
+            raw, sections = [], []
         enriched.append({
             **p,
             "section_count": len(sections),
             "media_count":   sum(len(s.get("items", [])) for s in sections),
+            "item_count":    sum(1 for it in raw
+                                 if isinstance(it, dict) and not is_header(it)),
+            "header_count":  sum(1 for it in raw
+                                 if isinstance(it, dict) and is_header(it)),
+            "is_template":   p["uuid"] in templates,
+            # Why it counts: its name, or because the operator pinned it.
+            # The dropdown says which, so a pinned oddly-named playlist
+            # doesn't look like a mistake.
+            "template_by":   ("name" if p["uuid"] in named
+                              else "pinned" if p["uuid"] in templates
+                              else ""),
         })
     auto = auto_detect_template_uuid(playlists) or ""
     return jsonify({"ok": True, "playlists": enriched, "auto_detected": auto})
+
+
+# ── Update an existing playlist ───────────────────────────────────────────
+# Everything below writes into a playlist the operator built by hand.
+# Read update_safety.py's module docstring before changing any of it.
+
+def _aliases():
+    from ..settings import load_settings
+    return (load_settings() or {}).get("template_aliases")
+
+
+def _runsheet(body: dict) -> list:
+    """The parsed runsheet from a request, lines only. Every index — the
+    model's, the placements', the slide reading's — counts these, so
+    anything that isn't a line is dropped here, once."""
+    matched = body.get("matched")
+    return [m for m in matched if isinstance(m, dict)] \
+        if isinstance(matched, list) else []
+
+
+def _resolve_target(base: str, client_uuid) -> tuple:
+    """The playlist to act on, as PROPRESENTER names it.
+
+    Returns `(uuid, name, playlists)` where `uuid` and `name` are PP's own
+    values, never the browser's. Two reasons, one safety and one
+    correctness:
+
+      • the id goes into a URL path on routes that PUT, so it is checked
+        (pp_id) and then swapped for PP's copy of it — see net.pp_id for
+        what an unchecked id could reach;
+      • a destructive write should only ever target a playlist
+        ProPresenter confirms exists right now.
+
+    `playlists` is returned so callers that need the full list (the
+    template warning) reuse this read instead of making a second one
+    that could fail on its own. A failed list read aborts: for a write
+    that replaces the playlist, "couldn't confirm it exists" is a stop."""
+    try:
+        want = pp_id(client_uuid)
+    except ValueError:
+        raise UpdateAborted("no_playlist",
+                            "Choose the playlist you want to add headers to.")
+    playlists = fetch_pp_playlists(base)
+    for p_ in playlists:
+        if p_.get("uuid") == want:
+            return p_["uuid"], p_.get("name") or "playlist", playlists
+    raise UpdateAborted(
+        "read_failed",
+        "Couldn't find that playlist in ProPresenter, so nothing was "
+        "changed. Check ProPresenter is running, press ↻ Refresh "
+        "playlists, then try again.")
+
+
+def _read_target(base: str, playlist_uuid: str) -> list:
+    """The playlist we are about to rewrite, or raise.
+
+    `playlist_uuid` must already be ProPresenter's own id (from
+    _resolve_target). `fetch_pp_playlist_raw` returns None for a failed
+    read and [] for a genuinely empty playlist, and that distinction is
+    the single most important line in this feature: reading a network
+    hiccup as "empty" and then PUTting headers against that belief
+    deletes every slide the operator owns."""
+    raw = fetch_pp_playlist_raw(base, playlist_uuid)
+    if raw is None:
+        raise UpdateAborted(
+            "read_failed",
+            "Couldn't read that playlist from ProPresenter, so nothing was "
+            "changed. Check ProPresenter is running, then try again.")
+    return raw
+
+
+def _sane_sections(raw_sections, n_runsheet: int, n_items: int) -> dict:
+    """The slide reading the client hands back, `{slide: runsheet line}`,
+    re-checked: whole numbers, in range.
+
+    The preview computes it and the write reuses it rather than calling
+    the model a second time — that keeps "press it twice" a genuine no-op,
+    and the operator confirms exactly the plan that gets written. It
+    arrives over HTTP, so nothing about it is trusted; the worst a forged
+    one can do is file slides under the wrong lines, because
+    runsheet_order only ever permutes the slides already there."""
+    out = {}
+    for pos, n in (raw_sections.items() if isinstance(raw_sections, dict) else ()):
+        try:
+            pos, n = int(pos), int(n)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= pos < n_items and 0 <= n < n_runsheet:
+            out[pos] = n
+    return out
+
+
+def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
+                 report: dict) -> tuple:
+    """Read every still and ask a model which runsheet line each slide
+    belongs to. Returns ({slide: line}, the model asked or None).
+
+    Media file names in a working playlist are often out of date, so a
+    name match is NOT a fact here: the model sees each item's name and
+    what its slide reads, and trusts the slide. The facts it works around
+    are the ones someone vouches for — an alias the operator taught, and
+    a song, whose .pro name is its title. Existing headers go in as
+    context rather than facts: when slides are moved around them, where
+    they sit stops meaning anything. Positions count only non-header
+    items, as the payload builder does; ProPresenter's own indexes count
+    headers too. Entirely best-effort: no key, model, OCR engine or
+    answer returns {}."""
+    from ..settings import load_settings
+    settings = load_settings() or {}
+    or_key = (settings.get("or_key") or "").strip()
+    at = [i for i, it in enumerate(raw) if isinstance(it, dict) and not is_header(it)]
+    kept = [raw[i] for i in at]
+    if not or_key or not kept:
+        return {}, None
+    known = {p["above_index"]: p["index"] for p in report.get("placements", [])
+             if p.get("above_index") is not None and p.get("via") != "recall"
+             and (p.get("via") == "alias"
+                  or (kept[p["above_index"]].get("type") or "").lower() == "presentation")}
+    if len(known) >= len(kept):
+        return known, None              # every slide already vouched for
+    catalogue = fetch_catalogue()
+    model = resolve_model((settings.get("or_model") or "").strip(), catalogue,
+                          api_key=or_key)       # a paid key runs on a paid model
+    if not model:
+        return {}, None
+    read = ocr_playlist_media(base, playlist_uuid, raw)     # by PP's index
+    slide_text = {pos: read[i] for pos, i in enumerate(at) if i in read}
+    context = [it for it in raw if isinstance(it, dict)
+               and (not is_header(it) or is_placed_header(it))]
+    found = align_playlist(matched, context, slide_text, known, is_header,
+                           or_key, model,
+                           backup=next_usable_model(model, catalogue))
+    return ({**found, **known} if found else {}), model
+
+
+def _plan_update(base: str, playlist_uuid: str, matched: list,
+                 sections=None, use_ai: bool = False,
+                 reorder: bool = False) -> dict:
+    """Work out the new playlist without sending anything.
+
+    One engine for both the preview and the write, so what the operator
+    confirms is what gets sent — a preview computed by different code
+    from the write is a preview of nothing. `sections` is a slide reading
+    the client hands back from the preview; `reorder` is the operator's
+    yes to putting the playlist in runsheet order."""
+    playlist_uuid, playlist_name, playlists = _resolve_target(
+        base, playlist_uuid)
+    raw = _read_target(base, playlist_uuid)
+    aliases = _aliases()
+    sections = _sane_sections(sections, len(matched),
+                              sum(1 for it in raw if isinstance(it, dict)
+                                  and not is_header(it)))
+    ai_model = None
+    if use_ai and not sections:
+        # Asked even when the names placed everything: a stale name
+        # "matches" just as confidently as a right one. A first pass
+        # without the model says which placements are vouched for.
+        _, first = build_update_payload(raw, matched, aliases)
+        sections, ai_model = _ai_sections(base, playlist_uuid, raw, matched,
+                                          first)
+    items, report = build_update_payload(raw, matched, aliases, sections,
+                                         reorder)
+    return {
+        "uuid":         playlist_uuid,       # ProPresenter's, not the client's
+        "name":         playlist_name,
+        "playlists":    playlists,
+        "raw":          raw,
+        "items":        items,
+        "report":       report,
+        "sections":     sections,
+        "ai_model":     ai_model,            # the model that read the slides
+        "fingerprint":  safety.fingerprint(raw),
+        # Clicking the button twice is the most common operator
+        # behaviour there is, and the safest destructive write is the
+        # one that never happens. Compared on what is VISIBLE — PP
+        # re-mints every id on every write, see visible_signature.
+        "no_change":    visible_signature(items) == visible_signature(raw),
+    }
+
+
+def _bin_preflight(base: str, raw: list) -> list:
+    """Media in this playlist that ProPresenter's Media bin doesn't know
+    about — read-only, and advisory rather than a gate.
+
+    PP resolves media in a playlist PUT by NAME against the Media bin
+    (see media_bin.py). Whether it also refuses media it just handed us
+    back out of that same playlist has not been established against a
+    live install, so this warns and lets the operator decide instead of
+    blocking a playlist that may well write fine. The snapshot and the
+    rollback are what make that an acceptable bet.
+
+    `relink_media` is deliberately NOT called here, ever: it rewrites
+    items onto the bin's identity and DELETES the ones with no
+    counterpart. Against a template's suggestion that discards a guess;
+    against the operator's own playlist it is precisely the data loss
+    this feature exists to prevent."""
+    names = [((it.get("id") or {}).get("name") or "").strip()
+             for it in raw or []
+             if isinstance(it, dict) and (it.get("type") or "").lower() == "media"]
+    bin_items = fetch_media_bin(base)
+    if not bin_items:
+        # [] is indistinguishable from a PP hiccup — say nothing rather
+        # than accuse every slide of being missing.
+        return []
+    return unresolvable_media(names, bin_items)
+
+
+@bp.route("/api/update_playlist/preview", methods=["POST"])
+def api_update_playlist_preview():
+    """The plan, and not one byte written.
+
+    The preview is not decoration. The write replaces a playlist the
+    operator assembled by hand, so they see where every header is going
+    and confirm it first."""
+    body = request.get_json(silent=True) or {}
+    base = pp_base(body.get("host") or "localhost",
+                   body.get("port") or "50001")
+    playlist_uuid = (body.get("playlist_uuid") or "").strip()
+    matched = _runsheet(body)
+    if not matched:
+        return jsonify({"error": "Parse a runsheet first."}), 200
+    try:
+        plan = _plan_update(base, playlist_uuid, matched,
+                            sections=body.get("ai_sections"),
+                            use_ai=bool(body.get("use_ai")),
+                            reorder=bool(body.get("reorder")))
+    except UpdateAborted as e:
+        return jsonify({"ok": False, "error": e.message,
+                        "reason": e.reason}), 200
+    except Exception as e:
+        log.exception("update preview failed")
+        stats.report_error(e, where_kind="route", route="update_preview")
+        return jsonify({"ok": False, "reason": "unexpected", "error":
+            "Couldn't work out the changes for that playlist."}), 200
+    # A slide reading handed back is slide POSITIONS in the playlist it was
+    # read from. Applied to a playlist that has changed since, it files the
+    # wrong slides — so the reorder question's answer carries the reading's
+    # fingerprint, and a changed playlist stops here.
+    expect = body.get("expect_fingerprint")
+    if expect is not None and expect != plan["fingerprint"]:
+        return jsonify({"ok": False, "reason": "concurrent_edit", "error":
+            "ProPresenter changed while this was on screen, so nothing was "
+            "changed. Press Add Section Headers again."}), 200
+
+    warnings = []
+    active = safety.active_playlist_uuid(base)
+    if active and active == plan["uuid"]:
+        warnings.append("live")
+    # Update mode replaces every header, and a template's headers ARE its
+    # sections — the thing create mode reads to find "Welcome", "Culture"
+    # and the rest. Organising a template by mistake would quietly break
+    # next week's build. Not blocked (the operator asked for every
+    # playlist to be available here), but said out loud before confirm.
+    #
+    # Uses the playlist list the plan already read to confirm the target
+    # exists, so this check cannot fail open on a second read of its own:
+    # if that list could not be read, the plan aborted before we got here.
+    from ..settings import load_settings
+    pinned = ((load_settings() or {}).get("template_playlist_uuid") or "")
+    if plan["uuid"] in template_uuids(plan["playlists"], pinned):
+        warnings.append("template")
+    if any(it.get("is_pco") for it in plan["raw"] if isinstance(it, dict)):
+        warnings.append("pco")
+    unbinned = _bin_preflight(base, plan["raw"])
+    if unbinned:
+        log.info("Media not in PP's Media bin for update: %s",
+                 log_safe(", ".join(unbinned)))
+
+    rep = plan["report"]
+    # Out of runsheet order: what yes would look like, for the question.
+    new_order = []
+    if rep["out_of_order"] and not rep["moved"]:
+        alt, _ = build_update_payload(plan["raw"], matched, _aliases(),
+                                      plan["sections"], reorder=True)
+        new_order = [[is_header(it), ((it.get("id") or {}).get("name") or "")]
+                     for it in alt]
+    return jsonify({
+        "ok":          True,
+        "no_change":   plan["no_change"],
+        "fingerprint": plan["fingerprint"],
+        "unbinned":    unbinned,
+        "warnings":    warnings,
+        # Handed back so the write reuses this exact reading instead of
+        # calling the model again. Re-asking would cost a second request,
+        # could answer differently, and would mean the operator confirmed
+        # a plan that is not the one sent.
+        "ai_sections": plan["sections"],
+        "ai_model":    plan["ai_model"],
+        "new_order":   new_order,
+        **{k: rep[k] for k in
+           ("anchored", "by_recall", "by_alias", "by_ai", "by_name",
+            "unplaced", "headers_added", "headers_removed", "content_count",
+            "placements", "out_of_order", "moved")},
+    })
+
+
+@bp.route("/api/update_playlist", methods=["POST"])
+def api_update_playlist():
+    """Weave the runsheet's headers into an existing playlist.
+
+    Order is load-bearing. Every guard runs BEFORE the snapshot, the
+    snapshot is on disk before the PUT, and the read-back happens
+    whatever status code came back — a 400 is not a promise that
+    nothing was applied."""
+    import requests as req
+    body = request.get_json(silent=True) or {}
+    host = body.get("host") or "localhost"
+    port = body.get("port") or "50001"
+    base = pp_base(host, port)
+    playlist_uuid = (body.get("playlist_uuid") or "").strip()
+    matched = _runsheet(body)
+    force = bool(body.get("force"))
+    before = time.time()
+    snap_path = None
+
+    if not matched:
+        return jsonify({"error": "Parse a runsheet first."}), 200
+
+    def _abort(reason, message, **extra):
+        log.info("Update refused (%s) — nothing written", reason)
+        stats.track("playlist_update_failed", reason=reason,
+                    items=len(matched))
+        return jsonify({"ok": False, "error": message, "reason": reason,
+                        **extra}), 200
+
+    try:
+        # No `use_ai` here on purpose: the write reuses the reading the
+        # operator just confirmed in the preview. Calling the model again
+        # could return a different answer than the one on screen.
+        plan = _plan_update(base, playlist_uuid, matched,
+                            sections=body.get("ai_sections"),
+                            reorder=bool(body.get("reorder")))
+        # From here on only ProPresenter's own id and name are used — in
+        # the URL, the snapshot filename, the rollback and the logs. The
+        # client's strings stop at _resolve_target.
+        playlist_uuid, playlist_name = plan["uuid"], plan["name"]
+        service_name = (body.get("name") or "").strip() or playlist_name
+
+        # Guards. Each one aborts with NOTHING sent.
+        if plan["no_change"]:
+            return jsonify({"ok": True, "no_change": True,
+                            "headers_added": plan["report"]["headers_added"]})
+        if not force:
+            active = safety.active_playlist_uuid(base)
+            if active and active == playlist_uuid:
+                return _abort("playlist_active",
+                    "That playlist is live in ProPresenter right now, so "
+                    "nothing was changed. Switch away from it first, or "
+                    "choose Update anyway.")
+        expect = body.get("expect_fingerprint")
+        if expect is not None and expect != plan["fingerprint"]:
+            return _abort("concurrent_edit",
+                "ProPresenter changed while this was on screen, so nothing "
+                "was changed. Press Update again to see the new plan.")
+
+        # Snapshot, then write. From here on something may have changed
+        # in ProPresenter, and every message has to be honest about it.
+        snap_path = safety.write_snapshot(
+            playlist_uuid, playlist_name, plan["raw"])
+        r = req.put(f"{base}/v1/playlist/{playlist_uuid}",
+                    json=plan["items"], timeout=10)
+        http_ok = r.status_code < 400
+
+        # Read back ALWAYS — a refusal is not proof that nothing landed.
+        # Checked against what was SENT: the same slides, in the order
+        # the operator chose (theirs, or the runsheet's if they said yes).
+        after = fetch_pp_playlist_raw(base, playlist_uuid)
+        if after is None:
+            check = {"ok": False, "missing": [], "extra": [],
+                     "reordered": False}
+        else:
+            check = verify_content_preserved(plan["items"], after)
+
+        if not http_ok or not check["ok"]:
+            # `check` carries media NAMES pulled straight out of
+            # ProPresenter; a CR/LF in an asset name would forge a log
+            # line, which is exactly what log_safe exists to stop.
+            log.error("Update rejected or unverified (HTTP %s, ok=%s, "
+                      "missing=%s, extra=%s, reordered=%s) — rolling back",
+                      r.status_code, check["ok"],
+                      log_safe(", ".join(check["missing"]), 200),
+                      log_safe(", ".join(check["extra"]), 200),
+                      check["reordered"])
+            rb = safety.rollback(base, playlist_uuid, plan["raw"])
+            if rb["verified"]:
+                safety.mark_snapshot(snap_path, "rolled_back")
+                stats.track("playlist_update_failed",
+                            reason="rolled_back", items=len(matched))
+                return jsonify({"ok": False, "rolled_back": True,
+                    "rollback_verified": True,
+                    "snapshot_path": str(snap_path),
+                    "reason": "pp_refused" if not http_ok else "verify_failed",
+                    "error":
+                        "ProPresenter wouldn't accept the change, so your "
+                        f"playlist was put back exactly as it was — all "
+                        f"{plan['report']['content_count']} items, same "
+                        "order, checked. Nothing was lost."})
+            stats.track("playlist_update_failed", reason="rollback_failed",
+                        items=len(matched))
+            return jsonify({"ok": False, "rolled_back": True,
+                "rollback_verified": False,
+                "snapshot_path": str(snap_path),
+                "snapshot_items": [
+                    ((it.get("id") or {}).get("name") or "").strip()
+                    for it in plan["raw"] if isinstance(it, dict)],
+                "reason": "rollback_failed",
+                "error":
+                    "Something went wrong saving the playlist and it could "
+                    "not be put back automatically. Don't close Runsheet "
+                    "Pilot. A copy of the playlist as it was is saved on "
+                    "this machine — the file is named below, and "
+                    "ProPresenter's own autosave may still hold the "
+                    "previous version too."}), 200
+
+        safety.mark_snapshot(snap_path, "verified")
+        safety.prune_snapshots()
+
+        # Timers and clocks: both independent of the playlist write, and
+        # both honour the same switches create mode does.
+        timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
+                        "total_items": 0, "errors": [], "timer_names": {}}
+        if body.get("create_timers"):
+            timer_result = _create_pp_timers(
+                base, service_name, matched,
+                key_only=bool(body.get("timers_key_only")))
+        _write_sm_state(service_name, matched, timer_result,
+                        keep_position=True)
+
+        rep = plan["report"]
+        log.info("Playlist updated: %r → +%d headers (%d placed, %d marked), "
+                 "%d old headers replaced, %d items preserved",
+                 log_safe(playlist_name), rep["headers_added"],
+                 rep["anchored"], rep["unplaced"], rep["headers_removed"],
+                 rep["content_count"])
+        stats.track("playlist_updated",
+                    import_ms=int((time.time() - before) * 1000),
+                    content_items=rep["content_count"],
+                    headers_added=rep["headers_added"],
+                    headers_removed=rep["headers_removed"],
+                    anchored=rep["anchored"],
+                    by_recall=rep["by_recall"],
+                    by_alias=rep["by_alias"],
+                    by_ai=rep["by_ai"],
+                    unplaced=rep["unplaced"],
+                    moved=rep["moved"],
+                    timers=timer_result["created"])
+        return jsonify({
+            "ok":                 True,
+            "content_preserved":  True,
+            "snapshot_path":      str(snap_path),
+            "headers_added":      rep["headers_added"],
+            "headers_removed":    rep["headers_removed"],
+            "anchored":           rep["anchored"],
+            "by_recall":          rep["by_recall"],
+            "by_alias":           rep["by_alias"],
+            "by_ai":              rep["by_ai"],
+            "by_name":            rep["by_name"],
+            "unplaced":           rep["unplaced"],
+            "content_count":      rep["content_count"],
+            "moved":              rep["moved"],
+            "timers_created":     timer_result["created"],
+            "timers_deleted":     timer_result["deleted"],
+            "timers_no_duration": timer_result["no_duration"],
+            "timers_total_items": timer_result["total_items"],
+            "timer_errors":       timer_result["errors"],
+        })
+
+    except UpdateAborted as e:
+        return _abort(e.reason, e.message)
+    except req.exceptions.ConnectionError:
+        return _abort("pp_unreachable",
+            f"Cannot connect to ProPresenter at {host}:{port}. Nothing was "
+            "changed. Make sure ProPresenter is running and Network is "
+            "enabled in Preferences → Integrations → Network.")
+    except Exception as e:
+        log.exception("Playlist update failed")
+        stats.report_error(e, where_kind="route", route="update_playlist")
+        # Never hand the exception text out — it carries paths and
+        # internals and tells a volunteer nothing they can act on.
+        return _abort("unexpected",
+            "Something went wrong while updating that playlist."
+            + (f" A backup was saved first: {snap_path}" if snap_path else
+               " Nothing was changed."),
+            snapshot_path=str(snap_path) if snap_path else "")
+
+
+@bp.route("/api/restore_playlist", methods=["POST"])
+def api_restore_playlist():
+    """Put a snapshot back — the Undo behind the result notice.
+
+    Wiping the operator's own section headers is the one part of update
+    mode that cannot be undone by running it again, so the undo is a
+    button rather than a support email."""
+    body = request.get_json(silent=True) or {}
+    base = pp_base(body.get("host") or "localhost",
+                   body.get("port") or "50001")
+    path = (body.get("snapshot_path") or "").strip()
+    if not path:
+        return jsonify({"ok": False, "error": "No backup to restore."}), 200
+    try:
+        # load_snapshot only reads inside the backups folder — the path
+        # came over HTTP, and see snapshot_file for what it could reach.
+        snap = safety.load_snapshot(path)
+    except ValueError:
+        log.info("Restore refused a path outside the backups folder")
+        return jsonify({"ok": False, "error":
+            "That isn't one of Runsheet Pilot's playlist backups."}), 200
+    except Exception:
+        log.exception("snapshot read failed")
+        return jsonify({"ok": False, "error":
+            "That backup file couldn't be read."}), 200
+    # The SNAPSHOT decides which playlist it goes back into — never the
+    # dropdown. The result notice with its Undo button survives a change
+    # of selection, so trusting the client's uuid meant undoing playlist
+    # A after selecting playlist B would write A's contents over B. That
+    # is the same class of harm this whole feature is built to avoid,
+    # arrived at through the one control the operator reaches for when
+    # something already went wrong.
+    try:
+        uuid = pp_id(snap.get("playlist_uuid"))
+    except ValueError:
+        return jsonify({"ok": False, "error":
+            "That backup doesn't say which playlist it came from."}), 200
+    asked = (body.get("playlist_uuid") or "").strip()
+    if asked and asked != uuid:
+        log.info("Restore target differs from the snapshot's playlist — "
+                 "using the snapshot's")
+        return jsonify({"ok": False, "error":
+            "That backup is for a different playlist than the one now "
+            "selected. Nothing was changed — reselect the playlist you "
+            "updated, then undo."}), 200
+    rb = safety.rollback(base, uuid, snap.get("items") or [])
+    if rb["verified"]:
+        safety.mark_snapshot(path, "rolled_back")
+        n = len(snap.get("items") or [])
+        return jsonify({"ok": True, "error": "", "restored": n, "message":
+            f"Put back as it was — all {n} items, same order, checked."})
+    return jsonify({"ok": False, "error":
+        "ProPresenter didn't accept the restore. The backup file is still "
+        "on this machine, so nothing is lost — try again in a moment."}), 200

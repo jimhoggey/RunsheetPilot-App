@@ -74,3 +74,33 @@ def test_the_parser_still_recognises_both_notations():
     assert _norm("/api/settings/") == "/api/settings"
     assert len(_frontend_calls()) >= 15, "suspiciously few fetch() calls found"
     assert len(_flask_routes()) >= 15, "suspiciously few routes found"
+
+
+def test_no_filesystem_path_is_built_into_an_inline_onclick():
+    """A Windows path inside a single-quoted JS string is silently eaten.
+
+    The update flow hands the operator the absolute path of the backup it
+    took, and an "Undo this change" button beside it. Interpolating that
+    path into `onclick="restoreSnapshot('…')"` works on a Mac and is
+    unrecoverably broken on Windows: `escapeHtml` is an HTML escaper and
+    does not touch backslashes, so "…\\AppData\\Roaming\\playlist_backups\\x"
+    loses \\A, \\R and \\p and turns \\n into a real newline before the
+    handler ever runs. The operator then gets "that backup couldn't be
+    read" while the backup sits on disk — the one control that matters
+    after an update went wrong, dead on half the installs.
+
+    The rule this pins is narrow and mechanical: no generated onclick may
+    interpolate anything path-shaped. Values live in JS variables, not in
+    generated source.
+    """
+    if not APP_JS.exists():
+        pytest.skip("static/app.js not present")
+    src = APP_JS.read_text(encoding="utf-8")
+    offenders = []
+    for m in re.finditer(r'onclick="[^"]*\$\{([^}]*)\}[^"]*"', src):
+        expr = m.group(1)
+        if re.search(r"path|snapshot|dir|file", expr, re.IGNORECASE):
+            offenders.append(expr.strip())
+    assert not offenders, (
+        "a path is being interpolated into an inline onclick — hold it in a "
+        "JS variable instead:\n  " + "\n  ".join(offenders))

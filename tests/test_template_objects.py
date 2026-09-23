@@ -208,3 +208,20 @@ def test_no_aliases_behaves_exactly_like_resolve_object():
         hit = resolve_with_aliases("Welcome and Cards", _objs(), aliases)
         assert hit and hit["name"] == "Welcome"
     assert resolve_with_aliases("Nothing here", _objs(), []) is None
+
+
+# ── which playlists count as templates ────────────────────────────────────
+
+def test_template_uuids_is_the_name_rule_plus_the_pin():
+    """One definition drives the grouped dropdown AND update mode's
+    warning. A playlist counts if its name says so (what Auto considers)
+    or if the operator pinned it — pinning is the operator saying so."""
+    from propresenterrunsheet.propresenter.templates import template_uuids
+    pls = [{"uuid": "A", "name": "Sunday Morning Library"},
+           {"uuid": "B", "name": "Youth Template"},
+           {"uuid": "C", "name": "Service 21 Sep 2026"},
+           {"uuid": "D", "name": "Oddly Named Thing"}]
+    assert template_uuids(pls) == {"A", "B"}
+    assert template_uuids(pls, pinned="D") == {"A", "B", "D"}
+    # A pin that no longer exists in ProPresenter adds nothing.
+    assert template_uuids(pls, pinned="GONE") == {"A", "B"}

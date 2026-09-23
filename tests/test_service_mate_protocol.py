@@ -488,3 +488,15 @@ def test_ensure_item_cues_handles_empty_and_missing():
         for role in ("screen", "sound", "lights"):
             assert isinstance(out["cues"][role], list)
             assert all(isinstance(c, str) and c for c in out["cues"][role])
+
+
+def test_clean_header_name_strips_the_unplaced_mark():
+    """Update mode marks a header it could not line up with existing
+    media. Service Mate matches a live PP header back to a runsheet
+    title with difflib at a 0.6 threshold, so every decoration left on
+    the name drags that ratio down — on exactly the playlists update
+    mode has just made trackable."""
+    from propresenterrunsheet.service_mate.pp_track import _clean_header_name
+    assert _clean_header_name("↕ Offering & Announcements — 10:05 AM") \
+        == "Offering & Announcements"
+    assert _clean_header_name("↕ Preach") == "Preach"

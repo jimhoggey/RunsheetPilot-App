@@ -25,7 +25,7 @@ from ..parsing.ai import (
 )
 from ..parsing.models import (
     dollars, estimate_cost, fetch_catalogue, is_router, key_is_funded,
-    model_reading, next_usable_model, resolve_model,
+    model_reading, next_usable_model, provider_failure, resolve_model,
 )
 from .flags import matching_enabled
 from ..parsing.ocr import (
@@ -293,39 +293,6 @@ def _rejects_response_format(resp) -> bool:
         "structured output"))
 
 
-def _provider_failure(resp):
-    """Spot OpenRouter relaying an *upstream provider's* failure.
-
-    OpenRouter fronts other companies' inference. When the provider it
-    dispatched to fails, OpenRouter echoes the provider's status code with
-    the provider named in the body:
-
-        {"error": {"code": 401, "message": "Provider returned error",
-                   "metadata": {"provider_name": "Darkbloom", ...}}}
-
-    Confirmed live 2026-08-03: a Darkbloom credentials outage surfaced
-    exactly like that — as a 401 — while the operator's own key verified
-    fine at the same moment, and the handler below sent them off to rotate
-    it. `provider_name` is the discriminator: a genuine key rejection never
-    carries one, because the request dies at OpenRouter's own door before
-    any provider is involved.
-
-    Returns {"provider": ..., "code": ...} for provider-side failures, None
-    for everything else (2xx, real key/credit/model errors, bodies that
-    aren't even JSON).
-    """
-    if resp.status_code < 400:
-        return None
-    try:
-        err = resp.json().get("error") or {}
-        provider = (err.get("metadata") or {}).get("provider_name")
-    except Exception:
-        return None
-    if not provider:
-        return None
-    return {"provider": provider, "code": err.get("code") or resp.status_code}
-
-
 def _provider_failure_message(model: str, failure: dict,
                               backup: str = None,
                               backup_failure: dict = None) -> str:
@@ -578,7 +545,7 @@ def api_upload_and_parse():
         # Specific 4xx responses become friendly JSON errors (HTTP 200 so the
         # JS reads the message); everything else falls through to raise_for_status
         # and surfaces as a generic 500. But first: any error status can be
-        # OpenRouter relaying its *provider's* failure (see _provider_failure)
+        # OpenRouter relaying its *provider's* failure (see provider_failure)
         # — that is not the operator's key/credit/model-id problem, so it gets
         # one retry on the next-ranked free model and an honest message,
         # before the per-status mapping below gets a chance to misdiagnose it.
@@ -654,7 +621,7 @@ def api_upload_and_parse():
                      f"retrying without JSON mode")
             refused_json = model
             resp = _openrouter_post(model, json_mode=False, attach=lead)
-        failure = _provider_failure(resp)
+        failure = provider_failure(resp)
         if failure:
             backup = next_usable_model(model, fetch_catalogue())
             if not backup:
@@ -666,7 +633,7 @@ def api_upload_and_parse():
                         f"({log_safe(failure['provider'])} returned "
                         f"{failure['code']}) — retrying with {log_safe(backup)}")
             resp = _openrouter_post(backup)
-            backup_failure = _provider_failure(resp)
+            backup_failure = provider_failure(resp)
             if backup_failure:
                 stats.track("parse_failed", reason="provider_both",
                             model=model, code=int(

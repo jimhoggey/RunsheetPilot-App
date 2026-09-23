@@ -137,3 +137,28 @@ def relink_media(matched: list, bin_items: list) -> list:
         if not kept:
             parsed["library_match"] = None
     return unlinked
+
+
+def unresolvable_media(names, bin_items: list) -> list:
+    """The media names from `names` that are NOT in PP's Media bin.
+
+    The read-only half of this module. `relink_media` REWRITES items onto
+    the bin's identity and DROPS the ones with no counterpart — correct
+    when the items are a template's suggestion, catastrophic when they
+    are the operator's own hand-built playlist, which is what update mode
+    points at. Update mode calls this instead: same rule, same
+    normalisation, no mutation, so it can warn before writing rather than
+    delete after.
+
+    An EMPTY bin is treated as "nothing to say" by the caller, not "none
+    of it resolves" — `fetch_media_bin` returns [] on failure too, and
+    the two are indistinguishable from here."""
+    have = {_norm_name(b.get("name")) for b in bin_items or []}
+    out, seen = [], set()
+    for n in names or []:
+        key = _norm_name(n)
+        if not key or key in have or key in seen:
+            continue
+        seen.add(key)
+        out.append((n or "").strip())
+    return out
