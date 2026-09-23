@@ -190,6 +190,8 @@ creation in ProPresenter.
                 "Praise and Worship" and match the wrong file.
                 ⚠ DO NOT use "song" for items that mention a person's name —
                 those are MC moments, not songs.
+                ⚠ A slot that names no song ("Reprise Song", "Response
+                Song", "Song 2") is not a song either — prayer_and_ministry.
 
 ## SONGS HIDDEN IN A SECTION'S NOTES  ← read this carefully
 Many runsheets do NOT list songs as their own rows. Instead ONE row names
@@ -240,13 +242,13 @@ for them. Both layouts appear in the wild, sometimes in the same church;
 handle whichever the runsheet in front of you uses, and never emit the
 same song twice.
 
-- mc_on_stage   An MC / host on stage: landing worship, welcome and
-                connection cards, culture moments, interviews, transitions.
-                Often has a person's name with a dash.
-                Examples: "Land Worship - Priya", "Welcome and Connection
-                Cards", "Culture Moment - Generosity - Ps Sarah",
-                "Meeting Land and Recap - Chris", an interview segment.
-                A bare "Welcome" or "Close" line is the MC too.
+- mc_on_stage   An MC / host on stage: EVERY welcome and every close —
+                a plain "Welcome" or "Close" line too, with no name — plus
+                landing worship, connection cards, culture moments,
+                interviews, transitions. Often has a person's name with a dash.
+                Examples: "Welcome", "Land Worship - Priya", "Welcome and
+                Connection Cards", "Culture Moment - Generosity - Ps Sarah",
+                "Meeting Land and Recap - Chris", "Close", an interview.
 
 - announcement  Information given to the congregation.
                 Examples: "Junior Youth Out", "Upcoming Dates",
