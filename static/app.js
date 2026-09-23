@@ -2074,8 +2074,6 @@ async function _previewUpdate(target, extra, phases) {
 
 // The playlist isn't in runsheet order. The runsheet wins — but moving
 // someone's slides is theirs to say yes to, so ask before anything is sent.
-let _reorderReturnFocus = null;
-
 function _askToReorder(plan) {
   _updatePlan = plan;
   document.getElementById('reorder-text').textContent =
@@ -2084,7 +2082,6 @@ function _askToReorder(plan) {
   document.getElementById('reorder-list').innerHTML = (plan.new_order || [])
     .map(([header, name]) =>
       `<li${header ? ' class="is-header"' : ''}>${escapeHtml(name)}</li>`).join('');
-  _reorderReturnFocus = document.activeElement;
   document.getElementById('reorder-backdrop').classList.add('active');
   document.getElementById('reorder-yes').focus();
   setStatus('Your playlist isn’t in runsheet order.', 'var(--acc)');
@@ -2094,10 +2091,8 @@ function _closeReorder() {
   const bd = document.getElementById('reorder-backdrop');
   if (!bd || !bd.classList.contains('active')) return false;
   bd.classList.remove('active');
-  if (_reorderReturnFocus && typeof _reorderReturnFocus.focus === 'function') {
-    _reorderReturnFocus.focus();
-  }
-  _reorderReturnFocus = null;
+  // Back to the button that asked — it was busy, so nothing else held focus.
+  document.getElementById('create-btn').focus();
   return true;
 }
 
