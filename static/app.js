@@ -67,7 +67,7 @@ const AUTOSAVE_FIELDS = [
   'or-key', 'or-model', 'lib-dir', 'export-dir', 'sm-hide',
   'stats-enabled', 'auto-port', 'media-assist',
   'pp-host', 'pp-port', 'pp-host2', 'pp-port2', 'threshold',
-  'create-timers', 'template-playlist'
+  'create-timers', 'timers-key-only', 'template-playlist'
 ];
 
 // Rolling record of real parse durations (seconds), persisted in
@@ -342,6 +342,7 @@ async function loadSettings() {
   document.getElementById('threshold').value  = Math.round((s.threshold || .55) * 100);
   document.getElementById('thresh-val').textContent = document.getElementById('threshold').value + '%';
   document.getElementById('create-timers').checked = s.create_timers !== false;
+  document.getElementById('timers-key-only').checked = !!s.timers_key_only;
   _aliases = Array.isArray(s.template_aliases) ? s.template_aliases : [];
   renderAliasRows();
   _parseTimes = Array.isArray(s.parse_times) ? s.parse_times.slice(-10) : [];
@@ -445,6 +446,7 @@ async function saveSettings() {
     export_dir:              document.getElementById('export-dir').value,
     threshold:               parseInt(document.getElementById('threshold').value) / 100,
     create_timers:           document.getElementById('create-timers').checked,
+    timers_key_only:         document.getElementById('timers-key-only').checked,
     // _createTemplateUuid, never the live value: picking a playlist to
     // ORGANISE must not re-pin the template every future parse uses.
     template_playlist_uuid:  _createTemplateUuid,
@@ -1872,6 +1874,7 @@ async function createPlaylist() {
         matched:       matchedItems,
         export_dir:    document.getElementById('export-dir').value,
         create_timers: document.getElementById('create-timers').checked,
+        timers_key_only: document.getElementById('timers-key-only').checked,
         // The template parse resolved (or the one you pinned), NOT a bare
         // "Auto" for create to work out again from item titles. That
         // re-derivation is what let create re-attach a template parse had
@@ -1981,6 +1984,7 @@ function _updateBody(extra) {
     name:           document.getElementById('playlist-name').value.trim(),
     matched:        matchedItems,
     create_timers:  document.getElementById('create-timers').checked,
+    timers_key_only: document.getElementById('timers-key-only').checked,
   }, extra || {});
 }
 

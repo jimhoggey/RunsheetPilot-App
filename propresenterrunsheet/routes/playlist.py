@@ -322,7 +322,8 @@ def api_create_playlist():
         timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
                         "total_items": 0, "errors": [], "timer_names": {}}
         if body.get("create_timers"):
-            timer_result = _create_pp_timers(base, name, matched)
+            timer_result = _create_pp_timers(
+                base, name, matched, key_only=bool(body.get("timers_key_only")))
 
         # 6. Persist Service Mate runsheet state — what the GeekMagic clocks
         # display on the LAN.
@@ -951,7 +952,9 @@ def api_update_playlist():
         timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
                         "total_items": 0, "errors": [], "timer_names": {}}
         if body.get("create_timers"):
-            timer_result = _create_pp_timers(base, service_name, matched)
+            timer_result = _create_pp_timers(
+                base, service_name, matched,
+                key_only=bool(body.get("timers_key_only")))
         _write_sm_state(service_name, matched, timer_result,
                         keep_position=True)
 

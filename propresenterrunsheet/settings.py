@@ -39,6 +39,8 @@ def _default_settings() -> dict:
         # radio defaults to the recommended option for first-time users.
         "lib_source":    "auto",
         "create_timers": True,
+        # Timers for the sermon, worship and games only (timers.is_key_part).
+        "timers_key_only": False,
         # Anonymous usage counts + crash reports (see stats.py for the
         # complete list of what can ever be sent). On by default: it is
         # genuinely anonymous — names and numbers, never runsheet

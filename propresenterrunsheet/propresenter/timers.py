@@ -11,6 +11,7 @@ the operator can quickly find the right timer at the right moment in
 PP's timer panel."""
 
 import logging
+import re
 
 
 log = logging.getLogger("pp_runsheet")
@@ -47,9 +48,21 @@ def _delete_existing_rb_timers(base: str) -> int:
     return deleted
 
 
-def _create_pp_timers(base: str, playlist_name: str, matched: list) -> dict:
+# What "key parts only" keeps (a setting): the sermon, the worship block
+# and any games — the stretches someone on stage actually runs to time.
+_KEY_PART_RE = re.compile(r"\b(worship|games?|preach\w*|sermon)\b", re.IGNORECASE)
+
+
+def is_key_part(parsed: dict) -> bool:
+    return ((parsed.get("type") or "").lower() == "sermon"
+            or bool(_KEY_PART_RE.search(parsed.get("title") or "")))
+
+
+def _create_pp_timers(base: str, playlist_name: str, matched: list,
+                      key_only: bool = False) -> dict:
     """Cleanup previous [RB] timers, then create one *duration-based* countdown
-    timer in PP for every matched item that has a duration.
+    timer in PP for every matched item that has a duration — or, with
+    `key_only`, for the key parts alone (see is_key_part).
 
     See the module docstring for why timers are duration-based.
 
@@ -73,6 +86,8 @@ def _create_pp_timers(base: str, playlist_name: str, matched: list) -> dict:
         if ptype in ("song", "scripture"):
             # Songs are presentations (PP shows song length naturally);
             # scripture is brief; skip both for timer creation.
+            continue
+        if key_only and not is_key_part(p):
             continue
         total_items += 1
         dur_min = _extract_duration_min(p)
