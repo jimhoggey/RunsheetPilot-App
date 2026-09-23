@@ -17,6 +17,8 @@ RUNSHEET = [_item("Welcome", "mc_on_stage", 5), _item("Worship", "prayer_and_min
 @pytest.mark.parametrize("title, type_, key", [
     ("Worship", "prayer_and_ministry", True),
     ("Games Rotation: Oli, Mia, Amos", "other", True),
+    ("Games Rotation: Oli, Mia, Amos", "mc_on_stage", True),   # seen live
+    ("Games night next Friday", "announcement", False),
     ("Preach", "sermon", True),
     ("Message — Ps Cathie", "sermon", True),     # the type says sermon
     ("Preaching", "other", True),
