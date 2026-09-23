@@ -324,6 +324,22 @@ def test_preview_says_the_playlist_is_out_of_order_and_what_yes_would_do(
     assert pp["puts"] == []
 
 
+def test_yes_to_a_reading_of_a_playlist_that_has_since_changed_is_refused(
+        client, pp):
+    """The reading is slide positions. Someone adds a slide in PP while
+    the question is open: those positions now name different slides, so
+    the answer must not be applied to it."""
+    first = client.post("/api/update_playlist/preview", json={
+        "playlist_uuid": "PL-1", "matched": RUNSHEET,
+        "ai_sections": SHUFFLE}).get_json()
+    pp["items"].insert(0, _media("COUNTDOWN", "9"))
+    res = client.post("/api/update_playlist/preview", json={
+        "playlist_uuid": "PL-1", "matched": RUNSHEET, "ai_sections": SHUFFLE,
+        "reorder": True, "expect_fingerprint": first["fingerprint"]}).get_json()
+    assert res["ok"] is False and res["reason"] == "concurrent_edit"
+    assert pp["puts"] == []
+
+
 def test_keep_my_order_moves_nothing(client, pp):
     res = _post(client, ai_sections=SHUFFLE)
     assert res["ok"] is True and res["moved"] == 0

@@ -471,6 +471,19 @@ def test_a_line_with_no_slide_keeps_its_place_through_a_second_run():
     assert visible_signature(again) == visible_signature(first)
 
 
+def test_an_unread_slide_under_a_header_the_operator_placed_stays_with_it():
+    """A video with no text can't be filed by reading. The operator put
+    the Offering header straight above it, so on reorder it goes with
+    Offering, not with whatever slide happened to sit above it."""
+    runsheet = [_item("Welcome"), _item("Worship"), _item("Offering")]
+    existing = [_header("Offering"), _media("giving.mp4", "1"),
+                _media("WORSHIP SLIDE", "2"), _media("WELCOME SLIDE", "3")]
+    items, _ = build_update_payload(existing, runsheet,
+                                    sections={1: 1, 2: 0}, reorder=True)
+    assert _names(items) == ["Welcome", "WELCOME SLIDE", "Worship",
+                             "WORSHIP SLIDE", "Offering", "giving.mp4"]
+
+
 def test_putting_it_in_order_never_adds_or_loses_a_slide():
     """Whatever the reading says — including nonsense from a forged
     request — the result holds exactly the slides that were there."""

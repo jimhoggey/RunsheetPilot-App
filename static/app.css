@@ -1558,7 +1558,9 @@ body { animation: page-in .4s ease both; }
 }
 
 /* ─── Runsheet-order question ──────────────────────────────────────────── */
-/* .modal's blur and scale-in, sized to its few lines. */
+/* .modal's blur and scale-in, sized to its few lines. Above any other
+   modal: the answer it waits for arrives while Help may be open. */
+#reorder-backdrop { z-index: 60; }
 .modal-reorder { max-width: 440px; height: auto; }
 .modal-reorder h2 { font-size: 1.05rem; font-weight: 700; }
 .modal-reorder summary { cursor: pointer; }

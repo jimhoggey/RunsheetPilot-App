@@ -763,6 +763,15 @@ def api_update_playlist_preview():
         stats.report_error(e, where_kind="route", route="update_preview")
         return jsonify({"ok": False, "reason": "unexpected", "error":
             "Couldn't work out the changes for that playlist."}), 200
+    # A slide reading handed back is slide POSITIONS in the playlist it was
+    # read from. Applied to a playlist that has changed since, it files the
+    # wrong slides — so the reorder question's answer carries the reading's
+    # fingerprint, and a changed playlist stops here.
+    expect = body.get("expect_fingerprint")
+    if expect is not None and expect != plan["fingerprint"]:
+        return jsonify({"ok": False, "reason": "concurrent_edit", "error":
+            "ProPresenter changed while this was on screen, so nothing was "
+            "changed. Press Add Section Headers again."}), 200
 
     warnings = []
     active = safety.active_playlist_uuid(base)

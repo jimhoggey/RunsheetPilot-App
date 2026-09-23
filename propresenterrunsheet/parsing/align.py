@@ -210,7 +210,10 @@ def parse_sections(content: str, n_runsheet: int, n_items: int,
         if _index(pos, n_items) and _index(n, n_runsheet) \
                 and pos not in known and pos not in out:
             out[pos] = n
-    if len(out) > 2 and n_runsheet > 2 and len(set(out.values())) == 1:
+    # Many slides under one line is often right (a sermon deck); it is a
+    # collapse only when nothing at all — facts included — is anywhere else.
+    if len(out) > 2 and n_runsheet > 2 \
+            and len(set(out.values()) | set(known.values())) == 1:
         log.info("Alignment reply put every slide under one line — ignoring it")
         return {}
     return out

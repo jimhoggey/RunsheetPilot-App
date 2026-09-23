@@ -2097,10 +2097,13 @@ async function answerReorder(yes) {
   const plan = _updatePlan;
   if (!_closeReorder() || !plan) return;
   if (!yes) return _proceedWithPlan(plan);
-  // Same reading, no second model call: only the order changes.
+  // Same reading, no second model call: only the order changes. The
+  // reading is slide POSITIONS, so it only holds for the playlist it was
+  // taken from — the fingerprint makes the server refuse if PP changed.
   _updatePlan = null;
   const next = await _previewUpdate(plan.target,
-    {reorder: true, ai_sections: plan.ai_sections},
+    {reorder: true, ai_sections: plan.ai_sections,
+     expect_fingerprint: plan.fingerprint},
     ['Putting your slides in runsheet order…']);
   if (next) await _proceedWithPlan(next);
 }

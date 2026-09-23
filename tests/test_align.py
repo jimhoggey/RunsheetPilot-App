@@ -117,6 +117,13 @@ def test_a_collapsed_reply_is_thrown_away_whole():
     assert parse_sections(_reply([(0, 1), (1, 1), (2, 1)]), 3, 3) == {}
 
 
+def test_a_sermon_deck_under_one_line_is_not_a_collapse():
+    """The songs are facts; every slide left is the sermon's. That is the
+    right answer, not a model that gave up."""
+    assert parse_sections(_reply([(2, 3), (3, 3), (4, 3)]), 4, 5,
+                          known={0: 0, 1: 1}) == {2: 3, 3: 3, 4: 3}
+
+
 def test_junk_and_prose_return_nothing_rather_than_raising():
     """Falling back to the deterministic rules is the shipped behaviour,
     so every failure here has to land there quietly."""

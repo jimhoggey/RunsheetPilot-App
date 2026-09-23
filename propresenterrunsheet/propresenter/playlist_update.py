@@ -477,6 +477,15 @@ def build_update_payload(existing: list, matched: list, aliases=None,
     sections = sections or {}
     moves = moves_needed(sections)
     if reorder and moves:
+        # A slide the reading left unfiled, directly under a header the
+        # operator placed, stays with that header's line rather than
+        # riding along with whatever sat above it.
+        sections = dict(sections)
+        for n, mi in enumerate(matched or []):
+            key = recall_key(((mi.get("parsed") or {}) if isinstance(mi, dict)
+                              else {}).get("title") or "")
+            if key in recalled:
+                sections.setdefault(recalled[key], n)
         order = runsheet_order(len(kept), sections)
         kept, recalled = [kept[p] for p in order], {}
         sections = {new: sections[old] for new, old in enumerate(order)
