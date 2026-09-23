@@ -1054,6 +1054,33 @@ button:focus-visible {
   line-height: 1.55;
   margin: 0 0 var(--s-3) 0;
 }
+/* OpenRouter key status under the key box: a pill that reads at a glance
+   in a text-heavy panel, then one short line. */
+.key-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.key-status[hidden] { display: none; }
+.key-status strong { color: var(--text); }
+.key-line { flex-basis: 100%; }
+.key-badge {
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--text);
+  background: var(--card-2);
+}
+.key-badge.is-ok   { color: var(--grn); background: var(--grn-soft); }
+.key-badge.is-warn { color: var(--org); background: var(--org-soft); }
+.key-badge.is-bad  { color: var(--red); background: var(--red-soft); }
 .settings-section .field { margin-bottom: var(--s-3); }
 .settings-check {
   display: flex;

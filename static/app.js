@@ -260,28 +260,25 @@ function _renderKeyStatus() {
   if (!el) return;
   const money = n => '$' + Number(n).toFixed(2);
   const today = k.free_today
-    ? ` ${Number(k.free_today.remaining)} of ${Number(k.free_today.limit)} free requests left today.`
+    ? ` · ${Number(k.free_today.remaining)} of ${Number(k.free_today.limit)} free requests left today`
     : '';
-  const lines = {
-    invalid: ['✕ OpenRouter didn\'t accept this key — check it was pasted in full.', 'var(--red)'],
-    unknown: ['Couldn\'t check this key — OpenRouter isn\'t reachable right now.', 'var(--muted)'],
-    free:    [`Free key — free models only.${today}`, 'var(--muted)'],
-  };
-  let [html, color] = lines[k.state] || ['', ''];
-  if (k.state === 'paid' && k.balance === 0 && k.capped) {
-    [html, color] = ['⚠ This key\'s own spending limit is used up — raise it on '
-      + `openrouter.ai to use paid models. Free models still work.${today}`, 'var(--org)'];
-  } else if (k.state === 'paid' && k.balance === 0) {
-    [html, color] = [`Free key — ${money(0)} credit, so free models only.${today}`, 'var(--muted)'];
-  } else if (k.state === 'paid') {
-    html = '✓ <strong>Paid key</strong>'
-      + (k.balance === null ? '' : ` — <strong>${money(k.balance)} left</strong>`)
-      + ` · ${money(k.usage)} used.` + _runsheetCost(k.balance);
-    color = 'var(--grn)';
-  }
-  el.innerHTML = html;
-  el.style.color = color;
-  el.hidden = !html;
+  // [badge, tone, detail] — the badge reads at a glance in a busy panel.
+  const [badge, tone, detail] =
+      k.state === 'invalid' ? ['✕ Key not accepted', 'bad', 'Check it was pasted in full']
+    : k.state === 'unknown' ? ['Couldn\'t check key', '', 'OpenRouter isn\'t reachable']
+    : k.state === 'free'    ? ['✓ Free key', 'ok', `Free models only${today}`]
+    : k.state !== 'paid'    ? ['', '', '']
+    : k.balance === 0 && k.capped
+      ? ['⚠ Key limit reached', 'warn', 'Raise it on openrouter.ai to use paid models']
+    : k.balance === 0       ? ['✓ Free key', 'ok', `No credit left${today}`]
+    : ['✓ Paid key', 'ok',
+       (k.balance === null ? '' : `<strong>${money(k.balance)} left</strong> · `)
+       + `${money(k.usage)} used` + _runsheetCost(k.balance)];
+  el.innerHTML = badge
+    ? `<span class="key-badge${tone ? ' is-' + tone : ''}">${badge}</span>`
+      + `<span>${detail}</span>`
+    : '';
+  el.hidden = !badge;
 }
 
 // What one runsheet costs on the selected model, and how far the balance
@@ -297,12 +294,13 @@ function _runsheetCost(balance) {
     : rec && rec.cost_per_parse != null ? rec.cost_per_parse
     : free ? 0 : null;
   if (usd === null) return '';
-  if (usd === 0) return '<br>The selected model is free, so runsheets cost nothing.';
-  const each = '$' + Number(usd.toPrecision(2));
-  const runs = balance ? ` — about ${Math.floor(balance / usd).toLocaleString()} runsheets`
-    + ' with what\'s left' : '';
-  return `<br>A runsheet costs ${id in measured ? '' : 'about '}${each} on this model`
-    + `${id in measured ? ' (what yours have cost)' : ''}${runs}.`;
+  const line = t => `<span class="key-line">${t}</span>`;
+  if (usd === 0) return line('This model is free — runsheets cost nothing.');
+  const each = `$${Number(usd.toPrecision(2))} a runsheet`;
+  const runs = balance
+    ? ` — roughly ${Math.floor(balance / usd).toLocaleString()} runsheets left` : '';
+  return line(id in measured ? `${each} on this model (your average)${runs}.`
+                             : `About ${each} on this model${runs}.`);
 }
 
 // "Other…" swaps the dropdown for a text box so any OpenRouter id can be
