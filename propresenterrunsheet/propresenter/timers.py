@@ -50,12 +50,17 @@ def _delete_existing_rb_timers(base: str) -> int:
 
 # What "key parts only" keeps (a setting): the sermon, the worship block
 # and any games — the stretches someone on stage actually runs to time.
-_KEY_PART_RE = re.compile(r"\b(worship|games?|preach\w*|sermon)\b", re.IGNORECASE)
+# An MC moment or notice that merely mentions one ("Land Worship - Priya")
+# is not one.
+_KEY_PART_RE = re.compile(r"\b(worship|games?|preach(?:ing)?|sermon)\b",
+                          re.IGNORECASE)
 
 
 def is_key_part(parsed: dict) -> bool:
-    return ((parsed.get("type") or "").lower() == "sermon"
-            or bool(_KEY_PART_RE.search(parsed.get("title") or "")))
+    ptype = (parsed.get("type") or "").lower()
+    return ptype == "sermon" or (
+        ptype not in ("mc_on_stage", "announcement")
+        and bool(_KEY_PART_RE.search(parsed.get("title") or "")))
 
 
 def _create_pp_timers(base: str, playlist_name: str, matched: list,

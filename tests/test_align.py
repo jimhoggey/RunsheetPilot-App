@@ -124,6 +124,15 @@ def test_a_sermon_deck_under_one_line_is_not_a_collapse():
                           known={0: 0, 1: 1}) == {2: 3, 3: 3, 4: 3}
 
 
+def test_a_one_line_reply_is_a_collapse_unless_the_facts_make_sense_of_it():
+    # The only fact is on the same line: nothing says it's a sermon deck.
+    assert parse_sections(_reply([(1, 3), (2, 3), (3, 3)]), 4, 4,
+                          known={0: 3}) == {}
+    # The fact (line 0) comes AFTER the slides filed under line 2.
+    assert parse_sections(_reply([(0, 2), (1, 2), (2, 2)]), 4, 4,
+                          known={3: 0}) == {}
+
+
 def test_junk_and_prose_return_nothing_rather_than_raising():
     """Falling back to the deterministic rules is the shipped behaviour,
     so every failure here has to land there quietly."""

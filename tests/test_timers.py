@@ -23,6 +23,9 @@ RUNSHEET = [_item("Welcome", "mc_on_stage", 5), _item("Worship", "prayer_and_min
     ("Welcome", "mc_on_stage", False),
     ("Response Moment and Prayer", "prayer_and_ministry", False),
     ("Gamestop giveaway", "other", False),       # a word, not a part of one
+    ("Land Worship - Priya", "mc_on_stage", False),
+    ("Worship night next Friday", "announcement", False),
+    ("Guest preacher intro", "other", False),
 ])
 def test_key_parts_are_the_sermon_worship_and_games(title, type_, key):
     assert is_key_part({"title": title, "type": type_}) is key

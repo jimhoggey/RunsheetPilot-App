@@ -210,10 +210,13 @@ def parse_sections(content: str, n_runsheet: int, n_items: int,
         if _index(pos, n_items) and _index(n, n_runsheet) \
                 and pos not in known and pos not in out:
             out[pos] = n
-    # Many slides under one line is often right (a sermon deck); it is a
-    # collapse only when nothing at all — facts included — is anywhere else.
-    if len(out) > 2 and n_runsheet > 2 \
-            and len(set(out.values()) | set(known.values())) == 1:
+    # Every slide under one line is a collapse — unless the facts sit on
+    # other lines and the whole still runs in runsheet order: the songs
+    # known, and the rest one sermon deck.
+    merged = [{**known, **out}[p] for p in sorted({**known, **out})]
+    if len(out) > 2 and n_runsheet > 2 and len(set(out.values())) == 1 and (
+            set(known.values()) <= set(out.values())
+            or merged != sorted(merged)):
         log.info("Alignment reply put every slide under one line — ignoring it")
         return {}
     return out

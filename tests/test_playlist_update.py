@@ -484,6 +484,18 @@ def test_an_unread_slide_under_a_header_the_operator_placed_stays_with_it():
                              "WORSHIP SLIDE", "Offering", "giving.mp4"]
 
 
+def test_a_header_whose_title_repeats_in_the_runsheet_says_nothing():
+    """YA Worship Night has "Worship" three times. A header "Worship" over
+    an unread slide can't say which of them it belongs to."""
+    runsheet = [_item("Worship"), _item("Scripture"), _item("Worship")]
+    existing = [_media("READING", "1"), _header("Worship"),
+                _media("clip.mp4", "2"), _media("SONG", "3")]
+    items, _ = build_update_payload(existing, runsheet,
+                                    sections={0: 1, 2: 0}, reorder=True)
+    # clip.mp4 rides with the slide above it (READING, line 1), not line 0.
+    assert _names(_content(items)) == ["SONG", "READING", "clip.mp4"]
+
+
 def test_putting_it_in_order_never_adds_or_loses_a_slide():
     """Whatever the reading says — including nonsense from a forged
     request — the result holds exactly the slides that were there."""

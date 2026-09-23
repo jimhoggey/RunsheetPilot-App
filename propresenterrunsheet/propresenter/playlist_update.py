@@ -479,12 +479,13 @@ def build_update_payload(existing: list, matched: list, aliases=None,
     if reorder and moves:
         # A slide the reading left unfiled, directly under a header the
         # operator placed, stays with that header's line rather than
-        # riding along with whatever sat above it.
+        # riding along with whatever sat above it. Only when that title
+        # names one line: a runsheet can hold "Worship" twice.
+        keys = [recall_key(((mi.get("parsed") or {}) if isinstance(mi, dict)
+                            else {}).get("title") or "") for mi in matched or []]
         sections = dict(sections)
-        for n, mi in enumerate(matched or []):
-            key = recall_key(((mi.get("parsed") or {}) if isinstance(mi, dict)
-                              else {}).get("title") or "")
-            if key in recalled:
+        for n, key in enumerate(keys):
+            if key in recalled and keys.count(key) == 1:
                 sections.setdefault(recalled[key], n)
         order = runsheet_order(len(kept), sections)
         kept, recalled = [kept[p] for p in order], {}
