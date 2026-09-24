@@ -860,3 +860,24 @@ def test_a_pdf_read_that_runs_out_of_time_names_the_reader(
     err = _parse(parse_client, or_model="deepseek/deepseek-chat").get_json()["error"]
     assert err.startswith("openai/gpt-4.1-mini was still working")
     assert failed == ["openai/gpt-4.1-mini"]
+
+
+def test_a_backup_model_that_runs_out_of_time_is_the_one_named(
+        parse_client, isolated_state, monkeypatch):
+    """The first model's provider is overloaded, so the backup is asked —
+    and stalls. The operator is told to replace the backup, not the model
+    that failed at once."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_model_catalogue import _catalogue as catalogue, _model
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    busy, spare = "nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-oss-20b:free"
+    cat = catalogue(_model(busy, ctx=262144), _model(spare, ctx=128000))
+    monkeypatch.setattr(parse_mod, "fetch_catalogue", lambda *_a, **_k: cat)
+    monkeypatch.setattr(parse_mod, "_AI_TIMEOUT_S", 0.4)
+    replies = iter([_FakeErrorResponse(200, _OVERLOADED)])
+    monkeypatch.setattr(requests, "post", lambda *_a, **_k: next(
+        replies, None) or Stream([KEEP_ALIVE] * 1000, gap=0.05))
+    err = _parse(parse_client, or_model=busy).get_json()["error"]
+    assert err.startswith(f"{spare} was still working"), err

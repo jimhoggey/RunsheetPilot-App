@@ -131,8 +131,19 @@ def test_no_time_left_or_already_stopped_means_no_call():
     assert why.value.reason == "cancelled"
 
 
-@pytest.fixture
-def stalled_server():
+# How the reply is framed decides who holds the socket: OpenRouter's own
+# (chunked, kept alive) leaves it with the connection; the others hand it
+# to the response, as a proxy that reframes the reply would.
+FRAMINGS = {
+    "chunked": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n",
+    "chunked, close": b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n",
+    "no length": b"HTTP/1.1 200 OK\r\n",
+    "HTTP/1.0": b"HTTP/1.0 200 OK\r\n",
+}
+
+
+@pytest.fixture(params=FRAMINGS)
+def stalled_server(request):
     """A real HTTP server on this machine: it starts an event stream, sends
     one keep-alive, then goes quiet, as a model stuck thinking does. Gives
     its URL and an Event set once the client hangs up."""
@@ -140,6 +151,9 @@ def stalled_server():
 
     listener = socket.create_server(("127.0.0.1", 0))
     hung_up = threading.Event()
+    head = FRAMINGS[request.param] + b"Content-Type: text/event-stream\r\n\r\n"
+    line = b": OPENROUTER PROCESSING\n\n"
+    first = b"%x\r\n%s\r\n" % (len(line), line) if b"chunked" in head else line
 
     def serve():
         conn, _ = listener.accept()
@@ -147,10 +161,7 @@ def stalled_server():
             request = b""
             while b"\r\n\r\n" not in request:
                 request += conn.recv(4096)
-            line = b": OPENROUTER PROCESSING\n\n"
-            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
-                         b"Transfer-Encoding: chunked\r\n\r\n"
-                         + b"%x\r\n%s\r\n" % (len(line), line))
+            conn.sendall(head + first)
             conn.settimeout(10)
             # A reset counts as a hang-up, as a clean close does.
             with contextlib.suppress(OSError):

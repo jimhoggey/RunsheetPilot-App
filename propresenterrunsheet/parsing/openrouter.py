@@ -132,11 +132,16 @@ def _wake(resp):
     shutdown) sent nothing on Windows (CI, Sept 2026).
 
     Through an https:// proxy the connection's socket is urllib3's
-    SSLTransport, which can't shut down; the socket it wraps can. Nothing
-    here may raise: the caller's Stopped has to reach the route."""
-    sock = getattr(getattr(getattr(resp, "raw", None), "connection", None), "sock", None)
+    SSLTransport, which can't shut down; the socket it wraps can. A reply
+    framed to end with the connection (Connection: close, HTTP/1.0) has
+    its socket handed from the connection to the response, where urllib3
+    keeps its shutdown. Nothing here may raise: the caller's Stopped has
+    to reach the route."""
+    raw = getattr(resp, "raw", None)
+    sock = getattr(getattr(raw, "connection", None), "sock", None)
     shutdown = (getattr(sock, "shutdown", None)
-                or getattr(getattr(sock, "socket", None), "shutdown", None))
+                or getattr(getattr(sock, "socket", None), "shutdown", None)
+                or getattr(raw, "_sock_shutdown", None))
     if shutdown is not None:
         try:
             shutdown(socket.SHUT_RDWR)

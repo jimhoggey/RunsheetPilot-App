@@ -664,6 +664,7 @@ def _upload_and_parse(stop: threading.Event):
             log.warning(f"Provider behind {log_safe(model)} failed "
                         f"({log_safe(failure['provider'])} returned "
                         f"{failure['code']}) — retrying with {log_safe(backup)}")
+            used_model = backup          # if it runs out of time, it's the backup's
             resp = _openrouter_post(backup)
             backup_failure = provider_failure(resp)
             if backup_failure:
