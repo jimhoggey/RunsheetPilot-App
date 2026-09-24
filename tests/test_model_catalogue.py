@@ -11,8 +11,11 @@ a safety classifier that answers "User Safety: safe" instead of a runsheet.
 So we resolve the model from OpenRouter's live catalogue instead, and the
 filtering rules below are the ones that would have prevented both failures.
 """
+import pytest
+
 from propresenterrunsheet.parsing.models import (
-    next_usable_model, pick_default_model, resolve_model, usable_models,
+    next_usable_model, pick_default_model, reasoning_for, resolve_model,
+    usable_models,
 )
 
 
@@ -235,3 +238,86 @@ def test_models_route_degrades_gracefully_when_openrouter_is_unreachable(
     body = r.get_json()
     assert body["models"] == []
     assert body["auto"] is None
+
+
+# ── reasoning ────────────────────────────────────────────────────────────────
+# `reasoning` entries as OpenRouter's catalogue had them on 2026-09-24.
+
+def _thinks(mid, reasoning):
+    return {**_model(mid, free=False), "reasoning": reasoning}
+
+
+REASONING = _catalogue(
+    _thinks("openai/gpt-5-nano", {"mandatory": True, "default_effort": "medium",
+                                  "supported_efforts": ["high", "medium", "low", "minimal"]}),
+    _thinks("openai/gpt-5.1", {"mandatory": False, "default_enabled": True,
+                               "supported_efforts": ["high", "medium", "low", "none"]}),
+    _thinks("qwen/qwen3-8b", {"mandatory": False, "default_enabled": True}),
+    _thinks("anthropic/claude-haiku-4.5", {"mandatory": False}),
+    _thinks("openai/o4-mini", {"mandatory": False}),
+    _thinks("deepseek/deepseek-r1", {"mandatory": True}),
+    _thinks("odd/cannot-stop", {"mandatory": True, "supported_efforts": ["none", "low"]}),
+    _thinks("odd/junk", {"supported_efforts": "minimal"}),
+    _model("openai/gpt-4.1-mini", free=False),
+)
+
+
+def test_a_reasoning_model_reasons_as_little_as_it_allows():
+    """GPT-5 nano at its default reasoned before every answer and was too
+    slow for the owner; at "minimal" it used no reasoning tokens (live)."""
+    assert reasoning_for("openai/gpt-5-nano", REASONING) == {"effort": "minimal"}
+    assert reasoning_for("openai/gpt-5.1", REASONING) == {"effort": "none"}
+    assert reasoning_for("qwen/qwen3-8b", REASONING) == {"enabled": False}
+    assert reasoning_for("odd/cannot-stop", REASONING) == {"effort": "low"}
+
+
+def test_a_model_the_setting_would_switch_on_or_break_gets_nothing():
+    """Claude reasons only when asked, so any setting switches it ON;
+    o4-mini 400s when told to stop; GPT-4.1 mini doesn't reason at all."""
+    for mid in ("anthropic/claude-haiku-4.5", "openai/o4-mini",
+                "deepseek/deepseek-r1", "openai/gpt-4.1-mini", "odd/junk",
+                "not/listed"):
+        assert reasoning_for(mid, REASONING) is None, mid
+    assert reasoning_for("openai/gpt-5-nano", None) is None
+
+
+@pytest.fixture
+def check(client, monkeypatch):
+    """POST a pasted id to /api/models/check. Sending any prompt fails."""
+    import requests
+    import propresenterrunsheet.routes.settings as settings_mod
+
+    def no_prompts(*_a, **_k):
+        raise AssertionError("the check must not send a prompt")
+    monkeypatch.setattr(requests, "post", no_prompts)
+    monkeypatch.setattr(settings_mod, "fetch_catalogue",
+                        lambda *_a, **_k: REASONING)
+    return lambda mid: client.post("/api/models/check",
+                                   json={"model": mid}).get_json()
+
+
+def test_a_pasted_model_is_looked_up_and_priced_per_runsheet(check):
+    """The same sum the recommended models' prices use: a runsheet's
+    typical tokens at the catalogue's price per token."""
+    got = check("openai/gpt-5-nano")
+    assert got["ok"] and got["cost_per_parse"] == pytest.approx(4300 * 0.0000012)
+    assert "about $0.0052 a runsheet" in got["message"]
+    assert "reasoning is kept to the minimum" in got["message"]
+    assert "reasons before every answer" in check("deepseek/deepseek-r1")["message"]
+    assert "reason" not in check("openai/gpt-4.1-mini")["message"]
+
+
+def test_a_mistyped_or_malformed_id_is_refused(check):
+    missing = check("openai/gpt-5-nan")
+    assert not missing["ok"]
+    assert "Did you mean openai/gpt-5-nano?" in missing["message"]
+    for junk in ("", "gpt-5-nano", "a/b/c", "a/b c", "x" * 200 + "/y", None, 7):
+        assert check(junk)["ok"] is False, junk
+
+
+def test_the_check_says_so_when_openrouter_is_unreachable(check, monkeypatch):
+    import propresenterrunsheet.routes.settings as settings_mod
+
+    monkeypatch.setattr(settings_mod, "fetch_catalogue", lambda *_a, **_k: None)
+    got = check("openai/gpt-5-nano")
+    assert not got["ok"] and "Couldn't reach OpenRouter" in got["message"]

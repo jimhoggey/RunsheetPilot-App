@@ -161,6 +161,26 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
         "bumper.mp4"]
 
 
+def test_the_placement_pass_asks_a_reasoning_model_to_reason_least():
+    """Update mode's call is held to the same reasoning rule as the parse."""
+    from propresenterrunsheet.parsing import align
+    from tests.test_model_catalogue import REASONING
+
+    sent = []
+
+    def fake_post(url, json=None, **kw):
+        sent.append(json.get("reasoning"))
+        return type("R", (), {"ok": True, "status_code": 200, "json": staticmethod(
+            lambda: {"choices": [{"message": {"content": '{"items": []}'}}]})})()
+
+    for model in ("openai/gpt-5-nano", "openai/gpt-4.1-mini"):
+        align.align_playlist(RUNSHEET, PLAYLIST, SLIDE_TEXT, {},
+                             lambda it: (it.get("type") or "") == "header",
+                             or_key="k", model=model, post=fake_post,
+                             catalogue=REASONING)
+    assert sent == [{"effort": "minimal"}, None]
+
+
 def test_a_busy_provider_gets_exactly_one_retry_on_the_backup_model():
     """Free providers are often overloaded, and OpenRouter reports it as
     HTTP 200 with an error body. Retry once on the backup, then give up

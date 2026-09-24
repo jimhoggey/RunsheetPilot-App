@@ -4,6 +4,8 @@ GET /api/settings tacks on the discovered ProPresenter root and library
 folders so the UI can pre-fill its dropdowns; the POST is a partial
 update that merges into whatever's already on disk."""
 
+import difflib
+import re
 import sys
 
 from flask import Blueprint, jsonify, request
@@ -11,8 +13,9 @@ from flask import Blueprint, jsonify, request
 from ..config import DATA_DIR, VERSION, WHATS_NEW, recent_release_notes
 from ..parsing.ai import DEFAULT_PROMPT
 from ..parsing.models import (
-    fetch_catalogue, fetch_key_info, free_model_ids, measured_costs,
-    pick_default_model, pick_paid_model, recommended_models, usable_models,
+    catalogue_entry, estimate_cost, fetch_catalogue, fetch_key_info,
+    free_model_ids, is_router, measured_costs, pick_default_model,
+    pick_paid_model, reasoning_for, recommended_models, usable_models,
 )
 from ..propresenter.paths import find_library_dirs, find_pp_root
 from ..settings import load_settings, save_settings
@@ -75,6 +78,53 @@ def get_models():
                     "funded": funded,
                     "key": key,
                     "available": True})
+
+
+# vendor/model, optionally :variant — the shape of every OpenRouter id.
+_MODEL_ID = re.compile(r"[\w.\-]+/[\w.\-]+(?::[\w.\-]+)?")
+
+
+@bp.route("/api/models/check", methods=["POST"])
+def check_model():
+    """A model id pasted into Settings: is it real, and what would a
+    runsheet cost on it? Looked up in the catalogue, priced the way the
+    recommended models are (estimate_cost). No prompt is sent."""
+    model_id = str((request.get_json(silent=True) or {}).get("model") or "").strip()
+    if len(model_id) > 120 or not _MODEL_ID.fullmatch(model_id):
+        return jsonify({"ok": False, "message": "That doesn't look like an "
+                        "OpenRouter model id. They look like openai/gpt-4.1-mini."})
+    catalogue = fetch_catalogue()
+    if catalogue and not catalogue_entry(catalogue, model_id):
+        catalogue = fetch_catalogue(force=True)     # listed since the cache?
+    if not catalogue:
+        return jsonify({"ok": False, "message": "Couldn't reach OpenRouter to check it."})
+    entry = catalogue_entry(catalogue, model_id)
+    if entry is None:
+        ids = [m.get("id") for m in catalogue.get("data") or []
+               if isinstance(m, dict) and isinstance(m.get("id"), str)]
+        near = difflib.get_close_matches(model_id, ids, n=1)
+        return jsonify({"ok": False, "message": f"OpenRouter has no model called "
+                        f"{model_id}." + (f" Did you mean {near[0]}?" if near else "")})
+
+    cost = None if is_router(model_id) else estimate_cost(entry)
+    if is_router(model_id):
+        price = "its price depends on the model it picks"
+    elif cost is None:
+        price = "its price isn't listed"
+    elif cost == 0:
+        price = "free"
+    else:   # two significant figures, never 5e-05: "about $0.00049"
+        price = f"about ${float(f'{cost:.2g}'):.10f}".rstrip("0") + " a runsheet"
+    thinks = entry.get("reasoning") if isinstance(entry.get("reasoning"), dict) else {}
+    if reasoning_for(model_id, catalogue):
+        note = " Its reasoning is kept to the minimum."
+    elif thinks.get("mandatory") or thinks.get("default_enabled"):
+        note = (" It reasons before every answer, so runsheets take longer "
+                "and cost more than that.")
+    else:
+        note = ""
+    return jsonify({"ok": True, "cost_per_parse": cost,
+                    "message": f"OpenRouter has it — {price}.{note}"})
 
 
 @bp.route("/api/whats_new", methods=["GET"])

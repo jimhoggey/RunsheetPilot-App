@@ -750,7 +750,7 @@ def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
     context = [it for it in raw if isinstance(it, dict)
                and (not is_header(it) or is_placed_header(it))]
     found = align_playlist(matched, context, slide_text, known, is_header,
-                           or_key, model,
+                           or_key, model, catalogue=catalogue,
                            backup=next_usable_model(model, catalogue))
     return ({**found, **known} if found else {}), model
 
