@@ -14,6 +14,7 @@ import datetime as _dt
 import json
 import logging
 import re
+import threading
 import time
 
 from flask import Blueprint, jsonify, request
@@ -28,6 +29,7 @@ from ..parsing.models import (
     model_reading, next_usable_model, provider_failure, reasoning_for,
     resolve_model,
 )
+from ..parsing.openrouter import Stopped, chat
 from .flags import matching_enabled
 from ..parsing.ocr import (
     OCR_UNAVAILABLE_MESSAGE, OCRUnavailable, image_to_text, images_to_text,
@@ -85,6 +87,23 @@ class UnreadablePdf(UploadError):
 
 _UNREADABLE_PDF = ("Couldn't read any text from that PDF. If it's a scan, "
                    "try a clearer copy or upload a screenshot instead.")
+
+# How long one model call may run before it is dropped. A runsheet takes a
+# working model 5-15 s; a minute is a model stuck thinking (the owner's
+# call, Sept 2026, after GPT-5 nano reasoned for ages).
+_AI_TIMEOUT_S = 60
+
+# Parses still running, by the id the page gave each one, so Start over
+# can stop the model call (api_parse_cancel) instead of leaving it to
+# finish, bill, and write the Service Mate state for a runsheet that's gone.
+_running: dict = {}
+
+
+def _parse_id(value) -> str:
+    """The page's id for a parse — a UUID — or "" for anything else."""
+    text = str(value or "")
+    return text if len(text) <= 64 and text.replace("-", "").isalnum() \
+        and text.isascii() else ""
 
 
 def _unsupported_message(filename: str) -> str:
@@ -364,6 +383,19 @@ def _rate_limit_message(resp) -> str:
 
 @bp.route("/api/upload_and_parse", methods=["POST"])
 def api_upload_and_parse():
+    """Registered for Start over before anything else runs: the key check
+    and the template fetch below can take seconds, and a cancel that
+    arrives before the parse is listed would be lost."""
+    parse_id, stop = _parse_id(request.form.get("parse_id")), threading.Event()
+    if parse_id:
+        _running[parse_id] = stop
+    try:
+        return _upload_and_parse(stop)
+    finally:
+        _running.pop(parse_id, None)
+
+
+def _upload_and_parse(stop: threading.Event):
     import requests as req
 
     # 1. Validate request. Two ways in: a file, or text the operator has
@@ -601,17 +633,17 @@ def api_upload_and_parse():
                       else reasoning_for(model_id, fetch_catalogue()))
             if effort:
                 body["reasoning"] = effort
-            return req.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+            # Streamed so it can be dropped: after _AI_TIMEOUT_S, or when
+            # the operator starts over (see openrouter.chat).
+            return chat(
+                req.post, "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization":  f"Bearer {or_key}",
                     "HTTP-Referer":   "runsheet-pilot",
                     "X-Title":        APP_NAME,
                     "Content-Type":   "application/json",
                 },
-                json=body,
-                timeout=90,
-            )
+                body=body, timeout_s=_AI_TIMEOUT_S, stop=stop)
 
         ai_t0 = time.time()
         refused_json = None          # a model that 400'd on response_format
@@ -650,6 +682,7 @@ def api_upload_and_parse():
             log.warning(f"Provider behind {log_safe(model)} failed "
                         f"({log_safe(failure['provider'])} returned "
                         f"{failure['code']}) — retrying with {log_safe(backup)}")
+            used_model = backup          # if it runs out of time, it's the backup's
             resp = _openrouter_post(backup)
             backup_failure = provider_failure(resp)
             if backup_failure:
@@ -743,6 +776,11 @@ def api_upload_and_parse():
                 file_content = (((file_body.get("choices") or [{}])[0]
                                  .get("message") or {}).get("content") or "")
                 got = parse_ai_response(file_content)
+            except Stopped:
+                # Start over or the time limit, not a failed read. A
+                # timeout is this reader's, not the text model's.
+                used_model = second
+                raise
             except Exception:
                 log.info("Reading the file itself failed", exc_info=True)
                 got = ([], "", "")
@@ -952,6 +990,11 @@ def api_upload_and_parse():
                      f"{len(items)} items (template: {len(sections)} "
                      f"sections, {len(objects)} objects)")
 
+        # Started over while this ran: the page has moved on, so nothing
+        # below — the clocks' state, the cost, the stats — is for anyone.
+        if stop.is_set():
+            raise Stopped("cancelled")
+
         # Also seed the Service Mate runsheet state on parse — so the user can
         # test the clock cue flow without going through Create Playlist (which
         # requires ProPresenter to be running). Create Playlist later overwrites
@@ -1038,6 +1081,16 @@ def api_upload_and_parse():
         stats.track("parse_failed", reason="not_json", model=used_model)
         return jsonify({"error": _unusable_reply_message(
             used_model, snippet, "didn't return a runsheet")}), 200
+    except Stopped as e:
+        if e.reason == "cancelled":
+            log.info("Parse stopped: the operator started over")
+            return jsonify({"cancelled": True,
+                            "error": "Stopped — you started over."}), 200
+        stats.track("parse_failed", reason="timeout", model=used_model)
+        return jsonify({"error":
+            f"{used_model} was still working after {_AI_TIMEOUT_S} seconds, "
+            "so it was stopped. Try again, or pick a faster model in "
+            "Settings."}), 200
     except req.exceptions.Timeout:
         stats.track("parse_failed", reason="timeout", model=used_model)
         return jsonify({"error":
@@ -1060,6 +1113,16 @@ def api_upload_and_parse():
             "Something went wrong while parsing the runsheet. Try again "
             "in a moment, or pick a different model in Settings if it "
             "keeps failing."}), 500
+
+
+@bp.route("/api/parse/cancel", methods=["POST"])
+def api_parse_cancel():
+    """Start over while a parse is running: stop its model call."""
+    body = request.get_json(silent=True)
+    stop = _running.get(_parse_id(body.get("parse_id") if isinstance(body, dict) else ""))
+    if stop is not None:
+        stop.set()
+    return jsonify({"ok": stop is not None})
 
 
 @bp.route("/api/match", methods=["POST"])

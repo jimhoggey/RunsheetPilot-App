@@ -708,6 +708,183 @@ def test_valid_runsheet_still_parses_and_seeds_state(
     assert len(written["items"]) == 2
 
 
+# ── stopping a parse ──────────────────────────────────────────────────────
+
+from tests.test_openrouter import hung_up  # noqa: E402
+
+PARSE_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+
+def _parse(client, **extra):
+    return client.post("/api/upload_and_parse", content_type="multipart/form-data",
+                       data={"pdf": (io.BytesIO(b"%PDF-1.4 fake"), "service.pdf"),
+                             "or_key": "sk-or-test", "or_model": "test/model:free",
+                             **extra})
+
+
+def _thinking(monkeypatch):
+    """A model that never answers: keep-alive lines until it is dropped."""
+    import requests
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    stream = Stream([KEEP_ALIVE] * 1000, gap=0.05)
+    monkeypatch.setattr(requests, "post", lambda *_a, **_k: stream)
+    return stream
+
+
+def test_a_model_still_thinking_at_the_limit_is_stopped(
+        parse_client, isolated_state, monkeypatch):
+    """The owner's GPT-5 nano reasoned for ages. Past the limit the call is
+    dropped — not just abandoned, so it stops billing — and they're told."""
+    import propresenterrunsheet.routes.parse as parse_mod
+
+    monkeypatch.setattr(parse_mod, "_AI_TIMEOUT_S", 0.4)
+    stream = _thinking(monkeypatch)
+    err = _parse(parse_client).get_json()["error"]
+    assert "still working after" in err and hung_up(stream)
+    assert not sm_state.RUNSHEET_STATE_FILE.exists()
+
+
+def test_start_over_stops_the_running_parse(parse_client, isolated_state,
+                                            monkeypatch):
+    import threading
+    import time
+
+    # The parse on a client of its own: the fixture's keeps a request
+    # context open, which a second thread must not share.
+    stream, got = _thinking(monkeypatch), {}
+    running = threading.Thread(target=lambda: got.update(r=_parse(
+        parse_client.application.test_client(), parse_id=PARSE_ID)))
+    running.start()
+    time.sleep(0.3)
+    assert parse_client.post("/api/parse/cancel",
+                             json={"parse_id": PARSE_ID}).get_json() == {"ok": True}
+    running.join(2)
+    assert got["r"].get_json()["cancelled"] is True and hung_up(stream)
+    assert not sm_state.RUNSHEET_STATE_FILE.exists()
+    # Finished, it is forgotten; junk ids stop nothing.
+    for pid in (PARSE_ID, "", "../x", ["a"], "x" * 100):
+        assert parse_client.post("/api/parse/cancel",
+                                 json={"parse_id": pid}).get_json() == {"ok": False}
+
+
+def test_started_over_as_the_answer_lands_writes_no_clock_state(
+        parse_client, isolated_state, monkeypatch):
+    """The model answered, but the runsheet is gone: nothing may reach
+    the Service Mate clocks."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+
+    def answer_then_start_over(*_a, **_k):
+        parse_mod._running[PARSE_ID].set()
+        return _FakeResponse(json.dumps({"items": [{"type": "song", "title": "X"}]}))
+
+    monkeypatch.setattr(requests, "post", answer_then_start_over)
+    assert _parse(parse_client, parse_id=PARSE_ID).get_json()["cancelled"] is True
+    assert not sm_state.RUNSHEET_STATE_FILE.exists()
+
+
+def test_start_over_during_the_slow_start_sends_nothing(
+        parse_client, isolated_state, monkeypatch):
+    """The key check and the template fetch come first and can take
+    seconds. A cancel then must still count, and the runsheet — names and
+    all — must never reach OpenRouter."""
+    import threading
+    import time
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+
+    def slow_key_check(configured, *_a, **_k):
+        time.sleep(0.5)
+        return configured
+
+    sent = []
+    monkeypatch.setattr(parse_mod, "resolve_model", slow_key_check)
+    monkeypatch.setattr(requests, "post",
+                        lambda *_a, **k: sent.append(k) or _FakeResponse(_RUNSHEET))
+    got = {}
+    running = threading.Thread(target=lambda: got.update(r=_parse(
+        parse_client.application.test_client(), parse_id=PARSE_ID)))
+    running.start()
+    time.sleep(0.2)
+    assert parse_client.post("/api/parse/cancel",
+                             json={"parse_id": PARSE_ID}).get_json() == {"ok": True}
+    running.join(3)
+    assert got["r"].get_json()["cancelled"] is True and sent == []
+
+
+def test_start_over_during_the_pdf_read_is_a_cancel_not_a_failure(
+        parse_client, isolated_state, monkeypatch):
+    """The second look, at the PDF itself, used to swallow the stop and
+    report the runsheet as unreadable — a failure in the stats for a parse
+    the operator had cancelled."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    _catalogue(monkeypatch, funded=True)
+    failed = []
+    monkeypatch.setattr(parse_mod.stats, "track", lambda event, **kw:
+                        failed.append(kw.get("reason")) if event == "parse_failed" else None)
+    replies = iter([_FakeResponse('{"items": []}')])
+
+    def post(*_a, **_k):
+        reply = next(replies, None)
+        if reply is None:               # the PDF read: Start over lands now
+            parse_mod._running[PARSE_ID].set()
+            return Stream([KEEP_ALIVE] * 1000, gap=0.05)
+        return reply
+
+    monkeypatch.setattr(requests, "post", post)
+    assert _parse(parse_client, parse_id=PARSE_ID).get_json()["cancelled"] is True
+    assert failed == []
+
+
+def test_a_pdf_read_that_runs_out_of_time_names_the_reader(
+        parse_client, isolated_state, monkeypatch):
+    """A text-only model answers at once; the model sent the PDF stalls.
+    The message — and the stats — must blame the one that stalled."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    _catalogue(monkeypatch, funded=True)
+    parse_mod.fetch_catalogue()["data"].append(
+        {"id": "deepseek/deepseek-chat", "architecture": {"input_modalities": ["text"]},
+         "pricing": {"prompt": "0.0000003", "completion": "0.000001"}})
+    monkeypatch.setattr(parse_mod, "_AI_TIMEOUT_S", 0.4)
+    failed = []
+    monkeypatch.setattr(parse_mod.stats, "track", lambda event, **kw:
+                        failed.append(kw.get("model")) if event == "parse_failed" else None)
+    replies = iter([_FakeResponse('{"items": []}', model="deepseek/deepseek-chat")])
+    monkeypatch.setattr(requests, "post", lambda *_a, **_k: next(
+        replies, None) or Stream([KEEP_ALIVE] * 1000, gap=0.05))
+    err = _parse(parse_client, or_model="deepseek/deepseek-chat").get_json()["error"]
+    assert err.startswith("openai/gpt-4.1-mini was still working")
+    assert failed == ["openai/gpt-4.1-mini"]
+
+
+def test_a_backup_model_that_runs_out_of_time_is_the_one_named(
+        parse_client, isolated_state, monkeypatch):
+    """The first model's provider is overloaded, so the backup is asked —
+    and stalls. The operator is told to replace the backup, not the model
+    that failed at once."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_model_catalogue import _catalogue as catalogue, _model
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    busy, spare = "nvidia/nemotron-3-super-120b-a12b:free", "openai/gpt-oss-20b:free"
+    cat = catalogue(_model(busy, ctx=262144), _model(spare, ctx=128000))
+    monkeypatch.setattr(parse_mod, "fetch_catalogue", lambda *_a, **_k: cat)
+    monkeypatch.setattr(parse_mod, "_AI_TIMEOUT_S", 0.4)
+    replies = iter([_FakeErrorResponse(200, _OVERLOADED)])
+    monkeypatch.setattr(requests, "post", lambda *_a, **_k: next(
+        replies, None) or Stream([KEEP_ALIVE] * 1000, gap=0.05))
+    err = _parse(parse_client, or_model=busy).get_json()["error"]
+    assert err.startswith(f"{spare} was still working"), err
+
+
 # ── reasoning models ──────────────────────────────────────────────────────
 
 _ONE_SONG = json.dumps({"service_name": "S",

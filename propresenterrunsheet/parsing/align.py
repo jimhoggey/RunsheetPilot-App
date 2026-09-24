@@ -36,42 +36,22 @@ operator told us always beats a thing the model inferred."""
 import json
 import logging
 import re
-import threading
 import time
 
 from ..config import APP_NAME
 from ..logging_setup import log_safe
 from .models import provider_failure, reasoning_for
+from .openrouter import Stopped, chat
 
 
 log = logging.getLogger("pp_runsheet")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Wall-clock limit on the whole pass, backup model included. A read timeout
-# is not enough: OpenRouter trickles keep-alive bytes while a model works,
-# so a slow reply never trips one — live, a preview sat for minutes. Good
-# answers from the free default model took 12-28 s; a paid one takes a few.
+# Wall-clock limit on the whole pass, backup model included; past it the
+# call is dropped, not just abandoned (see openrouter.chat). Good answers
+# from the free default model took 12-28 s; a paid one takes a few.
 _BUDGET_S = 30
-
-
-def _within(deadline: float, fn, *args):
-    """fn(*args), or None if it hasn't returned by `deadline` (monotonic).
-    Runs on a daemon thread, so an abandoned call never holds the app open."""
-    box = {}
-
-    def run():
-        try:
-            box["r"] = fn(*args)
-        except Exception as e:          # re-raised below, in the caller
-            box["e"] = e
-
-    t = threading.Thread(target=run, daemon=True)
-    t.start()
-    t.join(max(0.0, deadline - time.monotonic()))
-    if "e" in box:
-        raise box["e"]
-    return box.get("r")
 
 _PROMPT = """\
 You are organising a ProPresenter playlist to match a church service runsheet.
@@ -245,6 +225,8 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
             import requests as req
             sender = req.post
 
+        deadline = time.monotonic() + _BUDGET_S
+
         def ask(model_id):
             body = {"model": model_id,
                     "messages": [{"role": "user", "content": prompt}],
@@ -259,27 +241,22 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
             effort = reasoning_for(model_id, catalogue)
             if effort:
                 body["reasoning"] = effort
-            return sender(
-                OPENROUTER_URL,
+            return chat(
+                sender, OPENROUTER_URL, timeout_s=deadline - time.monotonic(),
                 headers={"Authorization": f"Bearer {or_key}",
                          "HTTP-Referer": "runsheet-pilot",
                          "X-Title": APP_NAME,
                          "Content-Type": "application/json"},
-                json=body, timeout=_BUDGET_S)
+                body=body)
 
-        deadline = time.monotonic() + _BUDGET_S
-        r = _within(deadline, ask, model)
-        failure = r is not None and provider_failure(r)
+        r = ask(model)
+        failure = provider_failure(r)
         if failure and backup and backup != model:
             log.info("Alignment: %s failed behind %s (%s) — retrying with %s",
                      log_safe(failure["provider"]), log_safe(model),
                      failure["code"], log_safe(backup))
-            r = _within(deadline, ask, backup)
-            failure = r is not None and provider_failure(r)
-        if r is None:
-            log.info("Alignment: no answer within %ss — placing without it",
-                     _BUDGET_S)
-            return {}
+            r = ask(backup)
+            failure = provider_failure(r)
         if failure:
             log.info("Alignment: %s failed (%s) — placing without it",
                      log_safe(failure["provider"]), failure["code"])
@@ -289,6 +266,10 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
                      getattr(r, "status_code", "?"))
             return {}
         content = (r.json()["choices"][0]["message"]["content"]) or ""
+    except Stopped:
+        log.info("Alignment: no answer within %ss — placing without it",
+                 _BUDGET_S)
+        return {}
     except Exception:
         log.info("Alignment call failed — placing without it", exc_info=True)
         return {}

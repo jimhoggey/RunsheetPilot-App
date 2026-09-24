@@ -118,6 +118,7 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
 
     class _Reply:
         ok = True
+        status_code = 200
 
         @staticmethod
         def json():
