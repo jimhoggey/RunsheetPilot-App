@@ -474,7 +474,9 @@ def apply_update(http_get=None, spawn=None, hard_exit=None):
     try:
         install, writable = install_location()
         if not writable:
-            raise PermissionError(f"not writable: {install}")
+            log.warning("Update can't replace the app at %s", install)
+            _set(state="error", error=CANT_REPLACE)
+            return
         _set(state="downloading", error=None)
         get = http_get or requests.get
         sums_resp = get(info["sums_url"], timeout=30)
@@ -487,13 +489,16 @@ def apply_update(http_get=None, spawn=None, hard_exit=None):
         _set(state="verifying")
         payload = _prepare_payload(archive, sys.platform)
         _set(state="applying")
-        _execute_swap(plan_swap(install, payload, sys.platform),
-                      spawn=spawn, hard_exit=hard_exit)
-    except PermissionError as e:
-        # Not writable, or the OS refused the rename: a raw "[Errno 1]
-        # Operation not permitted: <two paths>" helps no one.
-        log.warning("Update can't replace the app: %s", e)
-        _set(state="error", error=CANT_REPLACE)
+        try:
+            _execute_swap(plan_swap(install, payload, sys.platform),
+                          spawn=spawn, hard_exit=hard_exit)
+        except PermissionError as e:
+            # The OS refused to rename or move the app itself: a raw
+            # "[Errno 1] Operation not permitted: <two paths>" helps no
+            # one. Only here — a staging-folder PermissionError above is
+            # not about where the app lives, and keeps its own message.
+            log.warning("Update can't replace the app: %s", e)
+            _set(state="error", error=CANT_REPLACE)
     except Exception as e:
         log.exception("Update failed")
         _set(state="error", error=str(e))

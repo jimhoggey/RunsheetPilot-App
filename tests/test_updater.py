@@ -458,6 +458,28 @@ def test_a_refused_swap_says_what_to_do_not_errno(upd_env, tmp_path, monkeypatch
     assert "Errno" not in st["error"]
 
 
+def test_a_locked_staging_folder_is_not_blamed_on_the_install(upd_env, tmp_path, monkeypatch):
+    """A PermissionError while saving the download (antivirus holding the
+    .part file) is not about where the app lives: "move it into
+    Applications" would send the operator after the wrong fix."""
+    updater._AVAILABLE.update({
+        "asset_name": "Runsheet-Pilot-windows.exe", "asset_url": "https://gh/win.exe",
+        "sums_url": "https://gh/sums.txt", "version": "99.0.0",
+    })
+    monkeypatch.setattr(updater, "install_location",
+                        lambda executable=None, platform=None: (tmp_path / "R.exe", True))
+
+    def locked(*_a, **_k):
+        raise PermissionError(13, "The process cannot access the file")
+
+    monkeypatch.setattr(updater, "download_and_verify", locked)
+    updater.apply_update(http_get=lambda url, **kw: FakeResponse(
+        text="abc  Runsheet-Pilot-windows.exe\n"))
+    st = updater.get_state()
+    assert st["state"] == "error" and st["error"] != updater.CANT_REPLACE
+    assert "cannot access the file" in st["error"]
+
+
 def test_apply_update_checksum_mismatch_sets_error(upd_env, tmp_path, monkeypatch):
     updater._AVAILABLE.update({
         "asset_name": "Runsheet-Pilot-windows.exe",
