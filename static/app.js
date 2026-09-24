@@ -70,26 +70,56 @@ const AUTOSAVE_FIELDS = [
   'create-timers', 'timers-key-only', 'template-playlist'
 ];
 
-// Rolling record of real parse durations (seconds), persisted in
-// settings. The step-2 estimate and the orb progress bar both run off
-// its average, so the "how long will this take" answer is learned from
-// this operator's actual PDFs and model, not a hardcoded guess.
-let _parseTimes = [];
-function _parseAvgSecs() {
-  if (!_parseTimes.length) return 15;
-  return _parseTimes.reduce((a, b) => a + b, 0) / _parseTimes.length;
+// Rolling records of real durations (seconds), persisted in settings as
+// `<kind>_times`. Each step's "~N seconds" and its orb progress bar run off
+// the average, so "how long will this take" is learned from this operator's
+// own runs — their PDFs, their model, their ProPresenter — not a guess.
+//   parse: Step 2, the AI reading the runsheet
+//   build: Step 3, Create building the playlist in ProPresenter
+const _times = {parse: [], build: []};
+const _FIRST_GUESS = {parse: 15, build: 10};   // before any real run
+function _avgSecs(kind) {
+  const t = _times[kind];
+  return t.length ? t.reduce((a, b) => a + b, 0) / t.length : _FIRST_GUESS[kind];
 }
-function _renderParseEstimate() {
-  document.getElementById('step-2-meta').textContent =
-    '~' + Math.round(_parseAvgSecs()) + ' seconds';
-}
-function _recordParseTime(secs) {
-  _parseTimes = _parseTimes.slice(-9).concat(Math.round(secs * 10) / 10);
-  _renderParseEstimate();
+function _recordTime(kind, secs) {
+  _times[kind] = _times[kind].slice(-9).concat(Math.round(secs * 10) / 10);
   // save_settings merges partial posts, so this can't clobber anything.
   fetch('/api/settings', {method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({parse_times: _parseTimes})}).catch(() => {});
+    body: JSON.stringify({[`${kind}_times`]: _times[kind]})}).catch(() => {});
+}
+function _renderParseEstimate() {
+  document.getElementById('step-2-meta').textContent =
+    '~' + Math.round(_avgSecs('parse')) + ' seconds';
+}
+// Create only: Add Section Headers is a different job (the AI reads the
+// slides first), so it neither shows nor feeds this estimate. A finished
+// step keeps its result ("✓ Sunday 21 Sept") instead.
+function _renderBuildEstimate() {
+  if (document.getElementById('step-card-3').classList.contains('state-complete')) return;
+  document.getElementById('step-3-meta').textContent = playlistModeIsUpdate()
+    ? '' : '~' + Math.round(_avgSecs('build')) + ' seconds';
+}
+// A bar paced by the learned average: fills to 92% over `secs`, holds
+// there until the work truly lands, then snaps full. Honest about being
+// an estimate, useful as an indication. Reduced motion hides the bar —
+// hides, not just skips: Parse's track is always shown, and would keep
+// the last parse's full bar — and the "~N seconds" still gives the estimate.
+function _startProgress(fill, secs) {
+  const reduced = window.matchMedia
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  fill.parentElement.hidden = reduced;
+  if (reduced) return;
+  fill.style.transition = 'none';
+  fill.style.width = '0';
+  void fill.offsetWidth;   // commit the reset before animating
+  fill.style.transition = `width ${secs}s linear`;
+  fill.style.width = '92%';
+}
+function _finishProgress(fill) {
+  fill.style.transition = 'width .25s ease';
+  fill.style.width = '100%';
 }
 
 // Cached library source mode ('auto'|'api'|'disk') from settings. Updated
@@ -440,8 +470,12 @@ async function loadSettings() {
   document.getElementById('timers-key-only').checked = !!s.timers_key_only;
   _aliases = Array.isArray(s.template_aliases) ? s.template_aliases : [];
   renderAliasRows();
-  _parseTimes = Array.isArray(s.parse_times) ? s.parse_times.slice(-10) : [];
+  for (const kind of Object.keys(_times)) {
+    const saved = s[`${kind}_times`];
+    _times[kind] = Array.isArray(saved) ? saved.slice(-10) : [];
+  }
   _renderParseEstimate();
+  _renderBuildEstimate();
 
   // Hide Service Mate entirely for operators who don't own a clock —
   // removes the whole panel from the main screen, nothing else changes.
@@ -617,8 +651,8 @@ function _clearRunsheetState() {
   document.getElementById('results-body').innerHTML = '';
   _hideNextStepHint();
   document.getElementById('result-notice').innerHTML = '';
-  document.getElementById('step-3-meta').textContent = '';
   setStepState(3, 'locked');
+  _renderBuildEstimate();
 }
 
 function handleFileSelect(file) {
@@ -779,6 +813,7 @@ function setPlaylistMode(mode) {
   document.getElementById('create-orb-label').textContent = upd
     ? 'Working out where the headers go…'
     : 'Building the playlist in ProPresenter…';
+  _renderBuildEstimate();
   // Nothing is matched in update mode, so a live matching control there
   // would be a button that does nothing — the same reasoning
   // onMatchToggle() already applies when it greys the picker out.
@@ -1720,15 +1755,8 @@ async function parseRunsheet() {
     label.textContent = quips[qi];
   }, 2600);
 
-  // Progress bar paced by the learned average: fills to 92% over avg
-  // seconds, holds there until the response truly lands, then snaps
-  // full. Honest about being an estimate, useful as an indication.
   const fill = document.getElementById('parse-progress');
-  fill.style.transition = 'none';
-  fill.style.width = '0';
-  void fill.offsetWidth;   // commit the reset before animating
-  fill.style.transition = `width ${_parseAvgSecs()}s linear`;
-  fill.style.width = '92%';
+  _startProgress(fill, _avgSecs('parse'));
 
   const t0 = performance.now();
   let parseSucceeded = false;
@@ -1799,9 +1827,7 @@ async function parseRunsheet() {
     // the Create button.
     setStepState(2, 'complete');
     setStepState(3, 'active');
-    // Recorded first: it redraws this step's meta with the time estimate,
-    // which used to overwrite the summary below the moment it appeared.
-    _recordParseTime((performance.now() - t0) / 1000);
+    _recordTime('parse', (performance.now() - t0) / 1000);
     // The timed-row guard resynthesizes rows the AI dropped; say so, so
     // the operator knows why the count beats what the model returned.
     document.getElementById('step-2-meta').textContent =
@@ -1813,8 +1839,7 @@ async function parseRunsheet() {
     setStepState(2, 'active');
   } finally {
     clearInterval(quipTimer);
-    fill.style.transition = 'width .25s ease';
-    fill.style.width = '100%';
+    _finishProgress(fill);
     if (parseSucceeded) {
       // Completion choreography: bar snaps full, the orb takes a small
       // spring bow out, then the results spring in and the page glides
@@ -1983,10 +2008,13 @@ async function createPlaylist() {
   const loader = document.getElementById('create-loader');
   loader.hidden = false;
   const orb = Orb.mount(document.getElementById('create-orb'), 'working');
+  const fill = document.getElementById('create-progress');
+  const t0 = performance.now();
   setStepState(3, 'busy');
   setLoading('Creating playlist in ProPresenter…');
 
   try {
+    _startProgress(fill, _avgSecs('build'));
     // The server exports to the folder SAVED in Settings, so a folder typed
     // a moment ago must be saved first. If it can't be, skip the export
     // rather than write to whatever folder was saved before.
@@ -2022,6 +2050,8 @@ async function createPlaylist() {
       setStepState(3, 'active');
       return;
     }
+    // Only a build that worked says how long building takes.
+    _recordTime('build', (performance.now() - t0) / 1000);
     // Step 3 done — the nudge has served its purpose.
     _hideNextStepHint();
     setStepState(3, 'complete');
@@ -2092,9 +2122,16 @@ async function createPlaylist() {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
     setStepState(3, 'active');
   } finally {
-    orb.stop();
-    loader.hidden = true;
-    btn.disabled = false;
+    // Let the snap to full show before the loader goes. The button waits
+    // too, so a quick re-click can't have its loader hidden by this one.
+    _finishProgress(fill);
+    setTimeout(() => {
+      orb.stop();
+      loader.hidden = true;
+      // The loader is shared with Add Section Headers, which has no bar.
+      fill.parentElement.hidden = true;
+      btn.disabled = false;
+    }, 260);
   }
 }
 
