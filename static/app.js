@@ -988,7 +988,7 @@ function _renderTemplateOptions() {
   if (upd) {
     status.innerHTML = sel.value
       ? 'Adds the runsheet’s headers to this playlist.'
-      : '<span style="color:var(--org)">Pick the playlist you want to add ' +
+      : '<span style="color:var(--red)">Pick the playlist you want to add ' +
         'headers to.</span>';
     return;
   }
@@ -1043,6 +1043,9 @@ function _syncCreateButton() {
   const blocked = playlistModeIsUpdate()
     && !document.getElementById('template-playlist').value;
   btn.disabled = blocked;
+  // The one choice update mode can't go on without, marked as the thing
+  // to do: a grey button alone left people wondering why.
+  document.getElementById('template-playlist').classList.toggle('needs-pick', blocked);
   // The sidebar explains this too, but the sidebar is a drawer that is
   // shut by default and closes on Escape — leaving a grey button in the
   // main flow with its only explanation hidden.
