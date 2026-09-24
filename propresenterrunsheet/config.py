@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 
-VERSION = "2.15.0"
+VERSION = "2.16.0"
 APP_NAME = "Runsheet Pilot"
 
 # Release notes, newest first. ONE source of truth: the what's-new popup
@@ -41,6 +41,16 @@ APP_NAME = "Runsheet Pilot"
 # The same lines go in the GitHub release body.
 # tests/test_whats_new.py enforces the cap AND that VERSION has an entry.
 RELEASE_NOTES = {
+    "2.16.0": [
+        "Already built your playlist by hand? Choose Update an existing "
+        + "playlist and I'll add the runsheet's coloured headers to it — "
+        + "and, if you say so, put it in runsheet order.",
+        "With credit on your OpenRouter key, the AI now reads a screenshot "
+        + "itself, and your runsheets only go to providers that don't keep "
+        + "them or train on them.",
+        "Template slides kept in folders in ProPresenter's Media area now "
+        + "come across when you build.",
+    ],
     "2.15.0": [
         "Behind by a few versions? Updating now takes you straight to the "
         + "newest one. It works out which release is actually newest "
