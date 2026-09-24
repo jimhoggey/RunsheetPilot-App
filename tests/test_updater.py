@@ -182,6 +182,24 @@ def test_install_location_mac_readonly_volume_reports_unwritable(tmp_path, monke
     assert writable is False
 
 
+def test_an_app_in_a_synced_folder_is_not_updated_in_place(tmp_path, monkeypatch):
+    """iCloud Drive and the CloudStorage folders (Dropbox, OneDrive, Google
+    Drive) look writable, but macOS refuses an ad-hoc-signed app's rename
+    there — so say so up front instead of downloading and then failing."""
+    for env in ("HOME", "USERPROFILE"):          # Path.home() on any OS
+        monkeypatch.setenv(env, str(tmp_path))
+    for folder, synced in (
+            ("Library/Mobile Documents/com~apple~CloudDocs/Documents/dist", True),
+            ("Library/CloudStorage/Dropbox/apps", True),
+            ("Applications", False),
+            ("Documents/local", False)):
+        exe = tmp_path / folder / "Runsheet Pilot.app" / "Contents" / "MacOS" / "Runsheet Pilot"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"")
+        _, writable = updater.install_location(executable=str(exe), platform="darwin")
+        assert writable is (not synced), folder
+
+
 def test_install_location_windows_is_exe_path(tmp_path):
     exe = tmp_path / "Desktop" / "Runsheet Pilot.exe"
     exe.parent.mkdir(parents=True)
@@ -412,7 +430,32 @@ def test_apply_update_unwritable_location_errors_without_download(upd_env, monke
     updater.apply_update(http_get=lambda url, **kw: FakeResponse(text="", content=b""))
     st = updater.get_state()
     assert st["state"] == "error"
-    assert "writable" in st["error"].lower() or "move the app" in st["error"].lower()
+    assert st["error"] == updater.CANT_REPLACE
+
+
+def test_a_refused_swap_says_what_to_do_not_errno(upd_env, tmp_path, monkeypatch):
+    """macOS refusing the rename inside iCloud Drive showed "[Errno 1]
+    Operation not permitted: <two paths>". The operator gets the fix."""
+    import hashlib
+    body = b"app-bytes"
+    updater._AVAILABLE.update({
+        "asset_name": "Runsheet-Pilot-mac.zip", "asset_url": "https://gh/mac.zip",
+        "sums_url": "https://gh/sums.txt", "version": "99.0.0",
+    })
+    monkeypatch.setattr(updater, "install_location",
+                        lambda executable=None, platform=None: (tmp_path / "R.app", True))
+    monkeypatch.setattr(updater, "_prepare_payload", lambda archive, plat: tmp_path / "new.app")
+
+    def refused(ops, **kw):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(updater, "_execute_swap", refused)
+    sha = hashlib.sha256(body).hexdigest()
+    updater.apply_update(http_get=lambda url, **kw: FakeResponse(
+        text=f"{sha}  Runsheet-Pilot-mac.zip\n", content=body))
+    st = updater.get_state()
+    assert st["state"] == "error" and st["error"] == updater.CANT_REPLACE
+    assert "Errno" not in st["error"]
 
 
 def test_apply_update_checksum_mismatch_sets_error(upd_env, tmp_path, monkeypatch):

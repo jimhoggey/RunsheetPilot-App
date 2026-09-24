@@ -209,18 +209,38 @@ def download_and_verify(url, name, expected_sha, http_get=None, timeout=120):
     return final
 
 
+# Folders macOS runs through a File Provider: iCloud Drive, and Dropbox,
+# OneDrive, Google Drive under CloudStorage. Changing a file there needs a
+# permission macOS can't grant an ad-hoc-signed app, so the swap's rename
+# fails with EPERM although the folder looks writable (live, macOS 26:
+# TCC refused kTCCServiceFileProviderDomain, Sept 2026).
+_SYNCED = ("Library/Mobile Documents", "Library/CloudStorage")
+
+# What the operator is told whenever the app can't replace itself.
+CANT_REPLACE = ("Runsheet Pilot can't replace itself where it is: the folder "
+                "is read-only, or kept in sync by iCloud Drive, Dropbox or "
+                "OneDrive. Move it into Applications (Mac) or a folder you "
+                "can write to (Windows), then update again.")
+
+
+def _in_synced_folder(path, home=None) -> bool:
+    home = Path(home or Path.home())
+    return any(Path(path).is_relative_to(home / d) for d in _SYNCED)
+
+
 def install_location(executable=None, platform=None):
     """(install_root, writable). Mac: the .app bundle directory resolved
     by walking up from sys.executable; Windows: the exe path itself.
     `writable` checks the PARENT directory because the swap is two renames
-    inside it. Read-only (dmg mount, network share, no rights) -> the UI
-    degrades to notify-only instead of attempting a doomed swap."""
+    inside it. Read-only (dmg mount, network share, no rights) or a synced
+    folder -> the UI degrades to notify-only instead of a doomed swap."""
     exe = Path(executable or sys.executable)
     plat = platform or sys.platform
     if plat == "darwin":
         for parent in exe.parents:
             if parent.name.endswith(".app"):
-                return parent, os.access(str(parent.parent), os.W_OK)
+                return parent, (os.access(str(parent.parent), os.W_OK)
+                                and not _in_synced_folder(parent))
         return exe.parent, False   # not in a bundle (dev) — never writable
     if plat == "win32":
         return exe, os.access(str(exe.parent), os.W_OK)
@@ -454,10 +474,7 @@ def apply_update(http_get=None, spawn=None, hard_exit=None):
     try:
         install, writable = install_location()
         if not writable:
-            raise PermissionError(
-                "Install location is not writable. Move the app to "
-                "Applications (Mac) or a writable folder (Windows), or "
-                "download the update manually.")
+            raise PermissionError(f"not writable: {install}")
         _set(state="downloading", error=None)
         get = http_get or requests.get
         sums_resp = get(info["sums_url"], timeout=30)
@@ -472,6 +489,11 @@ def apply_update(http_get=None, spawn=None, hard_exit=None):
         _set(state="applying")
         _execute_swap(plan_swap(install, payload, sys.platform),
                       spawn=spawn, hard_exit=hard_exit)
+    except PermissionError as e:
+        # Not writable, or the OS refused the rename: a raw "[Errno 1]
+        # Operation not permitted: <two paths>" helps no one.
+        log.warning("Update can't replace the app: %s", e)
+        _set(state="error", error=CANT_REPLACE)
     except Exception as e:
         log.exception("Update failed")
         _set(state="error", error=str(e))
