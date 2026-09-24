@@ -5,7 +5,7 @@ folders so the UI can pre-fill its dropdowns; the POST is a partial
 update that merges into whatever's already on disk."""
 
 import difflib
-import re
+import string
 import sys
 
 from flask import Blueprint, jsonify, request
@@ -80,8 +80,15 @@ def get_models():
                     "available": True})
 
 
-# vendor/model, optionally :variant — the shape of every OpenRouter id.
-_MODEL_ID = re.compile(r"[\w.\-]+/[\w.\-]+(?::[\w.\-]+)?")
+_ID_CHARS = frozenset(string.ascii_letters + string.digits + "_.-:/")
+
+
+def _looks_like_model_id(text: str) -> bool:
+    """vendor/model, optionally :variant — the shape of every OpenRouter
+    id. Plain string checks rather than a pattern: linear on any input."""
+    vendor, _, model = text.partition("/")
+    return (len(text) <= 120 and bool(vendor) and bool(model)
+            and "/" not in model and ":" not in vendor and set(text) <= _ID_CHARS)
 
 
 @bp.route("/api/models/check", methods=["POST"])
@@ -90,7 +97,7 @@ def check_model():
     runsheet cost on it? Looked up in the catalogue, priced the way the
     recommended models are (estimate_cost). No prompt is sent."""
     model_id = str((request.get_json(silent=True) or {}).get("model") or "").strip()
-    if len(model_id) > 120 or not _MODEL_ID.fullmatch(model_id):
+    if not _looks_like_model_id(model_id):
         return jsonify({"ok": False, "message": "That doesn't look like an "
                         "OpenRouter model id. They look like openai/gpt-4.1-mini."})
     catalogue = fetch_catalogue()

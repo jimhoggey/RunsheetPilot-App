@@ -311,8 +311,10 @@ def test_a_mistyped_or_malformed_id_is_refused(check):
     missing = check("openai/gpt-5-nan")
     assert not missing["ok"]
     assert "Did you mean openai/gpt-5-nano?" in missing["message"]
-    for junk in ("", "gpt-5-nano", "a/b/c", "a/b c", "x" * 200 + "/y", None, 7):
-        assert check(junk)["ok"] is False, junk
+    for junk in ("", "gpt-5-nano", "a/b/c", "a/b c", "x" * 200 + "/y", None, 7,
+                 "open:ai/x", "a/" + "-" * 100_000 + "!"):
+        assert check(junk)["ok"] is False, str(junk)[:20]
+    assert check("google/gemma-4-26b-a4b-it:free")["message"].startswith("OpenRouter has no")
 
 
 def test_the_check_says_so_when_openrouter_is_unreachable(check, monkeypatch):
