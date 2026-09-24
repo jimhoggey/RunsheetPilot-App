@@ -808,8 +808,6 @@ function setPlaylistMode(mode) {
   document.getElementById('playlist-name-label').textContent = upd
     ? 'Service name'
     : 'Service name (also the playlist name in PP)';
-  document.getElementById('create-btn').textContent =
-    upd ? '✓ Add Section Headers' : '✓ Create Runsheet & Export File';
   document.getElementById('create-orb-label').textContent = upd
     ? 'Working out where the headers go…'
     : 'Building the playlist in ProPresenter…';
@@ -866,6 +864,16 @@ function _clearUpdatePlan() {
   _updatePlan = null;
   document.getElementById('update-plan').hidden = true;
   _closeReorder();
+  _labelCreateButton(false);
+}
+
+// Step 3's button. While a plan says the playlist is live, pressing it
+// again is the next step — switch away in ProPresenter, then check again —
+// so it says Update playlist.
+function _labelCreateButton(live) {
+  document.getElementById('create-btn').textContent = !playlistModeIsUpdate()
+    ? '✓ Create Runsheet & Export File'
+    : live ? '✓ Update playlist' : '✓ Add Section Headers';
 }
 
 // ─── The template verdict banner ──────────────────────────────────────────
@@ -2333,12 +2341,15 @@ function _renderUpdatePlan(res) {
       <strong>Media</strong> in ProPresenter's left sidebar, then try again.
       </div>`;
   }
-  if ((res.warnings || []).includes('live')) {
+  const live = (res.warnings || []).includes('live');
+  if (live) {
     html += `<div class="notice notice-err">
       <strong>That playlist is live in ProPresenter right now.</strong>
-      Changing it can move the active slide under your hands. Switch away
-      from it first.</div>`;
+      Changing it can move the active slide under your hands. Switch to
+      another playlist in ProPresenter, then press <strong>Update
+      playlist</strong> in Step 3.</div>`;
   }
+  _labelCreateButton(live);
   if ((res.warnings || []).includes('pco')) {
     html += `<div class="notice notice-info">
       This playlist is linked to Planning Center. A change made here can be
@@ -2380,8 +2391,11 @@ function _renderUpdatePlan(res) {
   });
   html += '</ol></div>';
 
+  // Live, this one writes into the playlist on screen: not the next step,
+  // so not the green one.
   html += `<div style="margin-top:12px;display:flex;gap:10px;align-items:center">
-    <button class="btn btn-grn" onclick="confirmUpdate()">✓ Update playlist</button>
+    <button class="btn ${live ? 'btn-dim btn-sm' : 'btn-grn'}" onclick="confirmUpdate()">
+      ${live ? 'Update anyway' : '✓ Update playlist'}</button>
     <button class="btn btn-dim btn-sm" onclick="cancelUpdate()">Cancel</button>
     </div>`;
   el.hidden = false;
