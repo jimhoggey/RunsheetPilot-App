@@ -35,6 +35,14 @@ class Stream:
         self.closed = True
 
 
+def hung_up(stream, within=1.0):
+    """The worker hangs up just after Stopped is raised, not before."""
+    end = time.monotonic() + within
+    while not stream.closed and time.monotonic() < end:
+        time.sleep(0.01)
+    return stream.closed
+
+
 def data(chunk):
     return b"data: " + json.dumps(chunk).encode()
 
@@ -95,7 +103,7 @@ def test_a_model_still_thinking_at_the_deadline_is_dropped():
     with pytest.raises(Stopped) as stopped:
         ask(poster(stream), timeout_s=0.4)
     assert stopped.value.reason == "timeout"
-    assert time.monotonic() - t < 1.0 and stream.closed
+    assert time.monotonic() - t < 1.0 and hung_up(stream)
 
 
 def test_start_over_drops_the_call_at_once():
@@ -105,11 +113,69 @@ def test_start_over_drops_the_call_at_once():
     with pytest.raises(Stopped) as stopped:
         ask(poster(stream), stop=stop)
     assert stopped.value.reason == "cancelled"
-    assert time.monotonic() - t < 0.8 and stream.closed
+    assert time.monotonic() - t < 0.8 and hung_up(stream)
 
 
-def test_no_time_left_means_no_call():
+def test_no_time_left_or_already_stopped_means_no_call():
+    """Start over during OCR or the template fetch: the runsheet must not
+    go to OpenRouter at all."""
     def post(*_a, **_k):
-        raise AssertionError("must not start a call it can't wait for")
+        raise AssertionError("must not send a call nobody will wait for")
     with pytest.raises(Stopped):
         ask(post, timeout_s=0)
+    stopped = threading.Event()
+    stopped.set()
+    with pytest.raises(Stopped) as why:
+        ask(post, stop=stopped)
+    assert why.value.reason == "cancelled"
+
+
+@pytest.fixture
+def stalled_server():
+    """A real HTTP server on this machine: it starts an event stream, sends
+    one keep-alive, then goes quiet, as a model stuck thinking does. Gives
+    its URL and an Event set once the client hangs up."""
+    import socket
+
+    listener = socket.create_server(("127.0.0.1", 0))
+    hung_up = threading.Event()
+
+    def serve():
+        conn, _ = listener.accept()
+        with conn:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += conn.recv(4096)
+            line = b": OPENROUTER PROCESSING\n\n"
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                         b"Transfer-Encoding: chunked\r\n\r\n"
+                         + b"%x\r\n%s\r\n" % (len(line), line))
+            conn.settimeout(10)
+            try:
+                while conn.recv(4096):      # the request body, then silence
+                    pass
+            except OSError:
+                pass
+            hung_up.set()
+
+    threading.Thread(target=serve, daemon=True).start()
+    yield f"http://127.0.0.1:{listener.getsockname()[1]}/api/v1/chat/completions", hung_up
+    listener.close()
+
+
+def test_start_over_drops_a_stalled_real_stream_at_once(stalled_server):
+    """With the real HTTP stack, closing the response from the waiting
+    thread blocked until the next byte: the call ran on to the read
+    timeout (review before merging, Sept 2026). Now it stops at once, and
+    the connection is really hung up — that is what stops the billing."""
+    import requests
+
+    url, hung_up = stalled_server
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    t = time.monotonic()
+    with pytest.raises(Stopped):
+        chat(requests.post, url, headers={}, body={"model": "m"},
+             timeout_s=30, stop=stop)
+    assert time.monotonic() - t < 1.5
+    assert hung_up.wait(3), "the server never saw the connection close"

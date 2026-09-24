@@ -1764,7 +1764,10 @@ async function parseRunsheet() {
   form.append('matching', matchingOn() ? 'on' : 'off');
   form.append('or_key',   document.getElementById('or-key').value.trim());
   form.append('or_model', document.getElementById('or-model').value.trim());
-  const inFlight = _parseInFlight = {id: crypto.randomUUID(), controller: new AbortController()};
+  // randomUUID needs WebKit 15.4+ (macOS 12.3); older Macs get a random id.
+  const id = self.crypto && crypto.randomUUID ? crypto.randomUUID()
+    : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  const inFlight = _parseInFlight = {id, controller: new AbortController()};
   form.append('parse_id', inFlight.id);
 
   try {

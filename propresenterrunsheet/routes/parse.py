@@ -382,6 +382,19 @@ def _rate_limit_message(resp) -> str:
 
 @bp.route("/api/upload_and_parse", methods=["POST"])
 def api_upload_and_parse():
+    """Registered for Start over before anything else runs: the key check
+    and the template fetch below can take seconds, and a cancel that
+    arrives before the parse is listed would be lost."""
+    parse_id, stop = _parse_id(request.form.get("parse_id")), threading.Event()
+    if parse_id:
+        _running[parse_id] = stop
+    try:
+        return _upload_and_parse(stop)
+    finally:
+        _running.pop(parse_id, None)
+
+
+def _upload_and_parse(stop: threading.Event):
     import requests as req
 
     # 1. Validate request. Two ways in: a file, or text the operator has
@@ -439,9 +452,6 @@ def api_upload_and_parse():
     content = ""
     attachment = lead = None     # the file itself; `lead` when it goes first
     read_from = ""               # "PDF" / "picture" when the model read it
-    parse_id, stop = _parse_id(request.form.get("parse_id")), threading.Event()
-    if parse_id:
-        _running[parse_id] = stop
 
     try:
         # 4. Get the runsheet text. Either the operator already reviewed
@@ -739,6 +749,8 @@ def api_upload_and_parse():
                 file_content = (((file_body.get("choices") or [{}])[0]
                                  .get("message") or {}).get("content") or "")
                 got = parse_ai_response(file_content)
+            except Stopped:
+                raise                   # Start over or the time limit: not a failed read
             except Exception:
                 log.info("Reading the file itself failed", exc_info=True)
                 got = ([], "", "")
@@ -1071,8 +1083,6 @@ def api_upload_and_parse():
             "Something went wrong while parsing the runsheet. Try again "
             "in a moment, or pick a different model in Settings if it "
             "keeps failing."}), 500
-    finally:
-        _running.pop(parse_id, None)
 
 
 @bp.route("/api/parse/cancel", methods=["POST"])

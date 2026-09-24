@@ -9,9 +9,9 @@ providers — OpenAI and Anthropic among them, though not Groq, Google or
 Mistral (OpenRouter's streaming docs, Sept 2026).
 
 So `chat` streams the call on a worker thread while the caller's thread
-watches the clock and a stop flag. When either trips, the connection is
-closed and Stopped raised at once; the worker also stops at the next
-line it reads. What comes back is shaped like the Response callers
+watches the clock and a stop flag. When either trips, Stopped is raised
+at once, and the worker is woken to hang up (see _wake). What comes
+back is shaped like the Response callers
 already read — status_code, ok, json(), text — so nothing after the call
 changes. An error status is the real Response, unread: OpenRouter sends
 those as plain JSON before any stream starts."""
@@ -81,22 +81,28 @@ def chat(post, url: str, *, headers: dict, body: dict, timeout_s: float,
     """POST `body` to `url`, streamed. The reply, or Stopped once
     `timeout_s` has passed or `stop` is set. `post` is requests.post, or
     a stand-in; a reply that isn't an event stream is returned as is."""
+    # Nothing is sent once the operator has moved on, or with no time left.
+    if stop is not None and stop.is_set():
+        raise Stopped("cancelled")
     if timeout_s <= 0:
-        raise Stopped("timeout")        # nothing left to spend: don't start
+        raise Stopped("timeout")
     halt, done, box = threading.Event(), threading.Event(), {}
 
     def work():
+        resp = None
         try:
             resp = box["resp"] = post(url, headers=headers, json={**body, "stream": True},
                                       timeout=(10, max(timeout_s, 1)), stream=True)
+            if halt.is_set():
+                return                  # dropped before it was read
             kind = (getattr(resp, "headers", None) or {}).get("Content-Type", "")
             box["reply"] = (_read(resp, halt) if resp.status_code < 400
                             and "text/event-stream" in kind else resp)
-            if halt.is_set():
-                resp.close()            # dropped while it streamed: hang up
         except Exception as e:          # handed to the caller below
             box["error"] = e
         finally:
+            if halt.is_set() and resp is not None:
+                resp.close()            # dropped: hang up, from this thread
             done.set()
 
     threading.Thread(target=work, daemon=True).start()
@@ -106,9 +112,24 @@ def chat(post, url: str, *, headers: dict, body: dict, timeout_s: float,
                   else "timeout" if time.monotonic() >= deadline else None)
         if reason:
             halt.set()
-            if box.get("resp") is not None:
-                box["resp"].close()
+            _wake(box.get("resp"))
             raise Stopped(reason)
     if "error" in box:
         raise box["error"]
     return box["reply"]
+
+
+def _wake(resp):
+    """Wake the worker's blocked read, so it sees `halt` and hangs up.
+
+    Not resp.close() from here: that waits for the lock the blocked read
+    holds — for OpenRouter's next byte, or the read timeout, a minute on
+    a stalled stream. Shutting the socket's read side (urllib3 2.3+)
+    ends that read at once. Failing that, the worker still hangs up at
+    the next line it gets."""
+    shutdown = getattr(getattr(resp, "raw", None), "shutdown", None)
+    if shutdown is not None:
+        try:
+            shutdown()
+        except (OSError, RuntimeError, ValueError):
+            pass                        # already finished, or already closed
