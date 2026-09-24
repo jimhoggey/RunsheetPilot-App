@@ -53,6 +53,28 @@ def test_mac_build_sets_local_network_usage_description(rel):
         f"permission prompt - it just fails with 'No route to host'.")
 
 
+@pytest.mark.parametrize("rel", [
+    "build_mac.sh",
+    ".github/workflows/release.yml",
+])
+def test_mac_app_is_re_signed_after_its_last_info_plist_edit(rel):
+    """Editing Info.plist after PyInstaller has signed the app breaks the
+    signature, and macOS calls a downloaded app with a broken signature
+    "damaged and can't be opened" — every Mac download from v2.12.2 to
+    v2.16.0. The re-sign has to come after the LAST edit, be verified, and
+    happen before the app is packed into the .dmg."""
+    text = _read(rel)
+    last_edit = max(m.start() for m in re.finditer(r"plutil -replace", text))
+    sign = text.find("codesign --force --sign -", last_edit)
+    assert sign != -1, f"{rel}: nothing re-signs the app after its last Info.plist edit"
+    assert "codesign --verify --deep --strict" in text[sign:], (
+        f"{rel}: the new signature is never verified, so a broken one could ship")
+    assert sign < text.find("hdiutil create"), (
+        f"{rel}: the .dmg is made before the app is re-signed")
+    assert "CFBundleShortVersionString" in text, (
+        f"{rel}: the app's own version stays PyInstaller's 0.0.0")
+
+
 def test_workflow_verifies_the_key_on_the_built_bundle():
     """Asserting on the built Info.plist, not on the script, is what makes
     this real - the v2.12.1 build_mac.sh contained a correct plutil call
