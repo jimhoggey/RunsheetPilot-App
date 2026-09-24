@@ -474,7 +474,7 @@ def test_a_locked_staging_folder_is_not_blamed_on_the_install(upd_env, tmp_path,
 
     monkeypatch.setattr(updater, "download_and_verify", locked)
     updater.apply_update(http_get=lambda url, **kw: FakeResponse(
-        text="abc  Runsheet-Pilot-windows.exe\n"))
+        text=f"{'0' * 64}  Runsheet-Pilot-windows.exe\n"))
     st = updater.get_state()
     assert st["state"] == "error" and st["error"] != updater.CANT_REPLACE
     assert "cannot access the file" in st["error"]
