@@ -704,3 +704,77 @@ def test_valid_runsheet_still_parses_and_seeds_state(
     assert body["suggested_name"] == "Sunday Morning"
     written = json.loads(sm_state.RUNSHEET_STATE_FILE.read_text())
     assert len(written["items"]) == 2
+
+
+# ── stopping a parse ──────────────────────────────────────────────────────
+
+PARSE_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+
+def _parse(client, **extra):
+    return client.post("/api/upload_and_parse", content_type="multipart/form-data",
+                       data={"pdf": (io.BytesIO(b"%PDF-1.4 fake"), "service.pdf"),
+                             "or_key": "sk-or-test", "or_model": "test/model:free",
+                             **extra})
+
+
+def _thinking(monkeypatch):
+    """A model that never answers: keep-alive lines until it is dropped."""
+    import requests
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    stream = Stream([KEEP_ALIVE] * 1000, gap=0.05)
+    monkeypatch.setattr(requests, "post", lambda *_a, **_k: stream)
+    return stream
+
+
+def test_a_model_still_thinking_at_the_limit_is_stopped(
+        parse_client, isolated_state, monkeypatch):
+    """The owner's GPT-5 nano reasoned for ages. Past the limit the call is
+    dropped — not just abandoned, so it stops billing — and they're told."""
+    import propresenterrunsheet.routes.parse as parse_mod
+
+    monkeypatch.setattr(parse_mod, "_AI_TIMEOUT_S", 0.4)
+    stream = _thinking(monkeypatch)
+    err = _parse(parse_client).get_json()["error"]
+    assert "still working after" in err and stream.closed
+    assert not sm_state.RUNSHEET_STATE_FILE.exists()
+
+
+def test_start_over_stops_the_running_parse(parse_client, isolated_state,
+                                            monkeypatch):
+    import threading
+    import time
+
+    # The parse on a client of its own: the fixture's keeps a request
+    # context open, which a second thread must not share.
+    stream, got = _thinking(monkeypatch), {}
+    running = threading.Thread(target=lambda: got.update(r=_parse(
+        parse_client.application.test_client(), parse_id=PARSE_ID)))
+    running.start()
+    time.sleep(0.3)
+    assert parse_client.post("/api/parse/cancel",
+                             json={"parse_id": PARSE_ID}).get_json() == {"ok": True}
+    running.join(2)
+    assert got["r"].get_json()["cancelled"] is True and stream.closed
+    assert not sm_state.RUNSHEET_STATE_FILE.exists()
+    # Finished, it is forgotten; junk ids stop nothing.
+    for pid in (PARSE_ID, "", "../x", ["a"], "x" * 100):
+        assert parse_client.post("/api/parse/cancel",
+                                 json={"parse_id": pid}).get_json() == {"ok": False}
+
+
+def test_started_over_as_the_answer_lands_writes_no_clock_state(
+        parse_client, isolated_state, monkeypatch):
+    """The model answered, but the runsheet is gone: nothing may reach
+    the Service Mate clocks."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+
+    def answer_then_start_over(*_a, **_k):
+        parse_mod._running[PARSE_ID].set()
+        return _FakeResponse(json.dumps({"items": [{"type": "song", "title": "X"}]}))
+
+    monkeypatch.setattr(requests, "post", answer_then_start_over)
+    assert _parse(parse_client, parse_id=PARSE_ID).get_json()["cancelled"] is True
+    assert not sm_state.RUNSHEET_STATE_FILE.exists()

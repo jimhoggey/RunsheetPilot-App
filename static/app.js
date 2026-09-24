@@ -609,8 +609,23 @@ function handleDrop(e) {
 // it all, so Step 3 can never act on the runsheet before — and a parse
 // still running for that one is discarded when it lands.
 let _parseSeq = 0;
+// The parse still running, if any: its id, and the way to drop its request.
+let _parseInFlight = null;
+
+// A running parse is for a runsheet that's gone: stop the model mid-answer
+// on the server, and drop the page's request.
+function _cancelParse() {
+  const p = _parseInFlight;
+  if (!p) return;
+  _parseInFlight = null;
+  fetch('/api/parse/cancel', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                              body: JSON.stringify({parse_id: p.id})}).catch(() => {});
+  p.controller.abort();
+}
+
 function _clearRunsheetState() {
   _parseSeq++;
+  _cancelParse();
   matchedItems = [];
   _clearUpdatePlan();
   document.getElementById('results-wrap').hidden = true;
@@ -1749,9 +1764,12 @@ async function parseRunsheet() {
   form.append('matching', matchingOn() ? 'on' : 'off');
   form.append('or_key',   document.getElementById('or-key').value.trim());
   form.append('or_model', document.getElementById('or-model').value.trim());
+  const inFlight = _parseInFlight = {id: crypto.randomUUID(), controller: new AbortController()};
+  form.append('parse_id', inFlight.id);
 
   try {
-    const res = await fetch('/api/upload_and_parse', {method:'POST', body: form})
+    const res = await fetch('/api/upload_and_parse',
+                            {method: 'POST', body: form, signal: inFlight.controller.signal})
       .then(r => r.json());
     if (seq !== _parseSeq) return;     // a new file or Start over since
     if (res.error) {
@@ -1809,9 +1827,13 @@ async function parseRunsheet() {
       (res.rescued_rows > 0 ? ` (${res.rescued_rows} recovered)` : '') +
       (res.read_from ? ` · read from the ${res.read_from}` : '');
   } catch (e) {
-    setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
-    setStepState(2, 'active');
+    // Started over: the page has already moved on, so say nothing.
+    if (e.name !== 'AbortError') {
+      setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
+      setStepState(2, 'active');
+    }
   } finally {
+    if (_parseInFlight === inFlight) _parseInFlight = null;
     clearInterval(quipTimer);
     fill.style.transition = 'width .25s ease';
     fill.style.width = '100%';
