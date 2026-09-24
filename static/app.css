@@ -396,6 +396,15 @@ input:focus, select:focus, textarea:focus {
   box-shadow: var(--ring);
 }
 input::placeholder, textarea::placeholder { color: var(--dim); }
+/* A required choice not made yet (update mode's playlist): red, like an
+   error, until it is. Text as .notice-err's — --red on its own tint is
+   under 4.5:1. The open list keeps its normal colour. */
+select.needs-pick, select.needs-pick:hover {
+  border-color: var(--red);
+  color: #fca5a5;
+  background: var(--red-soft);
+}
+select.needs-pick option { color: var(--text); background: var(--card); }
 .field { margin-bottom: 2px; }
 
 /* range slider */
