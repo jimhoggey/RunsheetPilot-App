@@ -129,10 +129,16 @@ def _wake(resp):
     at once on every platform, which is what stops the model; on macOS and
     Linux it also ends the blocked read, and on Windows the read ends when
     OpenRouter closes its side. Shutting only the read side (urllib3's own
-    shutdown) sent nothing on Windows (CI, Sept 2026)."""
+    shutdown) sent nothing on Windows (CI, Sept 2026).
+
+    Through an https:// proxy the connection's socket is urllib3's
+    SSLTransport, which can't shut down; the socket it wraps can. Nothing
+    here may raise: the caller's Stopped has to reach the route."""
     sock = getattr(getattr(getattr(resp, "raw", None), "connection", None), "sock", None)
-    if sock is not None:
+    shutdown = (getattr(sock, "shutdown", None)
+                or getattr(getattr(sock, "socket", None), "shutdown", None))
+    if shutdown is not None:
         try:
-            sock.shutdown(socket.SHUT_RDWR)
+            shutdown(socket.SHUT_RDWR)
         except OSError:
             pass                        # already closed: nothing left to hang up

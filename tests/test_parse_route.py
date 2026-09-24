@@ -836,3 +836,27 @@ def test_start_over_during_the_pdf_read_is_a_cancel_not_a_failure(
     monkeypatch.setattr(requests, "post", post)
     assert _parse(parse_client, parse_id=PARSE_ID).get_json()["cancelled"] is True
     assert failed == []
+
+
+def test_a_pdf_read_that_runs_out_of_time_names_the_reader(
+        parse_client, isolated_state, monkeypatch):
+    """A text-only model answers at once; the model sent the PDF stalls.
+    The message — and the stats — must blame the one that stalled."""
+    import requests
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_openrouter import KEEP_ALIVE, Stream
+
+    _catalogue(monkeypatch, funded=True)
+    parse_mod.fetch_catalogue()["data"].append(
+        {"id": "deepseek/deepseek-chat", "architecture": {"input_modalities": ["text"]},
+         "pricing": {"prompt": "0.0000003", "completion": "0.000001"}})
+    monkeypatch.setattr(parse_mod, "_AI_TIMEOUT_S", 0.4)
+    failed = []
+    monkeypatch.setattr(parse_mod.stats, "track", lambda event, **kw:
+                        failed.append(kw.get("model")) if event == "parse_failed" else None)
+    replies = iter([_FakeResponse('{"items": []}', model="deepseek/deepseek-chat")])
+    monkeypatch.setattr(requests, "post", lambda *_a, **_k: next(
+        replies, None) or Stream([KEEP_ALIVE] * 1000, gap=0.05))
+    err = _parse(parse_client, or_model="deepseek/deepseek-chat").get_json()["error"]
+    assert err.startswith("openai/gpt-4.1-mini was still working")
+    assert failed == ["openai/gpt-4.1-mini"]

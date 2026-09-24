@@ -179,3 +179,30 @@ def test_start_over_drops_a_stalled_real_stream_at_once(stalled_server):
              timeout_s=30, stop=stop)
     assert time.monotonic() - t < 1.5
     assert hung_up.wait(3), "the server never saw the connection close"
+
+
+def test_hanging_up_never_raises_in_place_of_stopped():
+    """Through an https:// proxy the socket is urllib3's SSLTransport, which
+    has no shutdown of its own; the socket it wraps does. And a socket
+    already closed raises — neither may replace the Stopped."""
+    import socket
+    from types import SimpleNamespace as NS
+    from propresenterrunsheet.parsing.openrouter import _wake
+
+    downs = []
+
+    class Wrapped:
+        def shutdown(self, how):
+            downs.append(how)
+
+    class Closed:
+        def shutdown(self, how):
+            raise OSError("already closed")
+
+    def response(sock):
+        return NS(raw=NS(connection=NS(sock=sock)))
+
+    _wake(response(NS(socket=Wrapped())))          # SSLTransport's shape
+    assert downs == [socket.SHUT_RDWR]
+    for resp in (response(Closed()), response(None), NS(raw=None), None, Stream([])):
+        _wake(resp)

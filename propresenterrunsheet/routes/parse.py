@@ -750,7 +750,10 @@ def _upload_and_parse(stop: threading.Event):
                                  .get("message") or {}).get("content") or "")
                 got = parse_ai_response(file_content)
             except Stopped:
-                raise                   # Start over or the time limit: not a failed read
+                # Start over or the time limit, not a failed read. A
+                # timeout is this reader's, not the text model's.
+                used_model = second
+                raise
             except Exception:
                 log.info("Reading the file itself failed", exc_info=True)
                 got = ([], "", "")
