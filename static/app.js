@@ -281,8 +281,13 @@ async function loadModels(saved) {
   if (data.free_saved) { sel.value = ''; saveSettings(); }
   _modelNote(data);
   _renderKeyStatus();
-  // A new key can make its "no credit" note wrong: look it up again.
-  if (!document.getElementById('or-model-check').hidden && sel.value) _checkModel(sel.value);
+  // A new key can make a lookup's "no credit" note wrong: look it up
+  // again — or, where the choice just moved to Automatic, drop it.
+  const check = document.getElementById('or-model-check');
+  if (!check.hidden) {
+    if (sel.value && sel.value !== '__other__') _checkModel(sel.value);
+    else check.hidden = true;
+  }
 }
 
 // Under the key box: free or paid, the money left, and what a runsheet
