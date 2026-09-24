@@ -303,12 +303,21 @@ async function loadModels(saved) {
     opt(g, saved, data.available ? `${saved} — not in the lists above` : saved);
   }
   sel.value = saved || '';
+  // A pasted model's looked-up price outlives the refresh.
+  data.checked = (_modelsData || {}).checked;
   _modelsData = data;
   // A free model saved before the key had credit: parses already run on the
   // paid pick (the server's rule), so show that by moving to Automatic.
   if (data.free_saved) { sel.value = ''; saveSettings(); }
   _modelNote(data);
   _renderKeyStatus();
+  // A new key can make a lookup's "no credit" note wrong: look it up
+  // again — or, where the choice just moved to Automatic, drop it.
+  const check = document.getElementById('or-model-check');
+  if (!check.hidden) {
+    if (sel.value && sel.value !== '__other__') _checkModel(sel.value);
+    else check.hidden = true;
+  }
 }
 
 // Under the key box: free or paid, the money left, and what a runsheet
@@ -342,9 +351,16 @@ function _renderKeyStatus() {
        [k.credit === null ? '' : `<strong>${money(k.credit)} credit</strong>`, limit]
          .filter(Boolean).join(' · ')];
   const cost = k.state === 'paid' && k.balance ? _runsheetCost(k.balance, lim) : '';
+  // True of every request the app sends, whatever the model: it asks
+  // OpenRouter for providers that don't collect data (data_collection deny).
+  const privacy = k.state === 'free' || k.state === 'paid'
+    ? '<span class="key-line" title="Every request asks OpenRouter for '
+      + 'providers that don’t store or train on what’s sent.">'
+      + '<span class="key-badge is-ok">✓ Private</span> Not kept or used for training</span>'
+    : '';
   el.innerHTML = badge
     ? `<span class="key-badge${tone ? ' is-' + tone : ''}">${badge}</span>`
-      + `<span>${detail}</span>${cost}`
+      + `<span>${detail}</span>${cost}${privacy}`
     : '';
   el.hidden = !badge;
 }
@@ -381,8 +397,8 @@ function _runsheetCost(balance, lim) {
   const id = _effectiveModel();
   const measured = (d.key && d.key.measured) || {};
   const rec = (d.recommended || []).find(r => r.id === id);
-  const usd = id in measured ? measured[id]
-    : rec && rec.cost_per_parse != null ? rec.cost_per_parse : null;
+  const listed = rec ? rec.cost_per_parse : (d.checked || {})[id];
+  const usd = id in measured ? measured[id] : listed != null ? listed : null;
   if (usd === null) return '';
   const line = t => `<span class="key-line">${t}</span>`;
   const name = escapeHtml(_modelName(id));
@@ -398,6 +414,7 @@ function _runsheetCost(balance, lim) {
 function onModelChange() {
   const sel = document.getElementById('or-model');
   const box = document.getElementById('or-model-other');
+  document.getElementById('or-model-check').hidden = true;
   if (sel.value !== '__other__') {
     if (box) box.hidden = true;
     saveSettings();
@@ -424,6 +441,36 @@ function applyOtherModel() {
   box.hidden = true;
   saveSettings();
   _renderKeyStatus();
+  _checkModel(id);
+}
+
+// A pasted id, looked up in OpenRouter's catalogue: does it exist, and
+// what does a runsheet cost on it. No prompt is sent.
+async function _checkModel(id) {
+  const el = document.getElementById('or-model-check');
+  el.className = 'settings-hint model-check';
+  el.textContent = 'Looking it up on OpenRouter…';
+  el.hidden = false;
+  let res;
+  try {
+    res = await fetch('/api/models/check', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: id})}).then(r => r.json());
+  } catch (e) {
+    res = {ok: false, message: 'Couldn’t look it up.'};
+  }
+  if (document.getElementById('or-model').value !== id) return;   // moved on
+  const d = _modelsData || {};
+  const unpaid = res.ok && res.cost_per_parse > 0 && !d.funded;
+  el.classList.toggle('is-bad', !res.ok);
+  el.classList.toggle('is-warn', unpaid);
+  el.textContent = (res.ok ? '✓ ' : '✕ ') + res.message
+    + (unpaid ? ' It’s a paid model and your key has no credit, so it won’t run yet.' : '');
+  if (res.ok) {
+    d.checked = {...d.checked, [id]: res.cost_per_parse};
+    _modelsData = d;
+    _renderKeyStatus();                // the cost line under the key
+  }
 }
 
 function _modelNote(data) {

@@ -549,6 +549,9 @@
                    onblur="applyOtherModel()"
                    onkeydown="if(event.key==='Enter'){event.preventDefault();applyOtherModel();}">
           </div>
+          <!-- Whether a pasted id exists, and a runsheet's price on it.
+               Filled by _checkModel() in app.js. -->
+          <p class="settings-hint model-check" id="or-model-check" role="status" hidden></p>
           <p class="settings-hint" id="or-model-note"></p>
         </div>
         <button class="btn btn-dim btn-sm" style="margin-top:4px"
