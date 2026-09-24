@@ -354,6 +354,21 @@ def test_yes_puts_the_playlist_in_runsheet_order(client, pp):
         "WELCOME SLIDE", "PRESERVICE LOOP", "IMG_4021"]
 
 
+def test_the_order_within_a_line_survives_the_trip_through_the_browser(
+        client, pp):
+    """The reading puts IMG_4021 before PRESERVICE LOOP, both Pre-service.
+    It goes out as pairs and comes back as pairs, so the write plays them
+    in that order — an object would have come back sorted by slide."""
+    reading = [[1, 0], [0, 0], [2, 1]]
+    res = client.post("/api/update_playlist/preview", json={
+        "playlist_uuid": "PL-1", "matched": RUNSHEET,
+        "ai_sections": reading}).get_json()
+    assert res["ai_sections"] == reading and res["out_of_order"] == 1
+    assert _post(client, ai_sections=res["ai_sections"], reorder=True)["ok"]
+    assert _content_names(pp["items"]) == [
+        "IMG_4021", "PRESERVICE LOOP", "WELCOME SLIDE"]
+
+
 def test_a_new_order_propresenter_did_not_keep_is_rolled_back(client, pp,
                                                              monkeypatch):
     """The read-back is checked against what was SENT. PP answering 204

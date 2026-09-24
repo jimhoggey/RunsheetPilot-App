@@ -2419,7 +2419,7 @@ async function confirmUpdate() {
       body: JSON.stringify(_updateBody({
         // The playlist, runsheet and placement the operator just confirmed.
         ...plan.target,
-        ai_sections: plan.ai_sections || {},
+        ai_sections: plan.ai_sections || [],
         reorder: !!plan.moved,
         expect_fingerprint: plan.fingerprint,
         force: (plan.warnings || []).includes('live'),

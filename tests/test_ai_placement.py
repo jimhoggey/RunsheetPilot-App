@@ -342,3 +342,12 @@ def test_a_slide_reading_from_the_client_is_re_validated():
     assert sane({"-1": 0, "0": -1}, 3, 10) == {}
     assert sane("not a dict", 3, 10) == {}
     assert sane({"x": "y", "1": None}, 3, 10) == {}
+
+
+def test_a_slide_reading_sent_as_pairs_keeps_its_play_order():
+    """JSON objects don't keep the order of number keys, so the reading
+    travels as pairs. Order kept, each slide once, junk dropped."""
+    sane = playlist_mod._sane_sections
+    got = sane([[5, 1], [9, 1], [0, 1], [5, 2]], 3, 10)
+    assert list(got.items()) == [(5, 1), (9, 1), (0, 1)]
+    assert sane([[1], [1, 2, 3], "12", None, [0, 9], ["2", "0"]], 3, 10) == {2: 0}
