@@ -17,6 +17,7 @@ changes. An error status is the real Response, unread: OpenRouter sends
 those as plain JSON before any stream starts."""
 
 import json
+import socket
 import threading
 import time
 
@@ -120,16 +121,18 @@ def chat(post, url: str, *, headers: dict, body: dict, timeout_s: float,
 
 
 def _wake(resp):
-    """Wake the worker's blocked read, so it sees `halt` and hangs up.
+    """Hang up now, from the waiting thread, on a read that may be stalled.
 
-    Not resp.close() from here: that waits for the lock the blocked read
+    Not resp.close(): that waits for the lock the worker's blocked read
     holds — for OpenRouter's next byte, or the read timeout, a minute on
-    a stalled stream. Shutting the socket's read side (urllib3 2.3+)
-    ends that read at once. Failing that, the worker still hangs up at
-    the next line it gets."""
-    shutdown = getattr(getattr(resp, "raw", None), "shutdown", None)
-    if shutdown is not None:
+    a stalled stream. Shutting the socket down both ways sends the hang-up
+    at once on every platform, which is what stops the model; on macOS and
+    Linux it also ends the blocked read, and on Windows the read ends when
+    OpenRouter closes its side. Shutting only the read side (urllib3's own
+    shutdown) sent nothing on Windows (CI, Sept 2026)."""
+    sock = getattr(getattr(getattr(resp, "raw", None), "connection", None), "sock", None)
+    if sock is not None:
         try:
-            shutdown()
-        except (OSError, RuntimeError, ValueError):
-            pass                        # already finished, or already closed
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass                        # already closed: nothing left to hang up

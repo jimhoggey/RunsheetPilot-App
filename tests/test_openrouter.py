@@ -4,6 +4,7 @@ A plain request could only be abandoned: OpenRouter's keep-alive lines
 kept a read timeout from ever firing, and a model left running still
 billed. Streamed, the call is dropped at the deadline or on Start over,
 and whatever it did return still reads like a Response."""
+import contextlib
 import json
 import threading
 import time
@@ -151,11 +152,10 @@ def stalled_server():
                          b"Transfer-Encoding: chunked\r\n\r\n"
                          + b"%x\r\n%s\r\n" % (len(line), line))
             conn.settimeout(10)
-            try:
+            # A reset counts as a hang-up, as a clean close does.
+            with contextlib.suppress(OSError):
                 while conn.recv(4096):      # the request body, then silence
                     pass
-            except OSError:
-                pass
             hung_up.set()
 
     threading.Thread(target=serve, daemon=True).start()
