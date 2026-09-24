@@ -106,6 +106,13 @@ plutil -replace NSLocalNetworkUsageDescription \
     "$PLIST"
 plutil -lint "$PLIST" >/dev/null || { echo "ERROR: Info.plist is malformed"; exit 1; }
 echo "Info.plist: Local Network usage description added"
+plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
+plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
+
+# Editing Info.plist breaks PyInstaller's signature, and macOS calls such an
+# app "damaged" once it has been downloaded. Re-sign after the last edit.
+codesign --force --sign - "dist/${APP_BUNDLE_NAME}"
+codesign --verify --deep --strict --verbose=2 "dist/${APP_BUNDLE_NAME}"
 
 echo "App bundle built: dist/${APP_BUNDLE_NAME}"
 

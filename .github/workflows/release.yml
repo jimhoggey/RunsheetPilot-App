@@ -385,6 +385,17 @@ jobs:
               "$PLIST" >/dev/null \
             || { echo "ERROR: Info.plist is missing NSLocalNetworkUsageDescription"; exit 1; }
           echo "Info.plist: Local Network usage description present"
+          # The real version, not PyInstaller's 0.0.0 (Finder's Get Info).
+          plutil -replace CFBundleShortVersionString -string "$VERSION" "$PLIST"
+          plutil -replace CFBundleVersion -string "$VERSION" "$PLIST"
+
+          # Editing Info.plist breaks the signature PyInstaller made, and
+          # macOS then calls the downloaded app "damaged and can't be
+          # opened" — every Mac download from v2.12.2 to v2.16.0. Re-sign
+          # (ad hoc) AFTER the last edit, and fail the build unless the
+          # signature verifies.
+          codesign --force --sign - "dist/${APP_BUNDLE}"
+          codesign --verify --deep --strict --verbose=2 "dist/${APP_BUNDLE}"
 
           DMG_STAGE="dist/dmg_stage"
           mkdir -p "$DMG_STAGE"
