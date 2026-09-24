@@ -103,11 +103,14 @@ function _renderBuildEstimate() {
 }
 // A bar paced by the learned average: fills to 92% over `secs`, holds
 // there until the work truly lands, then snaps full. Honest about being
-// an estimate, useful as an indication. Reduced motion skips the bar;
-// the "~N seconds" beside the step still gives the estimate.
+// an estimate, useful as an indication. Reduced motion hides the bar —
+// hides, not just skips: Parse's track is always shown, and would keep
+// the last parse's full bar — and the "~N seconds" still gives the estimate.
 function _startProgress(fill, secs) {
-  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  fill.parentElement.hidden = false;
+  const reduced = window.matchMedia
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  fill.parentElement.hidden = reduced;
+  if (reduced) return;
   fill.style.transition = 'none';
   fill.style.width = '0';
   void fill.offsetWidth;   // commit the reset before animating
