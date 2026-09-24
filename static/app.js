@@ -273,12 +273,16 @@ async function loadModels(saved) {
     opt(g, saved, data.available ? `${saved} — not in the lists above` : saved);
   }
   sel.value = saved || '';
+  // A pasted model's looked-up price outlives the refresh.
+  data.checked = (_modelsData || {}).checked;
   _modelsData = data;
   // A free model saved before the key had credit: parses already run on the
   // paid pick (the server's rule), so show that by moving to Automatic.
   if (data.free_saved) { sel.value = ''; saveSettings(); }
   _modelNote(data);
   _renderKeyStatus();
+  // A new key can make its "no credit" note wrong: look it up again.
+  if (!document.getElementById('or-model-check').hidden && sel.value) _checkModel(sel.value);
 }
 
 // Under the key box: free or paid, the money left, and what a runsheet
