@@ -162,6 +162,26 @@ def test_slide_text_places_what_no_string_rule_could(monkeypatch):
         "bumper.mp4"]
 
 
+def test_the_placement_pass_asks_a_reasoning_model_to_reason_least():
+    """Update mode's call is held to the same reasoning rule as the parse."""
+    from propresenterrunsheet.parsing import align
+    from tests.test_model_catalogue import REASONING
+
+    sent = []
+
+    def fake_post(url, json=None, **kw):
+        sent.append(json.get("reasoning"))
+        return type("R", (), {"ok": True, "status_code": 200, "json": staticmethod(
+            lambda: {"choices": [{"message": {"content": '{"items": []}'}}]})})()
+
+    for model in ("openai/gpt-5-nano", "openai/gpt-4.1-mini"):
+        align.align_playlist(RUNSHEET, PLAYLIST, SLIDE_TEXT, {},
+                             lambda it: (it.get("type") or "") == "header",
+                             or_key="k", model=model, post=fake_post,
+                             catalogue=REASONING)
+    assert sent == [{"effort": "minimal"}, None]
+
+
 def test_a_busy_provider_gets_exactly_one_retry_on_the_backup_model():
     """Free providers are often overloaded, and OpenRouter reports it as
     HTTP 200 with an error body. Retry once on the backup, then give up
@@ -343,3 +363,12 @@ def test_a_slide_reading_from_the_client_is_re_validated():
     assert sane({"-1": 0, "0": -1}, 3, 10) == {}
     assert sane("not a dict", 3, 10) == {}
     assert sane({"x": "y", "1": None}, 3, 10) == {}
+
+
+def test_a_slide_reading_sent_as_pairs_keeps_its_play_order():
+    """JSON objects don't keep the order of number keys, so the reading
+    travels as pairs. Order kept, each slide once, junk dropped."""
+    sane = playlist_mod._sane_sections
+    got = sane([[5, 1], [9, 1], [0, 1], [5, 2]], 3, 10)
+    assert list(got.items()) == [(5, 1), (9, 1), (0, 1)]
+    assert sane([[1], [1, 2, 3], "12", None, [0, 9], ["2", "0"]], 3, 10) == {2: 0}

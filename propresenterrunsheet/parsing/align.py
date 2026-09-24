@@ -40,7 +40,7 @@ import time
 
 from ..config import APP_NAME
 from ..logging_setup import log_safe
-from .models import provider_failure
+from .models import provider_failure, reasoning_for
 from .openrouter import Stopped, chat
 
 
@@ -204,12 +204,13 @@ def parse_sections(content: str, n_runsheet: int, n_items: int,
 
 def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
                    is_header_fn, or_key: str, model: str, post=None,
-                   backup: str = None) -> dict:
+                   backup: str = None, catalogue: dict = None) -> dict:
     """One OpenRouter call, fully validated: `{playlist position: runsheet
     line}` for the slides the model could place. {} whenever anything is
     off. `items` is the playlist as it stands, headers included.
 
     `backup` is asked once if `model`'s provider fails, as the parse does.
+    `catalogue` says how little each may reason (models.reasoning_for).
 
     Never raises: placement without this pass is the shipped behaviour,
     so every failure here degrades to it rather than stopping an
@@ -227,22 +228,26 @@ def align_playlist(matched: list, items: list, slide_text: dict, known: dict,
         deadline = time.monotonic() + _BUDGET_S
 
         def ask(model_id):
+            body = {"model": model_id,
+                    "messages": [{"role": "user", "content": prompt}],
+                    # Placement must not wobble between two runs of the
+                    # same runsheet: update mode treats an identical
+                    # result as a no-op and skips the write entirely.
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                    # Slide text and runsheet lines carry names: only
+                    # providers that neither store nor train on requests.
+                    "provider": {"data_collection": "deny"}}
+            effort = reasoning_for(model_id, catalogue)
+            if effort:
+                body["reasoning"] = effort
             return chat(
                 sender, OPENROUTER_URL, timeout_s=deadline - time.monotonic(),
                 headers={"Authorization": f"Bearer {or_key}",
                          "HTTP-Referer": "runsheet-pilot",
                          "X-Title": APP_NAME,
                          "Content-Type": "application/json"},
-                body={"model": model_id,
-                      "messages": [{"role": "user", "content": prompt}],
-                      # Placement must not wobble between two runs of the
-                      # same runsheet: update mode treats an identical
-                      # result as a no-op and skips the write entirely.
-                      "temperature": 0,
-                      "response_format": {"type": "json_object"},
-                      # Slide text and runsheet lines carry names: only
-                      # providers that neither store nor train on requests.
-                      "provider": {"data_collection": "deny"}})
+                body=body)
 
         r = ask(model)
         failure = provider_failure(r)

@@ -70,26 +70,56 @@ const AUTOSAVE_FIELDS = [
   'create-timers', 'timers-key-only', 'template-playlist'
 ];
 
-// Rolling record of real parse durations (seconds), persisted in
-// settings. The step-2 estimate and the orb progress bar both run off
-// its average, so the "how long will this take" answer is learned from
-// this operator's actual PDFs and model, not a hardcoded guess.
-let _parseTimes = [];
-function _parseAvgSecs() {
-  if (!_parseTimes.length) return 15;
-  return _parseTimes.reduce((a, b) => a + b, 0) / _parseTimes.length;
+// Rolling records of real durations (seconds), persisted in settings as
+// `<kind>_times`. Each step's "~N seconds" and its orb progress bar run off
+// the average, so "how long will this take" is learned from this operator's
+// own runs — their PDFs, their model, their ProPresenter — not a guess.
+//   parse: Step 2, the AI reading the runsheet
+//   build: Step 3, Create building the playlist in ProPresenter
+const _times = {parse: [], build: []};
+const _FIRST_GUESS = {parse: 15, build: 10};   // before any real run
+function _avgSecs(kind) {
+  const t = _times[kind];
+  return t.length ? t.reduce((a, b) => a + b, 0) / t.length : _FIRST_GUESS[kind];
 }
-function _renderParseEstimate() {
-  document.getElementById('step-2-meta').textContent =
-    '~' + Math.round(_parseAvgSecs()) + ' seconds';
-}
-function _recordParseTime(secs) {
-  _parseTimes = _parseTimes.slice(-9).concat(Math.round(secs * 10) / 10);
-  _renderParseEstimate();
+function _recordTime(kind, secs) {
+  _times[kind] = _times[kind].slice(-9).concat(Math.round(secs * 10) / 10);
   // save_settings merges partial posts, so this can't clobber anything.
   fetch('/api/settings', {method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({parse_times: _parseTimes})}).catch(() => {});
+    body: JSON.stringify({[`${kind}_times`]: _times[kind]})}).catch(() => {});
+}
+function _renderParseEstimate() {
+  document.getElementById('step-2-meta').textContent =
+    '~' + Math.round(_avgSecs('parse')) + ' seconds';
+}
+// Create only: Add Section Headers is a different job (the AI reads the
+// slides first), so it neither shows nor feeds this estimate. A finished
+// step keeps its result ("✓ Sunday 21 Sept") instead.
+function _renderBuildEstimate() {
+  if (document.getElementById('step-card-3').classList.contains('state-complete')) return;
+  document.getElementById('step-3-meta').textContent = playlistModeIsUpdate()
+    ? '' : '~' + Math.round(_avgSecs('build')) + ' seconds';
+}
+// A bar paced by the learned average: fills to 92% over `secs`, holds
+// there until the work truly lands, then snaps full. Honest about being
+// an estimate, useful as an indication. Reduced motion hides the bar —
+// hides, not just skips: Parse's track is always shown, and would keep
+// the last parse's full bar — and the "~N seconds" still gives the estimate.
+function _startProgress(fill, secs) {
+  const reduced = window.matchMedia
+    && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  fill.parentElement.hidden = reduced;
+  if (reduced) return;
+  fill.style.transition = 'none';
+  fill.style.width = '0';
+  void fill.offsetWidth;   // commit the reset before animating
+  fill.style.transition = `width ${secs}s linear`;
+  fill.style.width = '92%';
+}
+function _finishProgress(fill) {
+  fill.style.transition = 'width .25s ease';
+  fill.style.width = '100%';
 }
 
 // Cached library source mode ('auto'|'api'|'disk') from settings. Updated
@@ -273,12 +303,21 @@ async function loadModels(saved) {
     opt(g, saved, data.available ? `${saved} — not in the lists above` : saved);
   }
   sel.value = saved || '';
+  // A pasted model's looked-up price outlives the refresh.
+  data.checked = (_modelsData || {}).checked;
   _modelsData = data;
   // A free model saved before the key had credit: parses already run on the
   // paid pick (the server's rule), so show that by moving to Automatic.
   if (data.free_saved) { sel.value = ''; saveSettings(); }
   _modelNote(data);
   _renderKeyStatus();
+  // A new key can make a lookup's "no credit" note wrong: look it up
+  // again — or, where the choice just moved to Automatic, drop it.
+  const check = document.getElementById('or-model-check');
+  if (!check.hidden) {
+    if (sel.value && sel.value !== '__other__') _checkModel(sel.value);
+    else check.hidden = true;
+  }
 }
 
 // Under the key box: free or paid, the money left, and what a runsheet
@@ -312,9 +351,16 @@ function _renderKeyStatus() {
        [k.credit === null ? '' : `<strong>${money(k.credit)} credit</strong>`, limit]
          .filter(Boolean).join(' · ')];
   const cost = k.state === 'paid' && k.balance ? _runsheetCost(k.balance, lim) : '';
+  // True of every request the app sends, whatever the model: it asks
+  // OpenRouter for providers that don't collect data (data_collection deny).
+  const privacy = k.state === 'free' || k.state === 'paid'
+    ? '<span class="key-line" title="Every request asks OpenRouter for '
+      + 'providers that don’t store or train on what’s sent.">'
+      + '<span class="key-badge is-ok">✓ Private</span> Not kept or used for training</span>'
+    : '';
   el.innerHTML = badge
     ? `<span class="key-badge${tone ? ' is-' + tone : ''}">${badge}</span>`
-      + `<span>${detail}</span>${cost}`
+      + `<span>${detail}</span>${cost}${privacy}`
     : '';
   el.hidden = !badge;
 }
@@ -351,8 +397,8 @@ function _runsheetCost(balance, lim) {
   const id = _effectiveModel();
   const measured = (d.key && d.key.measured) || {};
   const rec = (d.recommended || []).find(r => r.id === id);
-  const usd = id in measured ? measured[id]
-    : rec && rec.cost_per_parse != null ? rec.cost_per_parse : null;
+  const listed = rec ? rec.cost_per_parse : (d.checked || {})[id];
+  const usd = id in measured ? measured[id] : listed != null ? listed : null;
   if (usd === null) return '';
   const line = t => `<span class="key-line">${t}</span>`;
   const name = escapeHtml(_modelName(id));
@@ -368,6 +414,7 @@ function _runsheetCost(balance, lim) {
 function onModelChange() {
   const sel = document.getElementById('or-model');
   const box = document.getElementById('or-model-other');
+  document.getElementById('or-model-check').hidden = true;
   if (sel.value !== '__other__') {
     if (box) box.hidden = true;
     saveSettings();
@@ -394,6 +441,36 @@ function applyOtherModel() {
   box.hidden = true;
   saveSettings();
   _renderKeyStatus();
+  _checkModel(id);
+}
+
+// A pasted id, looked up in OpenRouter's catalogue: does it exist, and
+// what does a runsheet cost on it. No prompt is sent.
+async function _checkModel(id) {
+  const el = document.getElementById('or-model-check');
+  el.className = 'settings-hint model-check';
+  el.textContent = 'Looking it up on OpenRouter…';
+  el.hidden = false;
+  let res;
+  try {
+    res = await fetch('/api/models/check', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: id})}).then(r => r.json());
+  } catch (e) {
+    res = {ok: false, message: 'Couldn’t look it up.'};
+  }
+  if (document.getElementById('or-model').value !== id) return;   // moved on
+  const d = _modelsData || {};
+  const unpaid = res.ok && res.cost_per_parse > 0 && !d.funded;
+  el.classList.toggle('is-bad', !res.ok);
+  el.classList.toggle('is-warn', unpaid);
+  el.textContent = (res.ok ? '✓ ' : '✕ ') + res.message
+    + (unpaid ? ' It’s a paid model and your key has no credit, so it won’t run yet.' : '');
+  if (res.ok) {
+    d.checked = {...d.checked, [id]: res.cost_per_parse};
+    _modelsData = d;
+    _renderKeyStatus();                // the cost line under the key
+  }
 }
 
 function _modelNote(data) {
@@ -440,8 +517,12 @@ async function loadSettings() {
   document.getElementById('timers-key-only').checked = !!s.timers_key_only;
   _aliases = Array.isArray(s.template_aliases) ? s.template_aliases : [];
   renderAliasRows();
-  _parseTimes = Array.isArray(s.parse_times) ? s.parse_times.slice(-10) : [];
+  for (const kind of Object.keys(_times)) {
+    const saved = s[`${kind}_times`];
+    _times[kind] = Array.isArray(saved) ? saved.slice(-10) : [];
+  }
   _renderParseEstimate();
+  _renderBuildEstimate();
 
   // Hide Service Mate entirely for operators who don't own a clock —
   // removes the whole panel from the main screen, nothing else changes.
@@ -632,8 +713,8 @@ function _clearRunsheetState() {
   document.getElementById('results-body').innerHTML = '';
   _hideNextStepHint();
   document.getElementById('result-notice').innerHTML = '';
-  document.getElementById('step-3-meta').textContent = '';
   setStepState(3, 'locked');
+  _renderBuildEstimate();
 }
 
 function handleFileSelect(file) {
@@ -789,11 +870,10 @@ function setPlaylistMode(mode) {
   document.getElementById('playlist-name-label').textContent = upd
     ? 'Service name'
     : 'Service name (also the playlist name in PP)';
-  document.getElementById('create-btn').textContent =
-    upd ? '✓ Add Section Headers' : '✓ Create Runsheet & Export File';
   document.getElementById('create-orb-label').textContent = upd
     ? 'Working out where the headers go…'
     : 'Building the playlist in ProPresenter…';
+  _renderBuildEstimate();
   // Nothing is matched in update mode, so a live matching control there
   // would be a button that does nothing — the same reasoning
   // onMatchToggle() already applies when it greys the picker out.
@@ -846,6 +926,16 @@ function _clearUpdatePlan() {
   _updatePlan = null;
   document.getElementById('update-plan').hidden = true;
   _closeReorder();
+  _labelCreateButton(false);
+}
+
+// Step 3's button. While a plan says the playlist is live, pressing it
+// again is the next step — switch away in ProPresenter, then check again —
+// so it says Update playlist.
+function _labelCreateButton(live) {
+  document.getElementById('create-btn').textContent = !playlistModeIsUpdate()
+    ? '✓ Create Runsheet & Export File'
+    : live ? '✓ Update playlist' : '✓ Add Section Headers';
 }
 
 // ─── The template verdict banner ──────────────────────────────────────────
@@ -1735,15 +1825,8 @@ async function parseRunsheet() {
     label.textContent = quips[qi];
   }, 2600);
 
-  // Progress bar paced by the learned average: fills to 92% over avg
-  // seconds, holds there until the response truly lands, then snaps
-  // full. Honest about being an estimate, useful as an indication.
   const fill = document.getElementById('parse-progress');
-  fill.style.transition = 'none';
-  fill.style.width = '0';
-  void fill.offsetWidth;   // commit the reset before animating
-  fill.style.transition = `width ${_parseAvgSecs()}s linear`;
-  fill.style.width = '92%';
+  _startProgress(fill, _avgSecs('parse'));
 
   const t0 = performance.now();
   let parseSucceeded = false;
@@ -1820,9 +1903,7 @@ async function parseRunsheet() {
     // the Create button.
     setStepState(2, 'complete');
     setStepState(3, 'active');
-    // Recorded first: it redraws this step's meta with the time estimate,
-    // which used to overwrite the summary below the moment it appeared.
-    _recordParseTime((performance.now() - t0) / 1000);
+    _recordTime('parse', (performance.now() - t0) / 1000);
     // The timed-row guard resynthesizes rows the AI dropped; say so, so
     // the operator knows why the count beats what the model returned.
     document.getElementById('step-2-meta').textContent =
@@ -1838,8 +1919,7 @@ async function parseRunsheet() {
   } finally {
     if (_parseInFlight === inFlight) _parseInFlight = null;
     clearInterval(quipTimer);
-    fill.style.transition = 'width .25s ease';
-    fill.style.width = '100%';
+    _finishProgress(fill);
     if (parseSucceeded) {
       // Completion choreography: bar snaps full, the orb takes a small
       // spring bow out, then the results spring in and the page glides
@@ -2008,10 +2088,13 @@ async function createPlaylist() {
   const loader = document.getElementById('create-loader');
   loader.hidden = false;
   const orb = Orb.mount(document.getElementById('create-orb'), 'working');
+  const fill = document.getElementById('create-progress');
+  const t0 = performance.now();
   setStepState(3, 'busy');
   setLoading('Creating playlist in ProPresenter…');
 
   try {
+    _startProgress(fill, _avgSecs('build'));
     // The server exports to the folder SAVED in Settings, so a folder typed
     // a moment ago must be saved first. If it can't be, skip the export
     // rather than write to whatever folder was saved before.
@@ -2047,6 +2130,8 @@ async function createPlaylist() {
       setStepState(3, 'active');
       return;
     }
+    // Only a build that worked says how long building takes.
+    _recordTime('build', (performance.now() - t0) / 1000);
     // Step 3 done — the nudge has served its purpose.
     _hideNextStepHint();
     setStepState(3, 'complete');
@@ -2117,9 +2202,16 @@ async function createPlaylist() {
     setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
     setStepState(3, 'active');
   } finally {
-    orb.stop();
-    loader.hidden = true;
-    btn.disabled = false;
+    // Let the snap to full show before the loader goes. The button waits
+    // too, so a quick re-click can't have its loader hidden by this one.
+    _finishProgress(fill);
+    setTimeout(() => {
+      orb.stop();
+      loader.hidden = true;
+      // The loader is shared with Add Section Headers, which has no bar.
+      fill.parentElement.hidden = true;
+      btn.disabled = false;
+    }, 260);
   }
 }
 
@@ -2321,12 +2413,15 @@ function _renderUpdatePlan(res) {
       <strong>Media</strong> in ProPresenter's left sidebar, then try again.
       </div>`;
   }
-  if ((res.warnings || []).includes('live')) {
+  const live = (res.warnings || []).includes('live');
+  if (live) {
     html += `<div class="notice notice-err">
       <strong>That playlist is live in ProPresenter right now.</strong>
-      Changing it can move the active slide under your hands. Switch away
-      from it first.</div>`;
+      Changing it can move the active slide under your hands. Switch to
+      another playlist in ProPresenter, then press <strong>Update
+      playlist</strong> in Step 3.</div>`;
   }
+  _labelCreateButton(live);
   if ((res.warnings || []).includes('pco')) {
     html += `<div class="notice notice-info">
       This playlist is linked to Planning Center. A change made here can be
@@ -2368,8 +2463,11 @@ function _renderUpdatePlan(res) {
   });
   html += '</ol></div>';
 
+  // Live, this one writes into the playlist on screen: not the next step,
+  // so not the green one.
   html += `<div style="margin-top:12px;display:flex;gap:10px;align-items:center">
-    <button class="btn btn-grn" onclick="confirmUpdate()">✓ Update playlist</button>
+    <button class="btn ${live ? 'btn-dim btn-sm' : 'btn-grn'}" onclick="confirmUpdate()">
+      ${live ? 'Update anyway' : '✓ Update playlist'}</button>
     <button class="btn btn-dim btn-sm" onclick="cancelUpdate()">Cancel</button>
     </div>`;
   el.hidden = false;
@@ -2407,7 +2505,7 @@ async function confirmUpdate() {
       body: JSON.stringify(_updateBody({
         // The playlist, runsheet and placement the operator just confirmed.
         ...plan.target,
-        ai_sections: plan.ai_sections || {},
+        ai_sections: plan.ai_sections || [],
         reorder: !!plan.moved,
         expect_fingerprint: plan.fingerprint,
         force: (plan.warnings || []).includes('live'),

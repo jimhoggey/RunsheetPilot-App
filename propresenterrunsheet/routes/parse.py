@@ -26,7 +26,8 @@ from ..parsing.ai import (
 )
 from ..parsing.models import (
     dollars, estimate_cost, fetch_catalogue, is_router, key_is_funded,
-    model_reading, next_usable_model, provider_failure, resolve_model,
+    model_reading, next_usable_model, provider_failure, reasoning_for,
+    resolve_model,
 )
 from ..parsing.openrouter import Stopped, chat
 from .flags import matching_enabled
@@ -626,6 +627,12 @@ def _upload_and_parse(stop: threading.Event):
             if attach and attach[0] == _PDF_MIME:
                 body["plugins"] = [{"id": "file-parser",
                                     "pdf": {"engine": "native"}}]
+            # A reasoning model reasons as little as it allows: see
+            # reasoning_for. Not once its provider has refused that.
+            effort = (None if model_id in refused_reasoning
+                      else reasoning_for(model_id, fetch_catalogue()))
+            if effort:
+                body["reasoning"] = effort
             # Streamed so it can be dropped: after _AI_TIMEOUT_S, or when
             # the operator starts over (see openrouter.chat).
             return chat(
@@ -640,7 +647,18 @@ def _upload_and_parse(stop: threading.Event):
 
         ai_t0 = time.time()
         refused_json = None          # a model that 400'd on response_format
+        refused_reasoning = set()    # models whose provider 400'd on reasoning
         resp = _openrouter_post(model, attach=lead)
+        # The reasoning setting comes from the catalogue, which has been
+        # wrong: o4-mini is listed as able to stop reasoning and 400s when
+        # told to. A 400 that isn't about JSON mode gets one retry at the
+        # model's own default rather than failing the parse.
+        if (resp.status_code == 400 and not _rejects_response_format(resp)
+                and reasoning_for(model, fetch_catalogue())):
+            log.info(f"{log_safe(model)} refused its reasoning setting — "
+                     f"retrying at the model's default")
+            refused_reasoning.add(model)
+            resp = _openrouter_post(model, attach=lead)
         # Some free-tier providers advertise structured output and still
         # 400 on `response_format`. That is OUR parameter being refused,
         # not the operator's key or model — so retry the same model once,
@@ -691,6 +709,14 @@ def _upload_and_parse(stop: threading.Event):
             return jsonify({"error":
                 "OpenRouter says this account has no credit / model is paid (402). "
                 "Try a different model — a free one is in the sidebar by default."}), 200
+        # The model exists, but every provider for it may keep what's sent,
+        # and runsheets only go where nothing is kept (data_collection deny).
+        if resp.status_code == 404 and "data policy" in str(
+                getattr(resp, "text", "") or "").lower():
+            return jsonify({"error":
+                f"None of the providers for '{model}' promise not to keep "
+                "what's sent, so your runsheet wasn't sent there. Choose "
+                "another model in Settings."}), 200
         if resp.status_code == 404:
             return jsonify({"error":
                 f"OpenRouter says model '{model}' not found (404). "

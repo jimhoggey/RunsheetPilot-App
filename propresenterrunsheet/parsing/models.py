@@ -233,6 +233,45 @@ def model_reading(catalogue: dict, current: str = None, modality: str = "file"):
     return next((i for i in (current, *PAID_DEFAULTS) if i in able), None)
 
 
+def catalogue_entry(catalogue: dict, model_id: str):
+    """The catalogue's entry for `model_id`, or None."""
+    return next((m for m in (catalogue or {}).get("data") or []
+                 if isinstance(m, dict) and m.get("id") == model_id), None)
+
+
+# Least reasoning first.
+_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def reasoning_for(model_id: str, catalogue: dict):
+    """The `reasoning` setting to send `model_id`: as little as it allows,
+    or None to send nothing.
+
+    A runsheet is extraction, not a puzzle, and reasoning only makes it
+    slower and dearer: GPT-5 nano at its default reasoned before every
+    answer, and at "minimal" used no reasoning tokens at all (live, Sept
+    2026). Read from the model's own catalogue entry:
+
+      • the lowest effort it lists: "none" where reasoning is optional
+        (GPT-5.1), else "minimal" (GPT-5 nano) or whatever is lowest
+      • no efforts listed, but optional and on by default: switched off
+      • anything else: nothing. Claude reasons only when asked, so any
+        setting would switch it ON; o4-mini is listed as optional but
+        400s when told to stop. A model that can't reason ignores it."""
+    r = (catalogue_entry(catalogue, model_id) or {}).get("reasoning")
+    if not isinstance(r, dict):
+        return None
+    listed = r.get("supported_efforts")
+    listed = listed if isinstance(listed, list) else []
+    efforts = [e for e in _EFFORTS
+               if e in listed and not (e == "none" and r.get("mandatory"))]
+    if efforts:
+        return {"effort": efforts[0]}
+    if r.get("mandatory") is False and r.get("default_enabled") is True:
+        return {"enabled": False}
+    return None
+
+
 def free_model_ids(catalogue: dict) -> set:
     return {m.get("id") for m in (catalogue or {}).get("data") or []
             if isinstance(m, dict) and _is_free(m)}

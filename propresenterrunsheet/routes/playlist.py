@@ -45,7 +45,7 @@ from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_playlist_dir, find_pp_root
 from ..propresenter.playlist import build_playlist_payload
 from ..propresenter.playlist_update import (
-    build_update_payload, is_header, is_placed_header,
+    build_update_payload, is_header, is_placed_header, play_order,
     verify_content_preserved, visible_signature,
 )
 from ..propresenter import update_safety as safety
@@ -211,7 +211,13 @@ def api_create_playlist():
     name = (body.get("name") or "").strip()
     matched = body.get("matched") or []
     do_matching = matching_enabled(body)
-    before = time.time()
+    before = lap_from = time.time()
+    steps = {}           # seconds per step, logged: where a slow build goes
+
+    def lap(step):
+        nonlocal lap_from
+        now = time.time()
+        steps[step], lap_from = round(now - lap_from, 1), now
 
     if not name:
         return jsonify({"error": "Playlist name required."}), 200
@@ -256,6 +262,7 @@ def api_create_playlist():
 
             bin_items = fetch_media_bin(base)
             unlinked = relink_media(matched, bin_items) if bin_items else []
+        lap("template and Media")
         if unlinked:
             log.info("Media not in PP's Media bin, left as headers: %s",
                      log_safe(", ".join(u["media_name"] for u in unlinked)))
@@ -341,6 +348,7 @@ def api_create_playlist():
                     "again — the app will rebuild everything fresh."}), 200
             unlinked = unlinked + dropped
         r2.raise_for_status()
+        lap("playlist")
 
         songs = sum(1 for mi in matched
                     if (mi.get("parsed") or {}).get("type") == "song"
@@ -395,6 +403,7 @@ def api_create_playlist():
                 log.exception("Playlist export failed (playlist itself "
                               "was created)")
                 export_path = None
+        lap("export")
 
         # 5. Optional: create duration-based countdown timers
         timer_result = {"created": 0, "deleted": 0, "no_duration": 0,
@@ -402,10 +411,13 @@ def api_create_playlist():
         if body.get("create_timers"):
             timer_result = _create_pp_timers(
                 base, name, matched, key_only=bool(body.get("timers_key_only")))
+        lap("timers")
 
         # 6. Persist Service Mate runsheet state — what the GeekMagic clocks
         # display on the LAN.
         _write_sm_state(name, matched, timer_result)
+        log.info("Create took %.1fs — %s", time.time() - before,
+                 ", ".join(f"{k} {v}s" for k, v in steps.items()))
 
         log.info(f"Playlist created: '{log_safe(name)}' → {songs} songs, "
                  f"{headers} headers, "
@@ -692,8 +704,10 @@ def _read_target(base: str, playlist_uuid: str) -> list:
 
 
 def _sane_sections(raw_sections, n_runsheet: int, n_items: int) -> dict:
-    """The slide reading the client hands back, `{slide: runsheet line}`,
-    re-checked: whole numbers, in range.
+    """The slide reading the client hands back, `[[slide, runsheet line],
+    ...]` in play order, re-checked: whole numbers, in range, each slide
+    once. Pairs rather than an object, because JSON objects don't keep
+    the order of number keys; a `{slide: line}` object is still read.
 
     The preview computes it and the write reuses it rather than calling
     the model a second time — that keeps "press it twice" a genuine no-op,
@@ -701,13 +715,14 @@ def _sane_sections(raw_sections, n_runsheet: int, n_items: int) -> dict:
     arrives over HTTP, so nothing about it is trusted; the worst a forged
     one can do is file slides under the wrong lines, because
     runsheet_order only ever permutes the slides already there."""
+    pairs = list(raw_sections.items()) if isinstance(raw_sections, dict) else raw_sections
     out = {}
-    for pos, n in (raw_sections.items() if isinstance(raw_sections, dict) else ()):
+    for pair in pairs if isinstance(pairs, list) else ():
         try:
-            pos, n = int(pos), int(n)
+            pos, n = map(int, pair if isinstance(pair, (list, tuple)) else ())
         except (TypeError, ValueError):
             continue
-        if 0 <= pos < n_items and 0 <= n < n_runsheet:
+        if 0 <= pos < n_items and 0 <= n < n_runsheet and pos not in out:
             out[pos] = n
     return out
 
@@ -715,7 +730,8 @@ def _sane_sections(raw_sections, n_runsheet: int, n_items: int) -> dict:
 def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
                  report: dict) -> tuple:
     """Read every still and ask a model which runsheet line each slide
-    belongs to. Returns ({slide: line}, the model asked or None).
+    belongs to. Returns ({slide: line} in play order, the model asked or
+    None).
 
     Media file names in a working playlist are often out of date, so a
     name match is NOT a fact here: the model sees each item's name and
@@ -750,9 +766,10 @@ def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
     context = [it for it in raw if isinstance(it, dict)
                and (not is_header(it) or is_placed_header(it))]
     found = align_playlist(matched, context, slide_text, known, is_header,
-                           or_key, model,
+                           or_key, model, catalogue=catalogue,
                            backup=next_usable_model(model, catalogue))
-    return ({**found, **known} if found else {}), model
+    return (play_order({**found, **known}, slide_text, matched)
+            if found else {}), model
 
 
 def _plan_update(base: str, playlist_uuid: str, matched: list,
@@ -906,7 +923,7 @@ def api_update_playlist_preview():
         # calling the model again. Re-asking would cost a second request,
         # could answer differently, and would mean the operator confirmed
         # a plan that is not the one sent.
-        "ai_sections": plan["sections"],
+        "ai_sections": list(plan["sections"].items()),
         "ai_model":    plan["ai_model"],
         "new_order":   new_order,
         **{k: rep[k] for k in

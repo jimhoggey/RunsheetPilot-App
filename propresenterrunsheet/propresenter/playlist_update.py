@@ -397,27 +397,66 @@ def starts_of(sections: dict) -> dict:
     return out
 
 
+def _play_keys(sections: dict) -> dict:
+    """`{slide: (runsheet line, place in the reading)}`. The reading lists
+    slides in play order (see play_order), so within one line its order
+    is the tiebreak: a title slide before "Song 1", "Song 1" before "Song 2"."""
+    return {p: (n, i) for i, (p, n) in enumerate((sections or {}).items())}
+
+
 def moves_needed(sections: dict) -> int:
-    """How many slides must move for the playlist to follow the runsheet:
-    every filed slide outside the longest run already in runsheet order.
-    0 means it is in order."""
-    tails = []
-    for n in (sections[p] for p in sorted(sections or {})):
-        i = bisect.bisect_right(tails, n)
-        tails[i:i + 1] = [n]
-    return len(sections or {}) - len(tails)
+    """How many slides must move for the playlist to play as the reading
+    says: every filed slide outside the longest run already in that order,
+    within a line as well as between lines. 0 means it is in order."""
+    keys, tails = _play_keys(sections), []
+    for k in (keys[p] for p in sorted(keys)):
+        i = bisect.bisect_right(tails, k)
+        tails[i:i + 1] = [k]
+    return len(keys) - len(tails)
 
 
 def runsheet_order(count: int, sections: dict) -> list:
-    """The slides' current positions, in runsheet order. A stable sort,
-    so slides of one line keep their order; a slide nobody could file
+    """The slides' current positions, in play order: by runsheet line,
+    then by the reading's order within it. A slide nobody could file
     travels with the one above it, and anything before the first filed
     slide stays on top. Always a permutation: nothing added or lost."""
-    keys, line = [], -1
+    keys, above, sort_by = _play_keys(sections), (-1, -1), []
     for pos in range(count):
-        line = sections.get(pos, line)
-        keys.append(line)
-    return sorted(range(count), key=keys.__getitem__)
+        above = keys.get(pos, above)
+        sort_by.append((*above, pos))
+    return sorted(range(count), key=sort_by.__getitem__)
+
+
+# "SONG 1", "Point 2": words, a number, nothing after. "JOHN 3:16" is not
+# one — a reference is not a place in a sequence. The two groups can't
+# overlap, so a long run of text is matched in one pass.
+_NUMBERED_RE = re.compile(r"(\D*)(\d{1,3})")
+
+
+def play_order(sections: dict, slide_text: dict, matched: list) -> dict:
+    """`sections` in the order its slides play: the tiebreak within a
+    line. Read off the slides rather than asked of a model — asked,
+    GPT-4.1 mini put a WORSHIP title after its songs five times in five.
+    Within a line, a slide that reads the line's name leads, and slides
+    reading the same words and a number go in number order. Everything
+    else keeps the playlist's order."""
+    def reads(p):
+        return (slide_text or {}).get(p) or ""
+
+    def names_line(p):
+        title = set(_norm_words((matched[sections[p]].get("parsed") or {}).get("title")))
+        return bool(title) and title <= set(_norm_words(reads(p)))
+
+    order = sorted(sections, key=lambda p: (not names_line(p), p))
+    runs = {}
+    for i, p in enumerate(order):
+        m = _NUMBERED_RE.fullmatch(reads(p).strip())
+        if m:
+            runs.setdefault((sections[p], m[1].strip().lower()), []).append((int(m[2]), p, i))
+    for run in runs.values():
+        for i, (_, p, _) in zip([i for _, _, i in run], sorted(run)):
+            order[i] = p
+    return {p: sections[p] for p in order}
 
 
 def our_header_for(parsed: dict, placed: bool) -> dict:
@@ -454,7 +493,8 @@ def build_update_payload(existing: list, matched: list, aliases=None,
     preview card and the result notice are built from — this function
     decides, the route only reports.
 
-    `sections` is the slide-reading pass, `{slide: runsheet line}`. With
+    `sections` is the slide-reading pass, `{slide: runsheet line}` in the
+    order the slides should play. With
     `reorder` — only ever because the operator said yes — a playlist
     that is out of runsheet order is first put in it (see runsheet_order),
     then placed as if it had always been that way: the old headers'
@@ -479,14 +519,17 @@ def build_update_payload(existing: list, matched: list, aliases=None,
     if reorder and moves:
         # A slide the reading left unfiled, directly under a header the
         # operator placed, stays with that header's line rather than
-        # riding along with whatever sat above it. Only when that title
-        # names one line: a runsheet can hold "Worship" twice.
+        # riding along with whatever sat above it — and leads it, as the
+        # header said. Only when that title names one line: a runsheet
+        # can hold "Worship" twice.
         keys = [recall_key(((mi.get("parsed") or {}) if isinstance(mi, dict)
                             else {}).get("title") or "") for mi in matched or []]
-        sections = dict(sections)
+        lead = {}
         for n, key in enumerate(keys):
-            if key in recalled and keys.count(key) == 1:
-                sections.setdefault(recalled[key], n)
+            if key in recalled and keys.count(key) == 1 \
+                    and recalled[key] not in sections:
+                lead.setdefault(recalled[key], n)
+        sections = {**lead, **sections}
         order = runsheet_order(len(kept), sections)
         kept, recalled = [kept[p] for p in order], {}
         sections = {new: sections[old] for new, old in enumerate(order)

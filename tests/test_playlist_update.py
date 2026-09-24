@@ -16,6 +16,7 @@ from propresenterrunsheet.propresenter.playlist_update import (
     build_update_payload,
     echo_existing_item,
     moves_needed,
+    play_order,
     recall_key,
     runsheet_order,
     split_existing,
@@ -417,10 +418,55 @@ def test_moves_needed_counts_the_slides_a_person_would_have_to_drag():
 
 
 def test_runsheet_order_follows_the_runsheet_and_keeps_a_line_together():
-    """Worship's three slides stay in the order the operator had them —
-    the runsheet doesn't say which song comes first; they did."""
+    """A reading that lists slides in playlist order says nothing about
+    order within a line, so Worship's three stay as the operator had them."""
     order = runsheet_order(len(SHUFFLED), SECTIONS)
     assert [SHUFFLED[p] for p in order] == IN_ORDER
+
+
+# What the owner's slides read. Filed right, Worship's came out File7,
+# File3, File5 — SONG 2, WORSHIP, SONG 1 — because nothing said otherwise.
+READS = {"File1": "WELCOME", "File3": "WORSHIP Let's stand and sing",
+         "File5": "SONG 1", "File7": "SONG 2", "File9": "ANNOUNCEMENTS",
+         "File11": "GIVING", "File13": "TITHING", "File15": "PREACH",
+         "File17": "RESPONSE", "File19": "CLOSE"}
+IN_PLAY_ORDER = ["File1", "File3", "File5", "File7", "File9", "File11",
+                 "File13", "File15", "File17", "File19"]
+
+
+def _play(names, sections, lines=LINES, reads=READS):
+    text = {p: reads.get(n, "") for p, n in enumerate(names)}
+    ordered = play_order(sections, text, [_item(t) for t in lines])
+    return ordered, [names[p] for p in runsheet_order(len(names), ordered)]
+
+
+def test_the_slides_settle_the_order_within_a_line():
+    """The title slide leads its line, and SONG 1 comes before SONG 2 —
+    whether the playlist is shuffled or only Worship is."""
+    _, order = _play(SHUFFLED, SECTIONS)
+    assert order == IN_PLAY_ORDER
+    in_line = ["File1", "File7", "File3", "File5"] + IN_PLAY_ORDER[4:]
+    ordered, order = _play(in_line, {p: SECTIONS[SHUFFLED.index(n)]
+                                     for p, n in enumerate(in_line)})
+    assert order == IN_PLAY_ORDER and moves_needed(ordered) == 1
+    again, _ = _play(IN_PLAY_ORDER, {p: SECTIONS[SHUFFLED.index(n)]
+                                     for p, n in enumerate(IN_PLAY_ORDER)})
+    assert moves_needed(again) == 0
+
+
+def test_only_the_slides_themselves_reorder_a_line():
+    """References aren't a sequence, and slides that say nothing keep the
+    operator's order."""
+    names = ["Reading 1", "Reading 2", "IMG_2", "IMG_1"]
+    _, order = _play(names, {0: 0, 1: 0, 2: 0, 3: 0}, ["Scripture"],
+                     {"Reading 1": "JOHN 10:10", "Reading 2": "JOHN 3:16"})
+    assert order == names
+
+
+def test_a_line_out_of_order_inside_itself_needs_moving():
+    """Worship's header in the right place, its slides not: still asks."""
+    assert moves_needed({0: 1, 1: 1, 2: 1}) == 0
+    assert moves_needed({1: 1, 2: 1, 0: 1}) == 1
 
 
 def test_a_slide_nobody_could_file_travels_with_the_one_above_it():

@@ -26,6 +26,8 @@ once on the next-ranked free model before surfacing an honest error.
 import io
 import json
 
+import pytest
+
 from propresenterrunsheet.service_mate import state as sm_state
 
 
@@ -881,3 +883,55 @@ def test_a_backup_model_that_runs_out_of_time_is_the_one_named(
         replies, None) or Stream([KEEP_ALIVE] * 1000, gap=0.05))
     err = _parse(parse_client, or_model=busy).get_json()["error"]
     assert err.startswith(f"{spare} was still working"), err
+
+
+# ── reasoning models ──────────────────────────────────────────────────────
+
+_ONE_SONG = json.dumps({"service_name": "S",
+                        "items": [{"type": "song", "title": "Build My Life"}]})
+
+
+@pytest.fixture
+def reasoning_catalogue(monkeypatch):
+    import propresenterrunsheet.routes.parse as parse_mod
+    from tests.test_model_catalogue import REASONING
+
+    monkeypatch.setattr(parse_mod, "fetch_catalogue", lambda *_a, **_k: REASONING)
+
+
+def test_a_reasoning_model_is_asked_to_reason_as_little_as_it_can(
+        parse_client, isolated_state, reasoning_catalogue):
+    """The owner tried GPT-5 nano: it reasoned for ages over a runsheet.
+    GPT-4.1 mini doesn't reason, so it is sent nothing new."""
+    for model, want in (("openai/gpt-5-nano", {"effort": "minimal"}),
+                        ("openai/gpt-4.1-mini", None)):
+        calls = []
+        r = _post_responses(parse_client, [_FakeResponse(_ONE_SONG, model=model)],
+                            model=model, calls=calls)
+        assert "error" not in r.get_json(), r.get_json()
+        assert calls[0].get("reasoning") == want
+
+
+def test_a_provider_that_refuses_the_setting_gets_the_model_default(
+        parse_client, isolated_state, reasoning_catalogue):
+    """The catalogue has been wrong (o4-mini): one retry without it."""
+    calls = []
+    r = _post_responses(parse_client, [
+        _FakeErrorResponse(400, {"error": {"code": 400,
+                                           "message": "Provider returned error"}}),
+        _FakeResponse(_ONE_SONG, model="openai/gpt-5-nano")],
+        model="openai/gpt-5-nano", calls=calls)
+    assert len(r.get_json()["items"]) == 1
+    assert ["reasoning" in c for c in calls] == [True, False]
+
+
+def test_a_model_with_no_provider_that_keeps_nothing_says_so(
+        parse_client, isolated_state):
+    """Runsheets go only where nothing is kept. When no provider for the
+    model promises that, OpenRouter 404s — which is not "no such model"."""
+    r = _post_status(parse_client, 404, {"error": {
+        "code": 404, "message": "No endpoints found matching your data policy "
+                                "(Paid model training). Configure: "
+                                "https://openrouter.ai/settings/privacy"}})
+    err = r.get_json()["error"]
+    assert "promise not to keep" in err and "not found" not in err
