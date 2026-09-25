@@ -1,13 +1,12 @@
 """ProPresenter library routes.
 
-Three ways to load the song library:
-  /api/library/scan   — read .pro files directly from the local PP folder
-                        (no PP needed; works offline)
+Two ways to load the song library:
   /api/library/fetch  — call PP's REST API (requires PP running with
                         Network mode enabled)
-  /api/library/auto   — try API first, fall back to disk. Called silently
-                        by the UI on launch + before each parse so the
-                        operator never has to touch the library settings."""
+  /api/library/auto   — try API first, fall back to reading .pro files in
+                        the library folder saved in Settings. Called
+                        silently by the UI on launch + before each parse so
+                        the operator never has to touch the library settings."""
 
 import logging
 from pathlib import Path
@@ -21,19 +20,6 @@ from ..settings import load_settings
 
 bp = Blueprint("library", __name__)
 log = logging.getLogger("pp_runsheet")
-
-
-@bp.route("/api/library/scan", methods=["POST"])
-def api_scan_library():
-    body = request.get_json(silent=True) or {}
-    d = (body.get("directory") or "").strip()
-    if not d:
-        return jsonify({"error": "Library folder not set."}), 400
-    if not Path(d).exists():
-        return jsonify({"error": f"Folder not found: {d}"}), 400
-    items = scan_library(d)
-    log.info(f"Library scan: {len(items)} items from {log_safe(d)}")
-    return jsonify({"items": items, "count": len(items)})
 
 
 @bp.route("/api/library/fetch", methods=["POST"])
@@ -54,8 +40,8 @@ def _fetch_library_via_api(host: str, port: str):
     """Shared by /api/library/fetch and /api/library/auto. Returns the
     library items list on success, None when PP is unreachable, or
     raises for unexpected errors. Picks the FIRST library returned by
-    /v1/libraries — operators with multiple libraries can still use
-    /api/library/scan to point at a specific disk path."""
+    /v1/libraries — operators with multiple libraries can still point
+    Settings at a specific library folder and choose disk mode."""
     import requests as req
     from ..propresenter.net import pp_base
     # Built OUTSIDE the try: /api/library/fetch takes host/port from the
@@ -94,9 +80,10 @@ def api_library_auto():
       2. Local disk scan of `library_dir` from settings.
       3. Empty list with source="none" so the UI can show "no library".
 
+    The disk scan only ever reads settings.library_dir: a request can't
+    point it at another folder (the UI saves a just-typed folder first).
     Query params override settings:
       ?host=  / ?port=     PP REST host/port (defaults to settings)
-      ?dir=                disk scan path (defaults to settings.library_dir)
       ?mode=auto|api|disk  which source(s) to try (defaults to
                            settings.lib_source, falling back to "auto").
                            - auto: try API, fall back to disk on failure
@@ -112,8 +99,7 @@ def api_library_auto():
             or "localhost").strip()
     port = (request.args.get("port") or settings.get("pp_port")
             or "50001").strip()
-    disk_dir = (request.args.get("dir") or settings.get("library_dir")
-                or "").strip()
+    disk_dir = (settings.get("library_dir") or "").strip()
     mode = (request.args.get("mode") or settings.get("lib_source")
             or "auto").strip().lower()
     if mode not in ("auto", "api", "disk"):
