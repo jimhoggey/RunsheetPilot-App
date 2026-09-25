@@ -34,22 +34,21 @@ def _base_python() -> str:
 
 def use_venv() -> None:
     """Re-run the calling script under the repo's .venv, creating it and
-    installing requirements.txt first if needed. No-op when the packages
-    are already importable."""
-    try:
-        import cryptography  # noqa: F401
-        return
-    except ImportError:
-        if os.environ.get(_RETRIED):
-            raise  # already inside .venv and still missing: stop, don't loop
+    installing requirements.txt when the app won't import there. Uses uv
+    when it's installed (a uv-made .venv has no pip)."""
     venv = ROOT / ".venv"
+    if os.environ.get(_RETRIED) or Path(sys.prefix).resolve() == venv.resolve():
+        return
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    uv = shutil.which("uv")
     if not python.exists():
         print("First run: setting up the project's Python in .venv …")
-        subprocess.run([_base_python(), "-m", "venv", str(venv)], check=True)
-    if subprocess.run([str(python), "-c", "import cryptography"], capture_output=True).returncode:
+        make = [uv, "venv", "--python", "3.12", str(venv)] if uv else [_base_python(), "-m", "venv", str(venv)]
+        subprocess.run(make, check=True)
+    probe = [str(python), "-c", "import propresenterrunsheet.licensing"]
+    if subprocess.run(probe, cwd=ROOT, capture_output=True).returncode:
         print("Installing the packages from requirements.txt …")
-        subprocess.run([str(python), "-m", "pip", "install", "--quiet", "-r",
-                        str(ROOT / "requirements.txt")], check=True)
+        install = [uv, "pip", "install", "--python", str(python)] if uv else [str(python), "-m", "pip", "install"]
+        subprocess.run([*install, "--quiet", "-r", str(ROOT / "requirements.txt")], check=True)
     rerun = subprocess.run([str(python), *sys.argv], env={**os.environ, _RETRIED: "1"})
     sys.exit(rerun.returncode)
