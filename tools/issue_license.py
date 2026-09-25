@@ -9,8 +9,11 @@ It prints a licence key (RP1.…) — paste it into the email/receipt you
 send the buyer. They paste it into Settings → Licence in the app.
 
 Requires the private key from generate_keypair.py at
-tools/secrets/license_private_key.b64 (override with --private-key).
-That file is gitignored and must never be committed or shared.
+~/Runsheet Pilot Licence Key/license_private_key.b64 (override with
+--private-key). It lives outside the repo and must never be shared.
+
+Runs itself under the repo's .venv (set up on first use), so plain
+`python3` works even without the packages installed.
 
 Signing + key format live in propresenterrunsheet/licensing.py so the
 issuer and the app's verifier can never drift apart.
@@ -22,21 +25,23 @@ import datetime
 import sys
 from pathlib import Path
 
-# Make the package importable when run from the repo root.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import _shared
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+_shared.use_venv()
+sys.path.insert(0, str(_shared.ROOT))  # make the package importable
 
-from propresenterrunsheet.licensing import _PRODUCT, make_license, verify_license
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-DEFAULT_PRIVATE_PATH = Path(__file__).resolve().parent / "secrets" / "license_private_key.b64"
+from propresenterrunsheet.licensing import _PRODUCT, make_license, verify_license  # noqa: E402
+
+DEFAULT_PRIVATE_PATH = _shared.PRIVATE_PATH
 
 
 def _load_private_key(path: Path) -> Ed25519PrivateKey:
     if not path.exists():
         sys.exit(f"Private key not found at {path}\n"
-                 "Run `python3 tools/generate_keypair.py` first.")
-    raw = base64.b64decode(path.read_text().strip())
+                 f"Put license_private_key.b64 in {_shared.KEY_DIR}, or pass --private-key.")
+    raw = base64.b64decode(path.read_text(encoding="utf-8").strip())
     return Ed25519PrivateKey.from_private_bytes(raw)
 
 
@@ -46,7 +51,7 @@ def main() -> None:
                     help='Buyer name / church, e.g. "Hillsong Brisbane". '
                          "Shown in-app as 'Licensed to …' and signed into the key.")
     ap.add_argument("--private-key", type=Path, default=DEFAULT_PRIVATE_PATH,
-                    help="Path to the base64 private key (default: tools/secrets/).")
+                    help=f"Path to the base64 private key (default: {DEFAULT_PRIVATE_PATH}).")
     args = ap.parse_args()
 
     priv = _load_private_key(args.private_key)
