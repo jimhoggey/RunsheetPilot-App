@@ -296,13 +296,24 @@ def test_library_auto_falls_back_to_disk_when_pp_unreachable(
     lib.mkdir()
     (lib / "Build My Life.pro").write_bytes(b"")
     (lib / "King of Kings.pro").write_bytes(b"")
-    r = client.get(f"/api/library/auto?host=127.0.0.1&port=1&dir={lib}")
+    from propresenterrunsheet.settings import save_settings
+    save_settings({"library_dir": str(lib)})
+    r = client.get("/api/library/auto?host=127.0.0.1&port=1")
     body = r.get_json()
     assert r.status_code == 200
     assert body["source"] == "disk"
     assert body["count"] == 2
     names = sorted(it["name"] for it in body["items"])
     assert names == ["Build My Life", "King of Kings"]
+
+
+def test_library_auto_ignores_a_folder_named_in_the_request(client, tmp_path):
+    """Only the folder saved in Settings is ever scanned (CodeQL path-injection)."""
+    lib = tmp_path / "Elsewhere"
+    lib.mkdir()
+    (lib / "Secret Song.pro").write_bytes(b"")
+    r = client.get(f"/api/library/auto?host=127.0.0.1&port=1&mode=disk&dir={lib}")
+    assert r.get_json()["source"] == "none"
 
 
 def test_library_auto_returns_none_when_pp_unreachable_and_no_disk(client):

@@ -30,7 +30,6 @@ _shared.use_venv()
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-SECRETS_DIR = _shared.KEY_DIR
 PRIVATE_PATH = _shared.PRIVATE_PATH
 PUBLIC_PATH = _shared.PUBLIC_PATH
 
@@ -40,7 +39,7 @@ def _raw_b64(key_bytes: bytes) -> str:
 
 
 def main() -> None:
-    SECRETS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _shared.KEY_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     if PRIVATE_PATH.exists():
         print(f"Refusing to overwrite existing private key:\n  {PRIVATE_PATH}\n"

@@ -1454,12 +1454,13 @@ function setLibraryFooter(count, source) {
 async function loadLibraryAuto() {
   // Silent — no status-bar spinner, just the sidebar footer + the in-modal
   // lib-status line if Settings happens to be open. mode reflects the
-  // operator's current radio preference.
+  // operator's current radio preference. The server only scans the saved
+  // library folder, so a just-typed one is saved first.
   try {
+    await flushSettings();
     const qs = new URLSearchParams({
       host: document.getElementById('pp-host2').value || 'localhost',
       port: document.getElementById('pp-port2').value || '50001',
-      dir:  document.getElementById('lib-dir').value || '',
       mode: libSourceMode || 'auto',
     }).toString();
     const res = await fetch('/api/library/auto?' + qs).then(r => r.json());

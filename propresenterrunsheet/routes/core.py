@@ -56,7 +56,7 @@ def _only_this_apps_own_page():
     Sec-Fetch-Site closes the gap Origin leaves: a page elsewhere can
     fire a plain GET at 127.0.0.1 from an <img> or <script> tag, which
     carries no Origin at all, and several routes act on GET query strings
-    (/api/library/auto scans the ?dir= it is given). Every current browser
+    (/api/library/auto contacts the ?host= it is given). Every current browser
     engine, including the WebKit and Chromium webviews this app runs in,
     sends it on every request: "same-origin" from this app's own page,
     "none" for the window's first load, "cross-site" from anywhere else.
