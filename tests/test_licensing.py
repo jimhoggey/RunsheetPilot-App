@@ -3,7 +3,7 @@ the 14-day trial state machine.
 
 These use an EPHEMERAL keypair generated per-test and monkeypatched into
 licensing._PUBLIC_KEY_B64, so they never touch the real embedded key or the
-private signing key under tools/secrets/."""
+private signing key in ~/Runsheet Pilot Licence Key/."""
 
 import base64
 import datetime

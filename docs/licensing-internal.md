@@ -17,18 +17,23 @@ it to mint licence keys. No server, no internet, nothing to host.
 python3 tools/generate_keypair.py
 ```
 
-This writes, under `tools/secrets/` (gitignored — never committed):
+This writes, in `~/Runsheet Pilot Licence Key/` (your home folder — outside
+the repo, so it can never be committed, and not synced to iCloud):
 
 - `license_private_key.b64` — **SECRET.** Signs every licence you sell.
 - `license_public_key.b64` — safe to share; gets embedded in the app.
+
+Plain `python3` is fine for both tools: they re-run themselves under the
+repo's `.venv`, creating it and installing `requirements.txt` on first use.
 
 > ⚠️ **Back up `license_private_key.b64` somewhere safe** (password manager,
 > encrypted drive). If it leaks, anyone can mint free licences. If you lose
 > it, you can't issue new keys — though keys you've already sold keep working.
 
-The repo already has a working keypair embedded (generated during the initial
-build). You only need to regenerate if you want a key that has never been on a
-shared machine — if you do, paste the new public key into
+The keypair in use was generated on 2026-09-25 (v2.16.2). The original one
+from #40 was lost with the working copy it lived in, so every key issued
+before then stopped working in v2.16.2 and was reissued. Don't regenerate
+again unless this one is lost or leaks — if you do, paste the new public key into
 `propresenterrunsheet/licensing.py` (`_PUBLIC_KEY_B64`) and ship a new build.
 Regenerating **invalidates every key already sold**, so only do it before you
 have real customers.
