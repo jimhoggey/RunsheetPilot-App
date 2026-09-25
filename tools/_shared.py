@@ -29,7 +29,7 @@ def _base_python() -> str:
         found = shutil.which(name)
         if found:
             return found
-    sys.exit("Runsheet Pilot needs Python 3.11 or newer: https://www.python.org/downloads/")
+    raise SystemExit("Runsheet Pilot needs Python 3.11 or newer: https://www.python.org/downloads/")
 
 
 def use_venv() -> None:

@@ -55,6 +55,13 @@ def test_uses_uv_when_installed(calls, monkeypatch, tmp_path):
     assert cmds[2][:5] == ["/bin/uv", "pip", "install", "--python", _venv_py(tmp_path)]
 
 
+def test_no_new_enough_python_says_so(monkeypatch):
+    monkeypatch.setattr(sys, "version_info", (3, 9, 6))
+    monkeypatch.setattr(_shared.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="3.11 or newer"):
+        _shared._base_python()
+
+
 @pytest.mark.parametrize("inside", ["rerun", "venv"])
 def test_no_rerun_once_inside_venv(calls, monkeypatch, tmp_path, inside):
     if inside == "rerun":
