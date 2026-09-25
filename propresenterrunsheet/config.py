@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 
-VERSION = "2.16.1"
+VERSION = "2.16.2"
 APP_NAME = "Runsheet Pilot"
 
 # Release notes, newest first. ONE source of truth: the what's-new popup
@@ -41,6 +41,12 @@ APP_NAME = "Runsheet Pilot"
 # The same lines go in the GitHub release body.
 # tests/test_whats_new.py enforces the cap AND that VERSION has an entry.
 RELEASE_NOTES = {
+    "2.16.2": [
+        "Service Mate has new licence keys. If it says your key isn't "
+        + "valid, paste in the new one you've been sent (Settings → "
+        + "Service Mate).",
+        "Your song library only loads from the folder saved in Settings.",
+    ],
     "2.16.1": [
         "Every slide in ProPresenter's Media area counts now — not just the "
         + "first hundred, and ones in folders too — so template slides no "
