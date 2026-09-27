@@ -907,9 +907,12 @@ def _upload_and_parse(stop: threading.Event):
                               "parse-time pick")
                 confirmed = tmpl_uuid
             if confirmed != tmpl_uuid:
+                # tmpl_uuid comes from the request now, so it is logged
+                # through log_safe like every other request field.
                 log.info("Model read the service as %r — template %s -> %s",
                          log_safe(confirm_hint),
-                         tmpl_uuid or "(none)", confirmed or "(none)")
+                         log_safe(tmpl_uuid or "(none)", 80),
+                         log_safe(confirmed or "(none)", 80))
                 tmpl_uuid, sections, objects = confirmed, [], []
                 if tmpl_uuid:
                     # Adopted a template the pre-AI hint couldn't reach.
