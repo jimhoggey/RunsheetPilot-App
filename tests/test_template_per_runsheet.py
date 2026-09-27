@@ -212,6 +212,24 @@ def test_rematch_on_auto_ignores_a_pin_left_in_settings(pp, monkeypatch):
     assert used == ["u-ya"]           # Auto's answer, not the saved youth pin
 
 
+@pytest.mark.parametrize("playlists, kept", [
+    (TEMPLATES[:2], False),   # PP answered; no template is for Kids Church
+    ([], True),               # PP couldn't be read: keep what's linked
+])
+def test_rematch_to_an_auto_that_declines_drops_the_old_links(pp, monkeypatch,
+                                                              playlists, kept):
+    """Switching a pinned parse back to Auto, for a service with no
+    template, must not leave the pinned template's media to be built."""
+    import propresenterrunsheet.routes.parse as parse_mod
+    monkeypatch.setattr(parse_mod, "fetch_pp_playlists", lambda *_a, **_k: list(playlists))
+    items = pp.post("/api/match", json={
+        "parsed": [{"title": "Prayer and Ministry", "type": "prayer",
+                    "library_match": SECTION}],
+        "library": [], "rematch_template": True, "matching": True,
+        "template_playlist_uuid": "", "service_label": "Kids Church"}).get_json()["items"]
+    assert bool(items[0]["parsed"]["library_match"]) is kept
+
+
 def test_the_prompt_says_a_section_can_match_twice(app_module):
     from propresenterrunsheet.parsing.ai import LIBRARY_CONTEXT_ADDENDUM
     assert "more than one item" in LIBRARY_CONTEXT_ADDENDUM

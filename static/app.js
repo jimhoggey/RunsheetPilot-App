@@ -76,6 +76,7 @@ function templateForRequest() {
 }
 let saveTimer = null;
 let suppressAutoSave = true; // suppress during initial loadSettings()
+let _saveWhenLoaded = false; // a save asked for mid-launch, sent once all fields load
 
 const AUTOSAVE_FIELDS = [
   'or-key', 'or-model', 'lib-dir', 'export-dir', 'sm-hide',
@@ -322,7 +323,13 @@ async function loadModels(saved) {
   _modelsData = data;
   // A free model saved before the key had credit: parses already run on the
   // paid pick (the server's rule), so show that by moving to Automatic.
-  if (data.free_saved) { sel.value = ''; saveSettings(); }
+  // Not mid-launch: a save sends every field, and loadSettings hasn't
+  // filled the folders and aliases yet — saving now wiped them on disk.
+  if (data.free_saved) {
+    sel.value = '';
+    if (suppressAutoSave) _saveWhenLoaded = true;
+    else saveSettings();
+  }
   _modelNote(data);
   _renderKeyStatus();
   // A new key can make a lookup's "no credit" note wrong: look it up
@@ -621,10 +628,14 @@ async function loadSettings() {
 
   suppressAutoSave = false;
   setSaveDot('');
-  // Clear last session's template pin from settings (the page started on
-  // Auto above), so no caller that falls back to the saved one finds it.
-  // Only now: a save sends every field, and they are all loaded here.
-  if (s.template_playlist_uuid) saveSettings();
+  // Saves launch needed, sent only now that every field is loaded (a save
+  // sends them all): clearing last session's template pin — the page
+  // started on Auto, and no caller falling back to the saved pin should
+  // find it — and any save loadModels asked for (see _saveWhenLoaded).
+  if (s.template_playlist_uuid || _saveWhenLoaded) {
+    _saveWhenLoaded = false;
+    saveSettings();
+  }
 }
 
 function autoSaveDebounced() {
@@ -2003,9 +2014,11 @@ async function parseRunsheet() {
     // The template was changed while this parse ran, so its links came
     // from the one it was sent. Re-link against the pick on screen now,
     // and give the banner Auto's answer if that pick is Auto.
+    // Step 3 unlocks only after, or Create could build the old links.
     if (_createTemplateUuid !== sentPick && matchingOn()) {
       if (!_createTemplateUuid) _guessTemplate();
-      rematchNow();
+      await rematchNow();
+      if (seq !== _parseSeq) return;   // a new file or Start over meanwhile
     }
     // Mark step 2 complete + unlock step 3 so the operator's eye goes to
     // the Create button.

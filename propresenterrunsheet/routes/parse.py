@@ -1225,13 +1225,26 @@ def api_match():
             if not hint:
                 hint = " ".join((it.get("title") or "") for it in parsed)
             try:
-                tmpl = auto_detect_template_uuid(fetch_pp_playlists(base),
-                                                 hint=hint) or ""
+                playlists = fetch_pp_playlists(base)
+                tmpl = auto_detect_template_uuid(playlists, hint=hint) or ""
+                declined = not tmpl and bool(template_candidates(playlists))
             except Exception:
-                tmpl = ""
-        n = link_items_to_template(parsed, base, tmpl,
-                                   aliases=settings.get("template_aliases"),
-                                   force=True)
+                tmpl, declined = "", False
+        else:
+            declined = False
+        if declined:
+            # ProPresenter answered and no template is for this service —
+            # so the last template's links go too, or Create would build
+            # its media under a banner saying "no template media". A read
+            # that failed ([] playlists) keeps them: a blip shouldn't wipe.
+            for it in parsed:
+                if isinstance(it, dict) and it.get("type") != "song":
+                    it["library_match"] = None
+            n = 0
+        else:
+            n = link_items_to_template(parsed, base, tmpl,
+                                       aliases=settings.get("template_aliases"),
+                                       force=True)
         log.info("Re-match: %d/%d items linked to the template", n,
                  len(parsed))
         stats.track("rematch_used", linked=n, items=len(parsed))
