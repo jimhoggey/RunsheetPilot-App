@@ -15,6 +15,7 @@ This module is read-only — it fetches the template via the REST API and
 groups it into sections. The outgoing-payload builder in playlist.py
 turns the sections into the items list we PUT back to PP."""
 
+import copy
 import logging
 import re
 from typing import Optional
@@ -31,11 +32,30 @@ log = logging.getLogger("pp_runsheet")
 # be used to distinguish one template from another. Stripped before
 # token-scoring against the runsheet hint.
 _TEMPLATE_NAME_FILLERS = {
-    "library", "libary",   # common typo we've seen in the wild
+    "library", "libary", "librarie",   # typo seen in the wild; "libraries" singularised
     "template", "templates",
     "service", "services",
     "the", "a", "an", "of", "and",
 }
+
+# A weekday that is part of a DATE says when, not which service. A
+# masthead of "Sunday, 27 September, 2026 · 4:00 PM · Young Adults
+# Service" used to hand "sunday" to a "Sunday Morning Library" on a young
+# adults night. Only a real date counts — "27 September", "September 27",
+# "27/09/2026" — so "Sunday Morning" and "Sunday 10am Library" keep it.
+# Nothing else is stripped: times and numbers ("9am Library", "Service 2")
+# are how some churches tell their templates apart.
+_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|"
+          r"july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+          r"dec(?:ember)?)\b")
+_WEEKDAY_IN_DATE = re.compile(
+    r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b(?=[\s,.]*(?:"
+    r"\d{1,2}(?:st|nd|rd|th)?[\s,.]+" + _MONTH
+    + r"|" + _MONTH + r"[\s,.]+\d"
+    + r"|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}))")
+
+# Short forms operators write for a service, spelled out.
+_TOKEN_ALIASES = {"ya": ("young", "adult")}
 
 
 def template_candidates(playlists: list) -> list:
@@ -80,10 +100,19 @@ def _template_signal_tokens(name: str) -> set:
     token "youth_runsheet_may22" and the filename contributed no signal
     at all — invisible while a zero-score fell back to the first
     template, and load-bearing now that it declines.
+
+    A weekday that is part of a date is dropped (see _WEEKDAY_IN_DATE). A
+    plural counts as its singular ("Young Adults" hint, "Young Adult
+    Library"), and "YA" as "young adult".
     """
-    cleaned = re.sub(r"[\W_]+", " ", (name or "").lower())
-    return {w for w in cleaned.split()
-            if w and w not in _TEMPLATE_NAME_FILLERS}
+    text = _WEEKDAY_IN_DATE.sub(" ", (name or "").lower())
+    out = set()
+    for w in re.sub(r"[\W_]+", " ", text).split():
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        if w not in _TEMPLATE_NAME_FILLERS:
+            out.update(_TOKEN_ALIASES.get(w, (w,)))
+    return out
 
 
 def fetch_pp_playlists(base: str) -> list:
@@ -310,6 +339,44 @@ def resolve_with_aliases(title: str, objects: list, aliases=None):
     return resolve_object(title, objects)
 
 
+def _same_part_key(it) -> str:
+    """An item's title as the name of a part of the service, or "" when
+    it can't be one. Case and punctuation don't count and "&"/"+" read
+    as "and", so "Prayer & Ministry" and "Prayer and Ministry" are one.
+    Songs are the song matcher's, as everywhere else in this module."""
+    if not isinstance(it, dict) or it.get("type") == "song":
+        return ""
+    title = re.sub(r"[&+]", " and ", str(it.get("title") or "").casefold())
+    return " ".join(re.findall(r"[^\W_]+", title))
+
+
+def share_repeated_links(items) -> int:
+    """Give each unlinked item the template link of an item with the same
+    title, and return how many were filled.
+
+    A service can hold the same part twice — "Prayer and Ministry" after
+    the message and again at the close. The model tends to tag a section
+    once, which left the repeat as a bare header in the built playlist.
+
+    Same title exactly (see _same_part_key), and at least two words: a
+    one-word "Video" or "Prayer" can be two different parts of a service,
+    and "Video 1" is not "Video 2"."""
+    links = {}
+    for it in items or []:
+        key = _same_part_key(it)
+        if " " in key and isinstance(it.get("library_match"), dict):
+            links.setdefault(key, it["library_match"])
+    if not links:
+        return 0
+    filled = 0
+    for it in items:
+        key = _same_part_key(it)
+        if key in links and not it.get("library_match"):
+            it["library_match"] = copy.deepcopy(links[key])
+            filled += 1
+    return filled
+
+
 def link_items_to_template(parsed_items, base, tmpl_uuid, aliases=None,
                            force=False, fetch=None) -> int:
     """Attach `library_match` to parsed runsheet items from a template
@@ -367,7 +434,7 @@ def link_items_to_template(parsed_items, base, tmpl_uuid, aliases=None,
                 # Recomputed and found nothing — drop the old link rather
                 # than leave a slide that no longer corresponds.
                 it["library_match"] = None
-        return hits
+        return hits + share_repeated_links(parsed_items)
     except Exception:
         log.exception("link_items_to_template failed; leaving items as-is")
         return 0
@@ -410,19 +477,16 @@ def auto_detect_template_uuid(playlists: list,
         return None
     hint_tokens = _template_signal_tokens(hint) if hint else set()
     if hint_tokens:
-        # Sort by overlap-count desc, preserving original order on ties.
-        scored = sorted(
-            enumerate(candidates),
-            key=lambda ix: (
-                -len(_template_signal_tokens(ix[1].get("name", ""))
-                     & hint_tokens),
-                ix[0],
-            ),
-        )
-        best_idx, best = scored[0]
-        best_overlap = len(_template_signal_tokens(best.get("name", ""))
-                           & hint_tokens)
-        if best_overlap > 0:
+        # Most shared words wins. On a tie, the template whose name the
+        # hint covers most fully: "Youth Service" is all of "Youth
+        # Library" but only half of "Junior Youth Library", so a youth
+        # runsheet no longer depends on which one ProPresenter lists first.
+        def fit(p):
+            words = _template_signal_tokens(p.get("name", ""))
+            shared = len(words & hint_tokens)
+            return shared, shared / len(words) if words else 0.0
+        best = max(candidates, key=fit)   # max keeps the first on a full tie
+        if fit(best)[0] > 0:
             return best.get("uuid") or None
         # Nothing matched. Prefer a template that makes no claim at all
         # over one that makes the wrong claim: a name with no distinctive

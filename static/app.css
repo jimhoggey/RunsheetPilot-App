@@ -620,6 +620,17 @@ tr:hover td { background: rgba(255,255,255,0.025); }
    service" is a normal way to run an event, not a failure. */
 .notice-info { background: var(--acc-soft); border-color: rgba(59,130,246,0.30); color: #bfdbfe; }
 
+/* The template banner under Step 1: a notice that is also the way to
+   change the template, so the whole strip is one button. */
+.template-banner {
+  display: flex; align-items: baseline; gap: var(--s-4);
+  width: 100%; margin: 0; text-align: left;
+  font: inherit; font-size: 0.83rem; cursor: pointer;
+}
+.template-banner:hover { border-color: rgba(59,130,246,0.60); }
+.template-banner:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+.template-banner-action { margin-left: auto; white-space: nowrap; font-weight: 600; text-decoration: underline; }
+
 code {
   font-family: var(--font-mono);
   font-size: 0.78rem;

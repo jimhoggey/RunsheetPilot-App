@@ -186,6 +186,12 @@
     </div>
   </div>
 
+  <!-- Which template this runsheet is built from — Auto's match, the
+       operator's pick, or none for this service. Clicking it opens the
+       template dropdown. Rendered by _renderTemplateVerdict(); outside the
+       Step 1 card so it isn't dimmed with the card once Step 1 is done. -->
+  <div id="template-verdict" aria-live="polite" hidden></div>
+
   <!-- Status bar — the app's running commentary: the idle greeter, live
        "uploading…" messages, and the post-parse summary. Sits directly
        under Step 1 so guidance appears where the operator is already
@@ -240,13 +246,6 @@
       </div>
     </div>
   </div>
-
-  <!-- Why nothing populated from a template. Only appears when PP HAS
-       template playlists and none of them is for this service — Auto
-       declines rather than reaching for the wrong one. Rendered by
-       _renderTemplateVerdict(); sits above the results so it is read
-       before the operator wonders where the media went. -->
-  <div id="template-verdict" hidden></div>
 
   <!-- Results table — populated after parse. Hidden until then so the
        empty state doesn't clutter Step 2/3. -->
