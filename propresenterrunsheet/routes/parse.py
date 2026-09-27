@@ -42,7 +42,8 @@ from ..propresenter.net import UnreachableHost, pp_base
 from ..propresenter.templates import (
     auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlists,
     link_items_to_template, playlist_to_objects, playlist_to_sections,
-    resolve_section, resolve_with_aliases, template_candidates,
+    resolve_section, resolve_with_aliases, share_repeated_links,
+    template_candidates,
 )
 from ..service_mate.state import _ensure_item_cues, _write_runsheet_state
 from ..logging_setup import log_safe
@@ -271,6 +272,41 @@ def api_extract_text():
         "needs_review": needs_review,
         "model_reads":  model_reads,
         "filename":     upload.filename,
+    })
+
+
+def _pre_read_hint(upload_name: str, raw) -> str:
+    """What Auto can go on before the model has read anything: the
+    filename and the runsheet's masthead (see the parse route, step 7)."""
+    return " ".join(filter(None, [upload_name, service_header(raw)]))
+
+
+@bp.route("/api/template/auto", methods=["POST"])
+def api_template_auto():
+    """Which template Auto would use, for the banner on Step 1.
+
+    Before the parse it reads what parse's first pick reads (filename +
+    masthead), so the operator can correct a wrong template BEFORE the
+    model is sent its sections. After the parse, `service_label` is the
+    model's reading — the hint parse settled on. Never consults the
+    dropdown: the page knows what it pinned; this answers for Auto."""
+    body = request.get_json(silent=True) or {}
+    label = str(body.get("service_label") or "")[:200]
+    hint = label or _pre_read_hint(str(body.get("filename") or "")[:300],
+                                   str(body.get("text") or "")[:20000])
+    settings = load_settings()
+    try:
+        base = pp_base((settings.get("pp_host") or "localhost").strip(),
+                       (settings.get("pp_port") or "50001").strip())
+    except UnreachableHost:
+        return jsonify({"uuid": "", "name": "", "declined": False})
+    playlists = fetch_pp_playlists(base)
+    uuid = auto_detect_template_uuid(playlists, hint=hint) or ""
+    return jsonify({
+        "uuid": uuid,
+        "name": next((p.get("name", "") for p in playlists
+                      if p.get("uuid") == uuid), ""),
+        "declined": not uuid and bool(template_candidates(playlists)),
     })
 
 
@@ -511,7 +547,13 @@ def _upload_and_parse(stop: threading.Event):
                         "without template context")
             base = ""
             do_matching = False
-        tmpl_uuid = (settings.get("template_playlist_uuid") or "").strip()
+        # The page sends its pick for THIS runsheet ("" is Auto). A saved
+        # pin only counts for a caller that sends none: the pick lasts one
+        # runsheet, so last Friday's youth template can't build Sunday's.
+        # pp_id vets it before it reaches a ProPresenter URL.
+        tmpl_uuid = (request.form.get("template_playlist_uuid")
+                     if "template_playlist_uuid" in request.form
+                     else settings.get("template_playlist_uuid") or "").strip()
         # A uuid from settings is the operator PINNING the dropdown — an
         # explicit instruction, never second-guessed by the confirmation
         # pass below. Only an Auto pick is ours to revise.
@@ -547,8 +589,7 @@ def _upload_and_parse(stop: threading.Event):
             # masthead now hints on the filename alone and may resolve to
             # nothing, and the confirmation pass below — which has the
             # model's own reading of the service — is what recovers it.
-            detect_hint = " ".join(filter(None, [
-                upload_name, service_header(raw)]))
+            detect_hint = _pre_read_hint(upload_name, raw)
             try:
                 pp_playlists = fetch_pp_playlists(base)
                 tmpl_uuid = auto_detect_template_uuid(
@@ -893,6 +934,12 @@ def _upload_and_parse(stop: threading.Event):
             and template_candidates(pp_playlists or []))
         tmpl_name = next((p.get("name", "") for p in (pp_playlists or [])
                           if p.get("uuid") == tmpl_uuid), "") if tmpl_uuid else ""
+        # One line that answers "why did this runsheet get that template?"
+        # from the log alone.
+        if do_matching:
+            log.info("Template: %s (%s)", log_safe(tmpl_name or "none", 80),
+                     "picked by the operator" if tmpl_pinned
+                     else f"Auto, service read as {log_safe(confirm_hint or '?', 60)!r}")
 
         # 8. If the AI didn't supply a service name, derive one from the filename
         if not service_name and upload_name:
@@ -983,10 +1030,12 @@ def _upload_and_parse(stop: threading.Event):
                 resolved_object_hits += 1
             else:
                 it["library_match"] = None
+        repeats = share_repeated_links(items)
         if sections or objects:
             log.info(f"Template-context parse: "
                      f"{resolved_section_hits} section + "
-                     f"{resolved_object_hits} object links across "
+                     f"{resolved_object_hits} object links"
+                     f"{f' + {repeats} repeated' if repeats else ''} across "
                      f"{len(items)} items (template: {len(sections)} "
                      f"sections, {len(objects)} objects)")
 
@@ -1068,6 +1117,8 @@ def _upload_and_parse(stop: threading.Event):
                 "name":          tmpl_name,
                 "declined":      template_declined,
                 "service_label": service_type,
+                # The banner says "you picked it" rather than "Auto-matched".
+                "pinned":        tmpl_pinned,
             },
         })
 

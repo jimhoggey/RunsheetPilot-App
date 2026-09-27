@@ -15,6 +15,7 @@ This module is read-only — it fetches the template via the REST API and
 groups it into sections. The outgoing-payload builder in playlist.py
 turns the sections into the items list we PUT back to PP."""
 
+import copy
 import logging
 import re
 from typing import Optional
@@ -31,11 +32,28 @@ log = logging.getLogger("pp_runsheet")
 # be used to distinguish one template from another. Stripped before
 # token-scoring against the runsheet hint.
 _TEMPLATE_NAME_FILLERS = {
-    "library", "libary",   # common typo we've seen in the wild
+    "library", "libary", "librarie",   # typo seen in the wild; "libraries" singularised
     "template", "templates",
     "service", "services",
     "the", "a", "an", "of", "and",
 }
+
+# Words that DATE a runsheet rather than name its service. A masthead of
+# "Sunday, 27 September, 2026 · 4:00 PM · Young Adults Service" used to
+# hand "sunday" to a "Sunday Morning Library" on a young adults night.
+# A weekday only goes when a date follows it; "Sunday Morning" keeps it.
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep",
+           "oct", "nov", "dec")
+_WEEKDAY_IN_DATE = re.compile(
+    r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b(?=[\s,.]*(?:\d|"
+    + "|".join(_MONTHS) + "))")
+_DATE_WORDS = {"am", "pm", "sept", "january", "february", "march", "april",
+               "june", "july", "august", "september", "october", "november",
+               "december", *_MONTHS}
+_ORDINAL = re.compile(r"\d+(?:st|nd|rd|th)?")
+
+# Short forms operators write for a service, spelled out.
+_TOKEN_ALIASES = {"ya": ("young", "adult")}
 
 
 def template_candidates(playlists: list) -> list:
@@ -80,10 +98,20 @@ def _template_signal_tokens(name: str) -> set:
     token "youth_runsheet_may22" and the filename contributed no signal
     at all — invisible while a zero-score fell back to the first
     template, and load-bearing now that it declines.
+
+    Dates and times say when, not which service, so they go (see
+    _DATE_WORDS). A plural counts as its singular ("Young Adults" hint,
+    "Young Adult Library"), and "YA" as "young adult".
     """
-    cleaned = re.sub(r"[\W_]+", " ", (name or "").lower())
-    return {w for w in cleaned.split()
-            if w and w not in _TEMPLATE_NAME_FILLERS}
+    text = _WEEKDAY_IN_DATE.sub(" ", (name or "").lower())
+    out = set()
+    for w in re.sub(r"[\W_]+", " ", text).split():
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]
+        if w in _TEMPLATE_NAME_FILLERS or w in _DATE_WORDS or _ORDINAL.fullmatch(w):
+            continue
+        out.update(_TOKEN_ALIASES.get(w, (w,)))
+    return out
 
 
 def fetch_pp_playlists(base: str) -> list:
@@ -310,6 +338,38 @@ def resolve_with_aliases(title: str, objects: list, aliases=None):
     return resolve_object(title, objects)
 
 
+def _same_part_key(title: str) -> str:
+    """A title as a name for a part of the service: "&" and "+" read as
+    "and", so "Prayer & Ministry" and "Prayer and Ministry" are one."""
+    return re.sub(r"\s*[&+]\s*", " and ", title or "").strip()
+
+
+def share_repeated_links(items) -> int:
+    """Give each unlinked item the template link of another item with the
+    same title, and return how many were filled.
+
+    A service can hold the same part twice — "Prayer and Ministry" after
+    the message and again at the close. The model tends to tag a section
+    once, which left the repeat as a bare header in the built playlist.
+    Songs are the song matcher's, as everywhere else in this module."""
+    linked = [{"name": _same_part_key(it.get("title")), "_link": it["library_match"]}
+              for it in items or []
+              if isinstance(it, dict) and it.get("type") != "song"
+              and isinstance(it.get("library_match"), dict)]
+    if not linked:
+        return 0
+    filled = 0
+    for it in items:
+        if (not isinstance(it, dict) or it.get("type") == "song"
+                or it.get("library_match")):
+            continue
+        hit = resolve_library_name(_same_part_key(it.get("title")), linked)
+        if hit:
+            it["library_match"] = copy.deepcopy(hit["_link"])
+            filled += 1
+    return filled
+
+
 def link_items_to_template(parsed_items, base, tmpl_uuid, aliases=None,
                            force=False, fetch=None) -> int:
     """Attach `library_match` to parsed runsheet items from a template
@@ -367,7 +427,7 @@ def link_items_to_template(parsed_items, base, tmpl_uuid, aliases=None,
                 # Recomputed and found nothing — drop the old link rather
                 # than leave a slide that no longer corresponds.
                 it["library_match"] = None
-        return hits
+        return hits + share_repeated_links(parsed_items)
     except Exception:
         log.exception("link_items_to_template failed; leaving items as-is")
         return 0
@@ -410,19 +470,16 @@ def auto_detect_template_uuid(playlists: list,
         return None
     hint_tokens = _template_signal_tokens(hint) if hint else set()
     if hint_tokens:
-        # Sort by overlap-count desc, preserving original order on ties.
-        scored = sorted(
-            enumerate(candidates),
-            key=lambda ix: (
-                -len(_template_signal_tokens(ix[1].get("name", ""))
-                     & hint_tokens),
-                ix[0],
-            ),
-        )
-        best_idx, best = scored[0]
-        best_overlap = len(_template_signal_tokens(best.get("name", ""))
-                           & hint_tokens)
-        if best_overlap > 0:
+        # Most shared words wins. On a tie, the template whose name the
+        # hint covers most fully: "Youth Service" is all of "Youth
+        # Library" but only half of "Junior Youth Library", so a youth
+        # runsheet no longer depends on which one ProPresenter lists first.
+        def fit(p):
+            words = _template_signal_tokens(p.get("name", ""))
+            shared = len(words & hint_tokens)
+            return shared, shared / len(words) if words else 0.0
+        best = max(candidates, key=fit)   # max keeps the first on a full tie
+        if fit(best)[0] > 0:
             return best.get("uuid") or None
         # Nothing matched. Prefer a template that makes no claim at all
         # over one that makes the wrong claim: a name with no distinctive

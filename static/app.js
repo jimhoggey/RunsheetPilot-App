@@ -21,8 +21,16 @@ let uploadedFile = null;
 // could re-attach a template parse had correctly declined. `declined`
 // means ProPresenter has templates but none of them is for this service;
 // `service_label` is what the model called the service, and the words the
-// banner uses. Reset with every new parse.
-let parsedTemplate = {uuid: '', name: '', declined: false, service_label: ''};
+// banner uses. `pinned`: the operator chose it, so it is not Auto's answer.
+// Reset with every new runsheet.
+function _noTemplate() {
+  return {uuid: '', name: '', declined: false, service_label: '', pinned: false};
+}
+let parsedTemplate = _noTemplate();
+// The runsheet's text as read on upload, for Auto's first guess.
+let _uploadText = '';
+// Only the newest guess may redraw the banner — see _guessTemplate.
+let _guessSeq = 0;
 
 // Which job the one dropdown is doing: 'create' (pick a TEMPLATE to reuse
 // sections from) or 'update' (pick the playlist you already built, which
@@ -31,6 +39,9 @@ let parsedTemplate = {uuid: '', name: '', declined: false, service_label: ''};
 let playlistMode = 'create';
 let _modeActedOn = false;     // headers written in this mode — see resetPlaylistMode
 let _createTemplateUuid = '';
+// A template picked with no runsheet loaded is for the NEXT one, so that
+// upload keeps it; any other pick lasts only the runsheet it was made on.
+let _templatePickedEarly = false;
 let _updateTargetUuid = '';
 // The plan returned by /api/update_playlist/preview, awaiting confirm.
 let _updatePlan = null;
@@ -57,8 +68,10 @@ function playlistModeIsUpdate() { return playlistMode === 'update'; }
 // and sending it as a template would expand its own media back into it.
 function templateForRequest() {
   if (playlistModeIsUpdate()) return '';
+  // A parse-time pin the operator has since switched back to Auto is not
+  // Auto's answer, so it doesn't carry forward.
   return document.getElementById('template-playlist').value
-      || parsedTemplate.uuid || '';
+      || (parsedTemplate.pinned ? '' : parsedTemplate.uuid) || '';
 }
 let saveTimer = null;
 let suppressAutoSave = true; // suppress during initial loadSettings()
@@ -542,9 +555,11 @@ async function loadSettings() {
   // Template playlist selection — fetch the live list of playlists from
   // PP, populate the dropdown, then select the saved UUID (if any).
   // Best-effort: if PP is unreachable the dropdown stays at "— None —".
-  // Only the CREATE-mode pick is ever persisted; the update target is a
-  // per-runsheet choice and resets with the mode.
-  _createTemplateUuid = s.template_playlist_uuid || '';
+  // Every launch starts on Auto. A template pick lasts one runsheet: the
+  // one it was picked for, or the next upload when none was loaded. A pin
+  // restored from settings was last week's, and would quietly build a
+  // young adults runsheet from the youth template.
+  _createTemplateUuid = '';
   await loadTemplatePlaylists();
   document.getElementById('template-playlist')
     .addEventListener('change', _rememberTemplatePick);
@@ -706,6 +721,8 @@ function _cancelParse() {
 
 function _clearRunsheetState() {
   _parseSeq++;
+  _guessSeq++;
+  _uploadText = '';
   _cancelParse();
   matchedItems = [];
   _clearUpdatePlan();
@@ -724,9 +741,8 @@ function handleFileSelect(file) {
   // Every new runsheet starts with matching ON. See resetMatchToggle().
   resetMatchToggle();
   resetPlaylistMode();
-  // Last runsheet's template verdict says nothing about this one.
-  parsedTemplate = {uuid: '', name: '', declined: false, service_label: ''};
-  _renderTemplateVerdict();
+  _templateBackToAuto();
+  _templatePickedEarly = false;      // a pick made for this upload is now used
   _hideOcrReview();
   const dz = document.getElementById('drop-zone');
   dz.classList.add('has-file');
@@ -785,6 +801,10 @@ async function extractText(file) {
       uploadedFile = null;
       return;
     }
+    if (uploadedFile === file) {
+      _uploadText = res.text || '';
+      _guessTemplate();
+    }
     if (res.needs_review) {
       _showOcrReview(res.text);
       setStatus('📝 Read your screenshot — check the text on Step 2, ' +
@@ -839,6 +859,10 @@ function onMatchToggle() {
       : 'Off — you\'ll get coloured headers and timers only, no songs or ' +
         'template media. Resets on each new runsheet.';
   }
+  // Off hides the template banner; back on, it needs Auto's answer if the
+  // upload's guess was skipped while matching was off.
+  if (on && uploadedFile && !parsedTemplate.uuid) _guessTemplate();
+  else _renderTemplateVerdict();
 }
 
 // ─── Create vs Update ─────────────────────────────────────────────────────
@@ -938,30 +962,90 @@ function _labelCreateButton(live) {
     : live ? '✓ Update playlist' : '✓ Add Section Headers';
 }
 
-// ─── The template verdict banner ──────────────────────────────────────────
-// Shown when ProPresenter HAS template playlists but none of them is for
-// this service — a Young Adults runsheet on a machine whose only template
-// is "Youth Service - Library". Auto declines rather than reaching for
-// the wrong one, and this says so.
+// ─── The template banner, under Step 1 ────────────────────────────────────
+// Says which template this runsheet will be built from, from the moment
+// it is uploaded, so a wrong one is caught BEFORE the parse sends its
+// sections to the model. One click opens the dropdown to change it.
 //
-// Deliberately not an error. Plenty of services have no template built
-// yet, and that is a normal way to use the app — the wording states what
-// you still get (headers, timers, songs) before it mentions what is
-// missing. Nothing is shown when PP has no templates at all: there is no
-// decision to explain.
+// Three states: Auto's match; the operator's own pick; or no template for
+// this service — a Young Adults runsheet on a machine whose templates are
+// all for other services. That last one is deliberately not an error:
+// plenty of services have no template built yet, so it says what you
+// still get before what is missing. It is only shown once the model has
+// read the service, because the filename and heading alone can't prove
+// there's no template for it. Nothing shows while there is no runsheet,
+// with matching off, or in update mode, which uses no template.
 function _renderTemplateVerdict() {
   const el = document.getElementById('template-verdict');
   if (!el) return;
-  if (!parsedTemplate.declined) { el.hidden = true; el.innerHTML = ''; return; }
-  const label = (parsedTemplate.service_label || '').trim();
-  const who = label ? `for ${escapeHtml(label)}` : 'for this service';
-  el.hidden = false;
-  el.innerHTML =
-    `<div class="notice notice-info">` +
-    `<strong>No template ${who}.</strong> ` +
-    `Building coloured headers, timers and songs — just no template media. ` +
-    `Pick a template in the sidebar and hit ↻ Re-match if you want one.` +
-    `</div>`;
+  const t = parsedTemplate;
+  const pick = _createTemplateUuid;
+  let msg = '', action = 'Change';
+  if (!uploadedFile || !matchingOn() || playlistModeIsUpdate()) {
+    msg = '';
+  } else if (pick) {
+    const name = _ppPlaylists.find(p => p.uuid === pick)?.name || 'your template';
+    msg = `📌 Using <strong>${escapeHtml(name)}</strong> — you picked it for this runsheet`;
+  } else if (t.uuid && !t.pinned) {
+    msg = `⚡ Auto-matched to <strong>${escapeHtml(t.name || 'a template')}</strong>`;
+  } else if (t.declined) {
+    const label = (t.service_label || '').trim();
+    msg = `<strong>No template for ${label ? escapeHtml(label) : 'this service'}.</strong> ` +
+          `Building coloured headers, timers and songs — just no template media.`;
+    action = 'Pick one';
+  }
+  el.hidden = !msg;
+  el.innerHTML = msg
+    ? `<button type="button" class="notice notice-info template-banner" ` +
+      `onclick="openTemplatePicker()"><span>${msg}</span>` +
+      `<span class="template-banner-action">${action} ›</span></button>`
+    : '';
+}
+
+// A template pick lasts one runsheet: a new upload or Start over puts
+// Auto back, unless the pick was made for the upload still to come (see
+// _templatePickedEarly). The last runsheet's verdict goes too.
+function _templateBackToAuto() {
+  if (!_templatePickedEarly && _createTemplateUuid) {
+    _createTemplateUuid = '';
+    autoSaveDebounced();
+  }
+  parsedTemplate = _noTemplate();
+  _renderTemplateOptions();          // also redraws the banner and the this/next wording
+}
+
+// What Auto would pick, for the banner. Before the parse it reads the
+// filename and heading (parse's own first pick); after it, the model's
+// reading of the service. Bumping _guessSeq (a new runsheet, a parse
+// starting) drops an answer still in flight so it can't redraw over a
+// newer verdict.
+async function _guessTemplate() {
+  const seq = ++_guessSeq;
+  if (!uploadedFile || !matchingOn() || playlistModeIsUpdate()) return;
+  try {
+    const res = await fetch('/api/template/auto', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename: uploadedFile.name, text: _uploadText,
+                            service_label: parsedTemplate.service_label}),
+    }).then(r => r.json());
+    if (seq !== _guessSeq) return;
+    parsedTemplate = {...parsedTemplate, uuid: res.uuid || '', name: res.name || '',
+                      pinned: false,
+                      declined: !!res.declined && !!parsedTemplate.service_label};
+    _renderTemplateVerdict();
+  } catch (_) { /* no banner is fine; the parse still picks */ }
+}
+
+// The banner's click: open the drawer on the template dropdown. The list
+// itself opens where the webview supports showPicker (Chromium/WebView2);
+// elsewhere the dropdown is focused, one click from open. The delay lets
+// the drawer finish sliding in, well inside the click's activation window.
+function openTemplatePicker() {
+  if (!document.body.classList.contains('drawer-open')) toggleDrawer();
+  const sel = document.getElementById('template-playlist');
+  sel.focus({preventScroll: true});
+  sel.scrollIntoView({block: 'nearest'});
+  setTimeout(() => { try { sel.showPicker(); } catch (_) { /* focus is enough */ } }, 300);
 }
 
 // ─── Template playlist dropdown ───────────────────────────────────────────
@@ -1089,6 +1173,7 @@ function _renderTemplateOptions() {
   const current = upd ? _updateTargetUuid : _createTemplateUuid;
   sel.value = current && playlists.some(p => p.uuid === current) ? current : '';
   _syncCreateButton();
+  _renderTemplateVerdict();          // a pick's name may only now be known
 
   if (upd) {
     status.innerHTML = sel.value
@@ -1105,13 +1190,11 @@ function _renderTemplateOptions() {
     status.innerHTML = '<span style="color:var(--org)">No playlists found — is ProPresenter running with Network mode on?</span>';
   } else if (sel.value) {
     const picked = playlists.find(p => p.uuid === sel.value);
-    status.innerHTML = `Locked to <strong>${escapeHtml(picked?.name || 'selected playlist')}</strong> as template (${picked?.section_count || 0} section${(picked?.section_count||0)!==1?'s':''}). Switch to <em>⚡ Auto</em> to route by runsheet content.`;
+    status.innerHTML = `Using <strong>${escapeHtml(picked?.name || 'selected playlist')}</strong> as template (${picked?.section_count || 0} section${(picked?.section_count||0)!==1?'s':''}) for ${uploadedFile ? 'this' : 'the next'} runsheet. After that it's back to <em>⚡ Auto</em>.`;
   } else if (_ppAutoDetected) {
-    // Show which playlist Auto would pick RIGHT NOW (no runsheet yet, so
-    // it falls back to the first library-named playlist; on parse the
-    // actual pick uses the runsheet content too).
-    const guess = playlists.find(p => p.uuid === _ppAutoDetected);
-    status.innerHTML = `<strong>⚡ Auto</strong> — currently would pick <strong>${escapeHtml(guess?.name || '?')}</strong>. On parse, routes by runsheet content (youth/sunday/etc.). Override above to lock a specific template.`;
+    // There are templates to choose from. Which one Auto picks depends on
+    // the runsheet, and the banner under Step 1 names it.
+    status.innerHTML = `<strong>⚡ Auto</strong> picks the template that names each runsheet's service${uploadedFile ? ' — this one\'s is shown under Step 1' : ''}. Pick one above to use it for ${uploadedFile ? 'this' : 'the next'} runsheet only.`;
   } else {
     status.innerHTML = `${playlists.length} playlist${playlists.length!==1?'s':''} loaded — name one with "library" or "template" to enable Auto routing, or pick one above.`;
   }
@@ -1133,10 +1216,13 @@ function _rememberTemplatePick() {
   }
   const changed = v !== _createTemplateUuid;
   _createTemplateUuid = v;
+  _templatePickedEarly = !!v && !uploadedFile;
   // A new create-mode pick can move a playlist into or out of Templates
   // (an oddly-named one only counts while it is pinned), so regroup.
   if (changed) _renderTemplateOptions();
   else _syncCreateButton();
+  // Back to Auto: the banner needs Auto's answer, which a pin replaced.
+  if (changed && !v) _guessTemplate();
   // Items parse already linked to the old template would otherwise keep
   // its media, and the new playlist would be a mix of the two.
   if (changed && matchedItems.length) rematchNow();
@@ -1768,8 +1854,7 @@ function resetFlow() {
   document.getElementById('media-assist-card').hidden = true;
   uploadedFile = null;
   _clearRunsheetState();
-  parsedTemplate = {uuid: '', name: '', declined: false, service_label: ''};
-  _renderTemplateVerdict();
+  _templateBackToAuto();
   document.getElementById('pdf-input').value = '';
   resetMatchToggle();
   resetPlaylistMode();
@@ -1849,6 +1934,9 @@ async function parseRunsheet() {
     form.append('pdf', uploadedFile);
   }
   form.append('matching', matchingOn() ? 'on' : 'off');
+  // This runsheet's template pick ("" = Auto), sent rather than read from
+  // settings, so a pin can never outlive the runsheet it was made for.
+  form.append('template_playlist_uuid', _createTemplateUuid);
   form.append('or_key',   document.getElementById('or-key').value.trim());
   form.append('or_model', document.getElementById('or-model').value.trim());
   // randomUUID needs WebKit 15.4+ (macOS 12.3); older Macs get a random id.
@@ -1876,8 +1964,8 @@ async function parseRunsheet() {
 
     // The template verdict, before the match call so it can carry the
     // service label with it.
-    parsedTemplate = res.template
-        || {uuid: '', name: '', declined: false, service_label: ''};
+    _guessSeq++;                       // an older guess must not redraw over this
+    parsedTemplate = {..._noTemplate(), ...(res.template || {})};
     _renderTemplateVerdict();
 
     setLoading(matchingOn()
