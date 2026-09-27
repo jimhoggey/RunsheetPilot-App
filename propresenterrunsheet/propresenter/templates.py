@@ -38,19 +38,21 @@ _TEMPLATE_NAME_FILLERS = {
     "the", "a", "an", "of", "and",
 }
 
-# Words that DATE a runsheet rather than name its service. A masthead of
-# "Sunday, 27 September, 2026 · 4:00 PM · Young Adults Service" used to
-# hand "sunday" to a "Sunday Morning Library" on a young adults night.
-# A weekday only goes when a date follows it; "Sunday Morning" keeps it.
-_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep",
-           "oct", "nov", "dec")
+# A weekday that is part of a DATE says when, not which service. A
+# masthead of "Sunday, 27 September, 2026 · 4:00 PM · Young Adults
+# Service" used to hand "sunday" to a "Sunday Morning Library" on a young
+# adults night. Only a real date counts — "27 September", "September 27",
+# "27/09/2026" — so "Sunday Morning" and "Sunday 10am Library" keep it.
+# Nothing else is stripped: times and numbers ("9am Library", "Service 2")
+# are how some churches tell their templates apart.
+_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|"
+          r"july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|"
+          r"dec(?:ember)?)\b")
 _WEEKDAY_IN_DATE = re.compile(
-    r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b(?=[\s,.]*(?:\d|"
-    + "|".join(_MONTHS) + "))")
-_DATE_WORDS = {"am", "pm", "sept", "january", "february", "march", "april",
-               "june", "july", "august", "september", "october", "november",
-               "december", *_MONTHS}
-_ORDINAL = re.compile(r"\d+(?:st|nd|rd|th)?")
+    r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b(?=[\s,.]*(?:"
+    r"\d{1,2}(?:st|nd|rd|th)?[\s,.]+" + _MONTH
+    + r"|" + _MONTH + r"[\s,.]+\d"
+    + r"|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}))")
 
 # Short forms operators write for a service, spelled out.
 _TOKEN_ALIASES = {"ya": ("young", "adult")}
@@ -99,18 +101,17 @@ def _template_signal_tokens(name: str) -> set:
     at all — invisible while a zero-score fell back to the first
     template, and load-bearing now that it declines.
 
-    Dates and times say when, not which service, so they go (see
-    _DATE_WORDS). A plural counts as its singular ("Young Adults" hint,
-    "Young Adult Library"), and "YA" as "young adult".
+    A weekday that is part of a date is dropped (see _WEEKDAY_IN_DATE). A
+    plural counts as its singular ("Young Adults" hint, "Young Adult
+    Library"), and "YA" as "young adult".
     """
     text = _WEEKDAY_IN_DATE.sub(" ", (name or "").lower())
     out = set()
     for w in re.sub(r"[\W_]+", " ", text).split():
         if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
             w = w[:-1]
-        if w in _TEMPLATE_NAME_FILLERS or w in _DATE_WORDS or _ORDINAL.fullmatch(w):
-            continue
-        out.update(_TOKEN_ALIASES.get(w, (w,)))
+        if w not in _TEMPLATE_NAME_FILLERS:
+            out.update(_TOKEN_ALIASES.get(w, (w,)))
     return out
 
 
@@ -338,34 +339,40 @@ def resolve_with_aliases(title: str, objects: list, aliases=None):
     return resolve_object(title, objects)
 
 
-def _same_part_key(title: str) -> str:
-    """A title as a name for a part of the service: "&" and "+" read as
-    "and", so "Prayer & Ministry" and "Prayer and Ministry" are one."""
-    return re.sub(r"\s*[&+]\s*", " and ", title or "").strip()
+def _same_part_key(it) -> str:
+    """An item's title as the name of a part of the service, or "" when
+    it can't be one. Case and punctuation don't count and "&"/"+" read
+    as "and", so "Prayer & Ministry" and "Prayer and Ministry" are one.
+    Songs are the song matcher's, as everywhere else in this module."""
+    if not isinstance(it, dict) or it.get("type") == "song":
+        return ""
+    title = re.sub(r"[&+]", " and ", str(it.get("title") or "").casefold())
+    return " ".join(re.findall(r"[^\W_]+", title))
 
 
 def share_repeated_links(items) -> int:
-    """Give each unlinked item the template link of another item with the
-    same title, and return how many were filled.
+    """Give each unlinked item the template link of an item with the same
+    title, and return how many were filled.
 
     A service can hold the same part twice — "Prayer and Ministry" after
     the message and again at the close. The model tends to tag a section
     once, which left the repeat as a bare header in the built playlist.
-    Songs are the song matcher's, as everywhere else in this module."""
-    linked = [{"name": _same_part_key(it.get("title")), "_link": it["library_match"]}
-              for it in items or []
-              if isinstance(it, dict) and it.get("type") != "song"
-              and isinstance(it.get("library_match"), dict)]
-    if not linked:
+
+    Same title exactly (see _same_part_key), and at least two words: a
+    one-word "Video" or "Prayer" can be two different parts of a service,
+    and "Video 1" is not "Video 2"."""
+    links = {}
+    for it in items or []:
+        key = _same_part_key(it)
+        if " " in key and isinstance(it.get("library_match"), dict):
+            links.setdefault(key, it["library_match"])
+    if not links:
         return 0
     filled = 0
     for it in items:
-        if (not isinstance(it, dict) or it.get("type") == "song"
-                or it.get("library_match")):
-            continue
-        hit = resolve_library_name(_same_part_key(it.get("title")), linked)
-        if hit:
-            it["library_match"] = copy.deepcopy(hit["_link"])
+        key = _same_part_key(it)
+        if key in links and not it.get("library_match"):
+            it["library_match"] = copy.deepcopy(links[key])
             filled += 1
     return filled
 

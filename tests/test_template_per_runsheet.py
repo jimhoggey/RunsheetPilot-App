@@ -48,6 +48,19 @@ def test_a_weekday_that_is_not_part_of_a_date_still_counts():
     assert auto_detect_template_uuid(TEMPLATES, hint="Sunday Morning") == "u-sun"
 
 
+@pytest.mark.parametrize("hint, want", [
+    ("Sunday 10am Service", "u-10"),     # a time is not a date: "sunday" stays
+    ("Sunday 6pm Service", "u-6"),       # templates told apart by time alone
+    ("Friday Juniors", "u-fj"),          # "jun" in Juniors is not June
+])
+def test_times_and_look_alike_words_are_not_dates(hint, want):
+    templates = [{"uuid": "u-10", "name": "Sunday 10am Library"},
+                 {"uuid": "u-6",  "name": "Sunday 6pm Library"},
+                 {"uuid": "u-fj", "name": "Friday Juniors Library"},
+                 {"uuid": "u-sj", "name": "Sunday Juniors Library"}]
+    assert auto_detect_template_uuid(templates, hint=hint) == want
+
+
 def test_the_tie_break_does_not_depend_on_playlist_order():
     assert auto_detect_template_uuid(TEMPLATES[::-1], hint="Youth") == "u-youth"
 
@@ -69,8 +82,19 @@ def test_a_repeated_part_of_the_service_gets_the_same_media():
 
 
 def test_songs_are_left_to_the_song_matcher():
-    items = [{"title": "Worship", "type": "prayer", "library_match": SECTION},
-             {"title": "Worship", "type": "song", "library_match": None}]
+    items = [{"title": "Worship Time", "type": "prayer", "library_match": SECTION},
+             {"title": "Worship Time", "type": "song", "library_match": None}]
+    assert share_repeated_links(items) == 0
+
+
+@pytest.mark.parametrize("first, second", [
+    ("Video", "Video"),                  # one word can name two different parts
+    ("Video 1", "Video 2"),              # one word apart is a different item
+    ("Prayer and Ministry", "Ministry Time"),
+])
+def test_only_the_same_multi_word_title_shares_a_link(first, second):
+    items = [{"title": first, "type": "video", "library_match": SECTION},
+             {"title": second, "type": "video", "library_match": None}]
     assert share_repeated_links(items) == 0
 
 
@@ -144,6 +168,48 @@ def test_every_repeat_of_a_section_is_populated(pp):
     assert links[0] and links[2], links
     assert links[2]["header"]["name"] == "Prayer and Ministry"
     assert links[1] is None
+
+
+def test_the_log_names_a_picked_template(pp, caplog):
+    import logging
+    with caplog.at_level(logging.INFO, logger="pp_runsheet"):
+        _parse(pp, {"template_playlist_uuid": "u-youth"})
+    assert "Template: u-youth (picked by the operator)" in caplog.text
+
+
+def test_the_service_name_is_the_label_when_the_model_gives_no_type(pp, monkeypatch):
+    """The banner, Re-match and create resolve from `service_label`; it
+    must be the hint parse actually matched on, or they can disagree."""
+    import requests
+    reply = json.dumps({"service_name": "Young Adults Night", "items": [
+        {"title": "Welcome", "type": "mc_on_stage"}]})
+
+    class _R:
+        status_code = 200
+        def json(self):
+            return {"model": "m", "choices": [{"message": {"content": reply}}]}
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _R())
+    body = pp.post("/api/upload_and_parse", data={
+        "pdf": (io.BytesIO(b"%PDF-1.4 fake"), "runsheet.pdf"),
+        "or_key": "sk-or-test", "or_model": "m", "template_playlist_uuid": ""},
+        content_type="multipart/form-data").get_json()
+    assert body["template"]["service_label"] == "Young Adults Night"
+    assert body["template"]["uuid"] == "u-ya"
+
+
+def test_rematch_on_auto_ignores_a_pin_left_in_settings(pp, monkeypatch):
+    import propresenterrunsheet.routes.parse as parse_mod
+    used = []
+    monkeypatch.setattr(parse_mod, "link_items_to_template",
+                        lambda _p, _b, tmpl, **_k: used.append(tmpl) or 0)
+    pp.post("/api/match", json={
+        "parsed": [{"title": "Prayer and Ministry", "type": "prayer"}],
+        "library": [], "rematch_template": True, "matching": True,
+        "template_playlist_uuid": "", "service_label": "Young Adults"})
+    assert used == ["u-ya"]           # Auto's answer, not the saved youth pin
 
 
 def test_the_prompt_says_a_section_can_match_twice(app_module):

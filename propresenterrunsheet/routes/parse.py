@@ -937,7 +937,8 @@ def _upload_and_parse(stop: threading.Event):
         # One line that answers "why did this runsheet get that template?"
         # from the log alone.
         if do_matching:
-            log.info("Template: %s (%s)", log_safe(tmpl_name or "none", 80),
+            log.info("Template: %s (%s)",
+                     log_safe(tmpl_name or tmpl_uuid or "none", 80),
                      "picked by the operator" if tmpl_pinned
                      else f"Auto, service read as {log_safe(confirm_hint or '?', 60)!r}")
 
@@ -1116,7 +1117,10 @@ def _upload_and_parse(stop: threading.Event):
                 "uuid":          tmpl_uuid,
                 "name":          tmpl_name,
                 "declined":      template_declined,
-                "service_label": service_type,
+                # The hint Auto settled on (the service type, or the name
+                # when the model gave none), so every later step and the
+                # banner's own lookup reach the same template.
+                "service_label": confirm_hint,
                 # The banner says "you picked it" rather than "Auto-matched".
                 "pinned":        tmpl_pinned,
             },
@@ -1203,8 +1207,13 @@ def api_match():
         settings = load_settings()
         base = pp_base(body.get("host") or settings.get("pp_host"),
                        body.get("port") or settings.get("pp_port"))
-        tmpl = (body.get("template_playlist_uuid")
-                or settings.get("template_playlist_uuid") or "").strip()
+        # As in the parse route: the page's pick for this runsheet ("" is
+        # Auto) is the answer; a saved pin only counts for a caller that
+        # sends none, so a stale one can't re-link a Re-match.
+        sent = (body.get("template_playlist_uuid")
+                if "template_playlist_uuid" in body
+                else settings.get("template_playlist_uuid"))
+        tmpl = str(sent or "").strip()
         if not tmpl:
             # "Auto" — resolve from the SAME hint parse used: the service
             # label the model reported, forwarded by the client. Item

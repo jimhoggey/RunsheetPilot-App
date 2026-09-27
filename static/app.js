@@ -68,9 +68,10 @@ function playlistModeIsUpdate() { return playlistMode === 'update'; }
 // and sending it as a template would expand its own media back into it.
 function templateForRequest() {
   if (playlistModeIsUpdate()) return '';
-  // A parse-time pin the operator has since switched back to Auto is not
-  // Auto's answer, so it doesn't carry forward.
-  return document.getElementById('template-playlist').value
+  // The remembered pick, not the dropdown's value: a pick ProPresenter's
+  // list couldn't show (still loading, closed) is still the pick. And a
+  // parse-time pin since switched back to Auto isn't Auto's answer.
+  return _createTemplateUuid
       || (parsedTemplate.pinned ? '' : parsedTemplate.uuid) || '';
 }
 let saveTimer = null;
@@ -620,6 +621,10 @@ async function loadSettings() {
 
   suppressAutoSave = false;
   setSaveDot('');
+  // Clear last session's template pin from settings (the page started on
+  // Auto above), so no caller that falls back to the saved one finds it.
+  // Only now: a save sends every field, and they are all loaded here.
+  if (s.template_playlist_uuid) saveSettings();
 }
 
 function autoSaveDebounced() {
@@ -723,6 +728,9 @@ function _clearRunsheetState() {
   _parseSeq++;
   _guessSeq++;
   _uploadText = '';
+  // Before anything below can ask for a guess: the last runsheet's
+  // service label would otherwise be the hint for this one.
+  parsedTemplate = _noTemplate();
   _cancelParse();
   matchedItems = [];
   _clearUpdatePlan();
@@ -1936,7 +1944,8 @@ async function parseRunsheet() {
   form.append('matching', matchingOn() ? 'on' : 'off');
   // This runsheet's template pick ("" = Auto), sent rather than read from
   // settings, so a pin can never outlive the runsheet it was made for.
-  form.append('template_playlist_uuid', _createTemplateUuid);
+  const sentPick = _createTemplateUuid;
+  form.append('template_playlist_uuid', sentPick);
   form.append('or_key',   document.getElementById('or-key').value.trim());
   form.append('or_model', document.getElementById('or-model').value.trim());
   // randomUUID needs WebKit 15.4+ (macOS 12.3); older Macs get a random id.
@@ -1991,6 +2000,13 @@ async function parseRunsheet() {
     _showNextStepHint(matchedItems.length);
     loadMediaAssist();
     parseSucceeded = true;
+    // The template was changed while this parse ran, so its links came
+    // from the one it was sent. Re-link against the pick on screen now,
+    // and give the banner Auto's answer if that pick is Auto.
+    if (_createTemplateUuid !== sentPick && matchingOn()) {
+      if (!_createTemplateUuid) _guessTemplate();
+      rematchNow();
+    }
     // Mark step 2 complete + unlock step 3 so the operator's eye goes to
     // the Create button.
     setStepState(2, 'complete');
