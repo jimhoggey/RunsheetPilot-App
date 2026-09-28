@@ -3210,7 +3210,9 @@ function _setPill(text, opts) {
   opts = opts || {};
   tab.textContent = text;
   tab.disabled = !!opts.busy;
-  tab.dataset.state = opts.available ? 'available' : '';
+  // 'busy' keeps the pill open while an update downloads and installs; it
+  // used to fold away when the mouse moved off, as if nothing was happening.
+  tab.dataset.state = opts.available ? 'available' : opts.busy ? 'busy' : '';
   tab.classList.toggle('badge-check-available', !!opts.available);
 }
 
@@ -3267,8 +3269,13 @@ async function _pollUpdateProgress() {
   try {
     const st = await fetch('/api/update').then(r => r.json());
     if (st.state === 'error') { renderUpdateState(st); return; }
-    if (st.state === 'downloading' || st.state === 'verifying') {
-      _setPill('Downloading…', {busy: true});
+    // A percentage while it downloads — a 40 MB update takes a minute or
+    // more, and a bare "Downloading…" looked stuck — then each step by name.
+    if (st.state === 'downloading') {
+      _setPill(Number.isFinite(st.progress) ? `Downloading… ${st.progress}%`
+                                            : 'Downloading…', {busy: true});
+    } else if (st.state === 'verifying') {
+      _setPill('Installing…', {busy: true});
     } else if (st.state === 'applying') {
       _setPill('Restarting…', {busy: true});
     }

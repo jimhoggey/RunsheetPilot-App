@@ -1302,13 +1302,16 @@ button:focus-visible {
 }
 .badge-wrap:hover .badge-check,
 .badge-check:focus-visible,
-.badge-check[data-state="available"] {
+.badge-check[data-state="available"],
+.badge-check[data-state="busy"] {
   max-width: 200px;
   opacity: 1;
   padding: 3px 12px;
   margin-right: 8px;
 }
 .badge-check:hover { color: var(--text); border-color: var(--border-3); }
+/* Mid-update the pill carries the progress, so it reads at full contrast. */
+.badge-check[data-state="busy"] { color: var(--text); cursor: default; }
 .badge-check.badge-check-available {
   background: var(--acc);
   border-color: var(--acc);

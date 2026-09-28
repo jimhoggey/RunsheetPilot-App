@@ -74,7 +74,8 @@ _PYI_ENV_VARS = ("_PYI_APPLICATION_HOME_DIR", "_PYI_ARCHIVE_FILE",
 # process restarts) with `error` reachable from any active step. Guarded
 # by _lock; routes read a copy via get_state().
 _state = {"state": "idle", "current": VERSION, "latest": None,
-          "notes_url": None, "error": None}
+          "notes_url": None, "error": None,
+          "progress": None}   # download percent while downloading, else None
 _AVAILABLE = {}   # asset/sums URLs staged by check_for_update for apply
 _lock = threading.Lock()
 
@@ -186,10 +187,15 @@ def parse_sha256sums(text):
     return out
 
 
-def download_and_verify(url, name, expected_sha, http_get=None, timeout=120):
+def download_and_verify(url, name, expected_sha, http_get=None, timeout=120,
+                        on_progress=None):
     """Stream `url` to UPDATES_DIR/<name> (via a .part file so a torn
     download can never be mistaken for a complete one) and verify SHA-256.
-    Mismatch -> delete + ValueError."""
+    Mismatch -> delete + ValueError.
+
+    `on_progress(percent)` is called each time the whole-number percentage
+    changes, when the server says how big the file is: a 40 MB download
+    takes a minute or more, and "Downloading…" alone looked stuck."""
     get = http_get or requests.get
     UPDATES_DIR.mkdir(parents=True, exist_ok=True)
     part = UPDATES_DIR / (name + ".part")
@@ -197,11 +203,19 @@ def download_and_verify(url, name, expected_sha, http_get=None, timeout=120):
     digest = hashlib.sha256()
     with get(url, stream=True, timeout=timeout) as r:
         r.raise_for_status()
+        size = str((getattr(r, "headers", None) or {}).get("content-length") or "")
+        total = int(size) if size.isdigit() else 0   # unknown size: no percentage
+        done, shown = 0, -1
         with open(part, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
                 if chunk:
                     f.write(chunk)
                     digest.update(chunk)
+                    done += len(chunk)
+                    pct = min(100, done * 100 // total) if total else -1
+                    if on_progress and pct != shown and pct >= 0:
+                        shown = pct
+                        on_progress(pct)
     if digest.hexdigest().lower() != (expected_sha or "").lower():
         part.unlink(missing_ok=True)
         raise ValueError(f"Checksum mismatch for {name}")
@@ -477,16 +491,17 @@ def apply_update(http_get=None, spawn=None, hard_exit=None):
             log.warning("Update can't replace the app at %s", install)
             _set(state="error", error=CANT_REPLACE)
             return
-        _set(state="downloading", error=None)
+        _set(state="downloading", error=None, progress=None)
         get = http_get or requests.get
         sums_resp = get(info["sums_url"], timeout=30)
         sums_resp.raise_for_status()
         expected = parse_sha256sums(sums_resp.text).get(info["asset_name"])
         if not expected:
             raise ValueError(f"{info['asset_name']} missing from {SUMS_ASSET}")
-        archive = download_and_verify(info["asset_url"], info["asset_name"],
-                                      expected, http_get=http_get)
-        _set(state="verifying")
+        archive = download_and_verify(
+            info["asset_url"], info["asset_name"], expected, http_get=http_get,
+            on_progress=lambda pct: _set(progress=pct))
+        _set(state="verifying", progress=None)
         payload = _prepare_payload(archive, sys.platform)
         _set(state="applying")
         try:
