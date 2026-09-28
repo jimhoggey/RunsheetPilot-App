@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 
-VERSION = "2.16.2"
+VERSION = "2.17.0"
 APP_NAME = "Runsheet Pilot"
 
 # Release notes, newest first. ONE source of truth: the what's-new popup
@@ -41,6 +41,15 @@ APP_NAME = "Runsheet Pilot"
 # The same lines go in the GitHub release body.
 # tests/test_whats_new.py enforces the cap AND that VERSION has an entry.
 RELEASE_NOTES = {
+    "2.17.0": [
+        "Every runsheet picks its own template now, and the banner under "
+        + "Step 1 says which one. Click it to choose a different one.",
+        "When the same part of the service comes up twice, like Prayer and "
+        + "Ministry, both get their slides.",
+        "Better at telling services apart: a date like \"Sunday, 27 "
+        + "September\" no longer picks your Sunday template, and YA means "
+        + "Young Adults.",
+    ],
     "2.16.2": [
         "Service Mate has new licence keys. If it says your key isn't "
         + "valid, paste in the new one you've been sent (Settings → "
