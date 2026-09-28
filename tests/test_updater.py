@@ -151,6 +151,33 @@ def test_download_and_verify_good_checksum(upd_env):
     assert not got.with_name(got.name + ".part").exists()
 
 
+def test_download_reports_its_progress_as_a_percentage(upd_env):
+    import hashlib
+    body = b"x" * (65536 * 4)
+    resp = FakeResponse(content=body)
+    resp.headers = {"content-length": str(len(body))}
+    seen = []
+    updater.download_and_verify(
+        "https://gh/mac.zip", "Runsheet-Pilot-mac.zip",
+        hashlib.sha256(body).hexdigest(),
+        http_get=lambda url, **kw: resp, on_progress=seen.append)
+    assert seen == [25, 50, 75, 100]
+
+
+@pytest.mark.parametrize("headers", [None, {"content-length": "junk"}])
+def test_download_without_a_usable_size_reports_no_percentage(upd_env, headers):
+    import hashlib
+    resp = FakeResponse(content=b"abc")
+    if headers is not None:
+        resp.headers = headers
+    seen = []
+    got = updater.download_and_verify(
+        "https://gh/mac.zip", "Runsheet-Pilot-mac.zip",
+        hashlib.sha256(b"abc").hexdigest(),
+        http_get=lambda url, **kw: resp, on_progress=seen.append)
+    assert seen == [] and got.read_bytes() == b"abc"   # and it still downloads
+
+
 def test_download_and_verify_bad_checksum_deletes_and_raises(upd_env):
     with pytest.raises(ValueError, match="Checksum mismatch"):
         updater.download_and_verify(
