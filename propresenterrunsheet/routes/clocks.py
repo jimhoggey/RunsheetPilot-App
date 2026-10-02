@@ -5,7 +5,10 @@ devices, render an inline preview, and reset everything to standby."""
 
 import datetime as _dt
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, render_template, request
+
+from ..native import close_lighting_window, open_lighting_window
+from ..service_mate.lighting import has_lighting, heads_up
 
 from ..service_mate.constants import (
     ROLE_ACCENT, SM_TESTCARD_FILENAME, SM_VERBOSITIES, SM_VERBOSITY_DEFAULT,
@@ -224,3 +227,49 @@ def api_clocks_preview():
     jpg = _render_cue(role, state, verbosity=verbosity)
     return Response(jpg, mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
+
+
+# ─── Lighting heads-up (service_mate/lighting.py) ─────────────────────────
+
+@bp.route("/lighting")
+def lighting_page():
+    """The small always-on-top card: where the lights are, the next change."""
+    return render_template("lighting.html")
+
+
+@bp.route("/api/lighting", methods=["GET"])
+def api_lighting():
+    state = _read_runsheet_state() or {}
+    items = [it for it in state.get("items") or [] if isinstance(it, dict)]
+    try:
+        idx = max(0, min(int(state.get("current_index") or 0), len(items) - 1))
+    except (TypeError, ValueError):
+        idx = 0
+    out = heads_up(items, idx)
+    del out["next_index"]
+    return jsonify({**out, "has_lighting": has_lighting(items),
+                    "section": str(items[idx].get("title") or "") if items else "",
+                    "on": bool(_read_clocks_config().get("lighting_window"))})
+
+
+@bp.route("/api/lighting/window", methods=["POST"])
+def api_lighting_window():
+    """Show or hide the floating lighting window. `native: false` tells the
+    page there is no native window here. `popup: true` means the page has
+    opened a browser popup itself, so no native one is opened as well."""
+    body = request.get_json(silent=True) or {}
+    on = bool(body.get("on"))
+    cfg = _read_clocks_config()
+    if on:
+        blocked = _check_sm_enabled(cfg)
+        if blocked:
+            return blocked
+    cfg["lighting_window"] = on
+    _write_clocks_config(cfg)
+    if not on:
+        native = close_lighting_window()
+    elif body.get("popup"):
+        native = False
+    else:
+        native = open_lighting_window(request.host_url + "lighting")
+    return jsonify({"ok": True, "on": on, "native": native})

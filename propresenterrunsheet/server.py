@@ -187,6 +187,8 @@ def _run_native_window(port: int, webview_module=None) -> bool:
         webview.create_window(
             APP_NAME, f"http://127.0.0.1:{port}",
             width=1280, height=860, min_size=(1000, 640))
+        from . import native
+        native.webview = webview      # lets routes open the lighting window
         log.info("Native window open — close it to quit")
         webview.start()
         log.info("Native window closed — shutting down")

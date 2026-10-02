@@ -324,7 +324,14 @@ SERVICE_MATE_CUE_ADDENDUM = (
     "\"Trailer video — unmute audio\"]\n"
     "  cues.lights = [\"Spot — MCs\", \"House down for video\"]\n"
     "One cue is fine when there is only one thing to say. If you can't tell, "
-    "use an empty array."
+    "use an empty array.\n\n"
+    "ADDITIONAL FIELD — `lighting`:\n"
+    "For EACH item, a short string (≤ 40 chars): the lighting setting the "
+    "RUNSHEET ITSELF gives for that item, e.g. \"House lights 50%\". Copy "
+    "only what is written: if the runsheet says nothing about lighting for "
+    "the item, use an empty string — unlike `cues`, never suggest one. A "
+    "level with no lights named means the house lights (\"lights to 12%\" "
+    "→ \"House lights 12%\")."
 )
 
 
