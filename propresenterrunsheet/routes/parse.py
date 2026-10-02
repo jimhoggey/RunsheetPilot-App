@@ -275,6 +275,16 @@ def api_extract_text():
     })
 
 
+def _clean_lighting_steps(raw) -> list:
+    """The model's `lighting_steps` as at most six {level, when} dicts of
+    short single-line text; anything else is dropped."""
+    def line(v, n):
+        return " ".join(v.split())[:n] if isinstance(v, str) else ""
+    steps = [{"level": line(s.get("level"), 30), "when": line(s.get("when"), 60)}
+             for s in (raw if isinstance(raw, list) else []) if isinstance(s, dict)]
+    return [s for s in steps if s["level"]][:6]
+
+
 def _pre_read_hint(upload_name: str, raw) -> str:
     """What Auto can go on before the model has read anything: the
     filename and the runsheet's masthead (see the parse route, step 7)."""
@@ -612,8 +622,10 @@ def _upload_and_parse(stop: threading.Event):
         section_names = [s["header"]["name"] for s in sections
                          if s.get("header") and s["header"].get("name")]
 
+        lighting_guide = str(settings.get("lighting_guide") or "")
         prompt = assemble_prompt(prompt_template, runsheet_text,
-                                 library_names=section_names)
+                                 library_names=section_names,
+                                 lighting_guide=lighting_guide)
 
         # 6. Call OpenRouter
         # Specific 4xx responses become friendly JSON errors (HTTP 200 so the
@@ -637,7 +649,8 @@ def _upload_and_parse(stop: threading.Event):
                     {"type": "text", "text": assemble_prompt(
                         prompt_template, f"(The runsheet is the attached "
                         f"{'PDF' if mime == _PDF_MIME else 'picture'}.)",
-                        library_names=section_names)},
+                        library_names=section_names,
+                        lighting_guide=lighting_guide)},
                     {"type": "file", "file": {"filename": "runsheet.pdf",
                                               "file_data": url}}
                     if mime == _PDF_MIME else
@@ -984,10 +997,10 @@ def _upload_and_parse(stop: threading.Event):
                 log.info(f"Item type clamped: {log_safe(raw_type, 60)!r} -> "
                          f"{it['type']!r} ({log_safe(it.get('title'), 40)!r})")
             _ensure_item_cues(it)
-            # The lighting the runsheet states (service_mate/lighting.py):
-            # one short line, or "" — never a list or an object.
-            lighting = it.get("lighting")
-            it["lighting"] = " ".join(lighting.split())[:60] if isinstance(lighting, str) else ""
+            # The lighting changes during this item (service_mate/lighting.py):
+            # up to six {level, when} steps of short single-line text.
+            it["lighting_steps"] = _clean_lighting_steps(it.get("lighting_steps"))
+            it.pop("lighting", None)
             raw_match = it.get("library_match")
             # The model sometimes returns the full dict, sometimes a bare
             # string, sometimes null, sometimes the literal "null" str.

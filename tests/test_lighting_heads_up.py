@@ -1,102 +1,132 @@
 """The lighting heads-up: where the lights are now, and the next change.
 
-Owner's spec (2 Oct 2026): runsheets now carry lighting settings ("set
-lights to 50%"). Show what's COMING UP — never "change now", because the
-moment is the room's call ("thanks band"). Only what the runsheet states;
-a level with no lights named means the house lights; a repeated setting
-isn't a change. Shown on the Lights clock, and in an optional floating
-always-on-top window.
+Owner's spec (2 Oct 2026): runsheets carry lighting settings; show what's
+COMING UP, never "change now" — the moment is the room's call ("thanks
+band"). One step at a time: NOW (greyed), the NEXT change with its moment,
+THEN (greyed). The church's lighting guide supplies the moment wording,
+and a level where the runsheet gives none; the runsheet wins. The operator
+ticks a step off on the card, since the app can't hear where the band is.
+Shown on the Lights clock and in an optional floating always-on-top card.
 """
 import io
 import json
 
 import pytest
 
-from propresenterrunsheet.service_mate.lighting import has_lighting, heads_up, lights_view
+from propresenterrunsheet.service_mate.lighting import (
+    has_lighting, heads_up, lights_view, steps_of,
+)
 
 ITEMS = [
-    {"title": "Pre-service", "lighting": "House lights 50%"},
-    {"title": "Worship", "lighting": "House lights 12%"},
-    {"title": "Prayer", "lighting": ""},
-    {"title": "Response", "lighting": "house  LIGHTS 12%"},   # the same setting again
-    {"title": "Message", "lighting": "House lights 30%"},
+    {"title": "Walk-in", "lighting_steps": [{"level": "30%", "when": "as doors open"}]},
+    {"title": "Worship", "lighting_steps": [
+        {"level": "12%", "when": "halfway through the praise song"},
+        {"level": "8%", "when": "first worship song starts"},
+        {"level": "2%", "when": "halfway through the 1st worship song"}]},
+    {"title": "Welcome", "lighting_steps": [{"level": "12%", "when": "when the host walks on"}]},
+    {"title": "Notices", "lighting_steps": [{"level": "12%", "when": ""}]},     # a repeat
+    {"title": "Message", "lighting_steps": [{"level": "20%", "when": "“Thanks band”"}]},
     {"title": "Close"},
 ]
 
 
-@pytest.mark.parametrize("idx, now, nxt, at", [
-    (0, "House lights 50%", "House lights 12%", "Worship"),
-    (1, "House lights 12%", "House lights 30%", "Message"),   # skips the repeat
-    (2, "House lights 12%", "House lights 30%", "Message"),   # nothing stated: still 12%
-    (4, "House lights 30%", "", ""),                          # no more changes
+def _levels(h):
+    return (h["now"], h["next"] and h["next"]["level"], h["then"] and h["then"]["level"])
+
+
+@pytest.mark.parametrize("idx, done, want", [
+    (0, 0, ("", "30%", "12%")),
+    (1, 0, ("30%", "12%", "8%")),            # Worship starts: its first step is next
+    (1, 1, ("12%", "8%", "2%")),             # ticked off: the next one moves up
+    (1, 3, ("2%", "12%", "20%")),            # all done: Welcome's 12%, Notices' 12% skipped
+    (3, 0, ("12%", "20%", None)),
+    (5, 0, ("20%", None, None)),
 ])
-def test_now_and_the_next_change(idx, now, nxt, at):
-    h = heads_up(ITEMS, idx)
-    assert (h["now"], h["next"], h["next_section"]) == (now, nxt, at)
+def test_one_step_at_a_time(idx, done, want):
+    assert _levels(heads_up(ITEMS, idx, done)) == want
+
+
+def test_each_change_says_when_and_where():
+    h = heads_up(ITEMS, 1, 0)
+    assert h["next"]["when"] == "halfway through the praise song" and h["next"]["here"]
+    later = heads_up(ITEMS, 1, 3)["next"]
+    assert (later["section"], later["when"], later["here"]) == ("Welcome", "when the host walks on", False)
+
+
+def test_a_runsheet_saved_before_steps_still_works():
+    assert steps_of({"title": "X", "lighting": "House lights 50%"}) == [{"level": "House lights 50%", "when": ""}]
+    assert steps_of({"title": "X", "lighting_steps": "junk"}) == []
+    assert steps_of("junk") == []
 
 
 def test_a_runsheet_with_no_lighting_says_nothing():
     items = [{"title": "Welcome", "cues": {"lights": ["Stage wash"]}}]   # a model suggestion
     assert not has_lighting(items)
-    assert heads_up(items, 0)["now"] == "" and heads_up(items, 0)["next"] == ""
+    assert _levels(heads_up(items, 0)) == ("", None, None)
 
 
-def test_the_lights_clock_shows_now_and_coming_up():
-    items = [*ITEMS[:4], {**ITEMS[4], "duration_min": 30}, ITEMS[5]]
-    view = lights_view({"items": items, "current_index": 1, "current_started_at": "x"})
-    # The setting leads the next title: compact layouts show no next cue.
-    assert [it["title"] for it in view["items"]] == ["Worship", "House lights 30% · Message"]
-    assert "duration_min" not in view["items"][1]   # "30 MIN" isn't the next item's length
+# ── The Lights clock ─────────────────────────────────────────────────────────
+
+def test_the_lights_clock_shows_now_and_the_next_change():
+    view = lights_view({"items": ITEMS, "current_index": 1, "current_started_at": "x"})
     assert view["current_index"] == 0 and view["current_started_at"] == "x"
-    assert view["items"][0]["cues"]["lights"] == ["Now: House lights 12%"]
-    assert view["items"][1]["cues"]["lights"] == ["Coming up: House lights 30%"]
+    assert view["items"][0]["cues"]["lights"] == ["Now: 30%"]
+    # The level leads the next title: compact layouts show no next cue.
+    assert view["items"][1]["title"] == "12% · halfway through the praise song"
     assert ITEMS[1].get("cues") is None          # the real state is untouched
 
 
+def test_a_ticked_step_moves_the_clock_on_too():
+    view = lights_view({"items": ITEMS, "current_index": 1,
+                        "lighting_done": {"index": 1, "count": 1}})
+    assert view["items"][0]["cues"]["lights"] == ["Now: 12%"]
+    assert view["items"][1]["title"] == "8% · first worship song starts"
+
+
+def test_a_change_in_a_later_section_names_it():
+    view = lights_view({"items": ITEMS, "current_index": 1, "lighting_done": {"index": 1, "count": 3}})
+    assert view["items"][1]["title"] == "12% · Welcome, when the host walks on"
+
+
 def test_the_next_change_never_reports_a_length():
-    """Review finding: "30 min" in the notes or title of the next change's
-    item reached the clock as the length of what's up next."""
+    """"30 min" in the next change's section must not reach the clock as
+    the length of what's up next."""
     import datetime as dt
     from propresenterrunsheet.service_mate.protocol import build_state_payload
-    items = [{"title": "Worship", "lighting": "House lights 12%"},
-             {"title": "Preach (30 min)", "notes": "Ps David — 30 min", "lighting": "House lights 30%"}]
-    p = build_state_payload("lights", "compact", lights_view({"items": items, "current_index": 0}),
-                            None, dt.datetime(2026, 10, 4, 18))
-    assert p["next_title"].startswith("House lights 30%") and "next_duration_s" not in p
+    items = [{"title": "Worship", "lighting_steps": [{"level": "12%", "when": ""}]},
+             {"title": "Preach (30 min)", "notes": "Ps David — 30 min",
+              "lighting_steps": [{"level": "20%", "when": ""}]}]
+    state = {"items": items, "current_index": 0, "lighting_done": {"index": 0, "count": 1}}
+    p = build_state_payload("lights", "compact", lights_view(state), None, dt.datetime(2026, 10, 4, 18))
+    assert p["next_title"] == "20% · Preach (30 min)" and "next_duration_s" not in p
 
 
 def test_with_no_change_left_the_real_next_item_stays_next():
     """Not END OF SERVICE halfway through: the clock's NEXT keeps meaning next."""
-    view = lights_view({"items": ITEMS, "current_index": 4})
+    view = lights_view({"items": ITEMS, "current_index": 4,
+                        "lighting_done": {"index": 4, "count": 1}})     # its 20% is done
     assert [it["title"] for it in view["items"]] == ["Message", "Close"]
 
 
-def test_before_the_first_setting_the_station_keeps_its_usual_cues():
+def test_before_the_first_level_the_station_keeps_its_usual_cues():
     items = [{"title": "Doors", "cues": {"lights": ["House up"]}}, *ITEMS]
-    view = lights_view({"items": items, "current_index": 0})
-    assert view["items"][0]["cues"]["lights"] == ["House up"]
-    assert view["items"][1]["title"] == "House lights 50% · Pre-service"
+    assert lights_view({"items": items, "current_index": 0})["items"][0]["cues"]["lights"] == ["House up"]
 
 
 def test_a_malformed_state_is_shown_plainly():
-    for state in ({"items": ["junk", *ITEMS], "current_index": 0},
-                  {"items": ITEMS, "current_index": "abc"}):
-        assert lights_view(state) is state
-
-
-def test_the_lights_clock_is_unchanged_without_stated_lighting():
-    state = {"items": [{"title": "Welcome", "cues": {"lights": ["Spot"]}}], "current_index": 0}
+    state = {"items": ["junk", *ITEMS], "current_index": 0}
     assert lights_view(state) is state
+    assert lights_view({"items": ITEMS, "current_index": "abc"})["items"][0]["title"] == "Walk-in"
 
 
-def test_the_payload_for_the_lights_station(monkeypatch):
+def test_the_payload_for_the_lights_station():
     import datetime as dt
     from propresenterrunsheet.service_mate.protocol import build_state_payload
-    view = lights_view({"items": ITEMS, "current_index": 0})
-    p = build_state_payload("lights", "compact", view, None, dt.datetime(2026, 10, 4, 18))
-    assert p["cues"] == ["Now: House lights 50%"]
-    assert (p["next_title"], p["next_cue"]) == ("House lights 12% · Worship",
-                                                "Coming up: House lights 12%")
+    p = build_state_payload("lights", "compact", lights_view({"items": ITEMS, "current_index": 1}),
+                            None, dt.datetime(2026, 10, 4, 18))
+    assert p["cues"] == ["Now: 30%"]
+    assert (p["next_title"], p["next_cue"]) == ("12% · halfway through the praise song",
+                                                "Coming up: 12%")
 
 
 def test_only_the_lights_clock_gets_the_heads_up(monkeypatch, isolated_state):
@@ -115,9 +145,9 @@ def test_only_the_lights_clock_gets_the_heads_up(monkeypatch, isolated_state):
     daemon._CLOCKS_LOOP_LAST_PUSHED.clear()
     daemon._ENDS_AT.reset()
     daemon._clocks_loop_tick(1)
-    assert sent["10.0.0.3"]["cues"] == ["Now: House lights 12%"]
-    assert sent["10.0.0.3"]["next_title"] == "House lights 30% · Message"
-    assert sent["10.0.0.2"]["next_title"] == "Prayer"       # sound: the plain next item
+    assert sent["10.0.0.3"]["cues"] == ["Now: 30%"]
+    assert sent["10.0.0.3"]["next_title"] == "12% · halfway through the praise song"
+    assert sent["10.0.0.2"]["next_title"] == "Welcome"       # sound: the plain next item
 
 
 @pytest.mark.parametrize("verbosity", ["compact", "detailed"])
@@ -130,26 +160,33 @@ def test_an_item_saved_with_no_type_still_renders(verbosity):
 
 
 def test_the_preview_shows_the_lights_heads_up(sm_enabled):
-    """The Lights station's preview must match its real clock."""
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
     r = sm_enabled.get("/api/clocks/preview?role=lights")
     assert r.status_code == 200 and r.data[:2] == b"\xff\xd8"
 
 
-# ── The parse ────────────────────────────────────────────────────────────────
+# ── The parse and the prompt ─────────────────────────────────────────────────
 
-def test_the_prompt_asks_for_the_stated_lighting_only():
-    from propresenterrunsheet.parsing.ai import SERVICE_MATE_CUE_ADDENDUM as add
-    assert "`lighting`" in add and "never suggest one" in add and "house lights" in add.lower()
+def test_the_prompt_asks_for_steps_and_carries_the_guide_only_when_given():
+    from propresenterrunsheet.parsing.ai import (
+        LIGHTING_GUIDE_MAX_CHARS, SERVICE_MATE_CUE_ADDENDUM, assemble_prompt,
+    )
+    assert "`lighting_steps`" in SERVICE_MATE_CUE_ADDENDUM and "never" in SERVICE_MATE_CUE_ADDENDUM
+    plain = assemble_prompt("{RUNSHEET}", "6:00 Worship")
+    assert "LIGHTING GUIDE" not in plain
+    guided = assemble_prompt("{RUNSHEET}", "6:00 Worship", lighting_guide="Deep 2% · halfway" + "x" * 20000)
+    assert "LIGHTING GUIDE" in guided and "first song is praise" in guided
+    assert len(guided) < len(plain) + LIGHTING_GUIDE_MAX_CHARS + 2000      # capped
 
 
-def test_the_parse_keeps_only_a_short_line_of_lighting(parse_client, monkeypatch):
+def test_the_parse_keeps_only_well_formed_steps(parse_client, monkeypatch):
     import requests
     reply = json.dumps({"service_name": "S", "items": [
-        {"title": "Welcome", "type": "mc_on_stage", "lighting": "  House\nlights   50% "},
-        {"title": "Worship", "type": "song", "lighting": ["House lights 12%"]},
-        {"title": "Notices", "type": "announcement", "lighting": "x" * 200}]})
+        {"title": "Welcome", "type": "mc_on_stage", "lighting": "old field",
+         "lighting_steps": [{"level": "  12%\n", "when": "as the host\nwalks on"}, "junk", {"when": "no level"}]},
+        {"title": "Worship", "type": "song", "lighting_steps": [{"level": "x" * 99, "when": "y" * 99}] * 9},
+        {"title": "Notices", "type": "announcement", "lighting_steps": {"level": "50%"}}]})
 
     class _R:
         status_code = 200
@@ -158,30 +195,130 @@ def test_the_parse_keeps_only_a_short_line_of_lighting(parse_client, monkeypatch
         def raise_for_status(self):
             return None
     monkeypatch.setattr(requests, "post", lambda *a, **k: _R())
-    items = parse_client.post("/api/upload_and_parse", data={
+    items = {it["title"]: it for it in parse_client.post("/api/upload_and_parse", data={
         "pdf": (io.BytesIO(b"%PDF-1.4 fake"), "r.pdf"), "or_key": "k", "or_model": "m"},
-        content_type="multipart/form-data").get_json()["items"]
-    got = {it["title"]: it["lighting"] for it in items}
-    assert got["Welcome"] == "House lights 50%"
-    assert got["Worship"] == ""                      # not a string: dropped
-    assert len(got["Notices"]) == 60
+        content_type="multipart/form-data").get_json()["items"]}
+    assert items["Welcome"]["lighting_steps"] == [{"level": "12%", "when": "as the host walks on"}]
+    assert "lighting" not in items["Welcome"]
+    worship = items["Worship"]["lighting_steps"]
+    assert len(worship) == 6 and len(worship[0]["level"]) == 30 and len(worship[0]["when"]) == 60
+    assert items["Notices"]["lighting_steps"] == []
 
 
-# ── The routes and the floating window ───────────────────────────────────────
+def test_the_saved_guide_reaches_the_parse_prompt(parse_client, monkeypatch):
+    import requests
+    from propresenterrunsheet import settings as pp_settings
+    pp_settings.save_settings({"lighting_guide": "Deep worship — halfway through first worship song — 2%"})
+    sent = {}
+
+    class _R:
+        status_code = 200
+        def json(self):
+            return {"model": "m", "choices": [{"message": {"content": '{"items": []}'}}]}
+        def raise_for_status(self):
+            return None
+
+    def post(url, **kw):
+        sent["prompt"] = json.dumps(kw.get("json"))
+        return _R()
+    monkeypatch.setattr(requests, "post", post)
+    parse_client.post("/api/upload_and_parse", data={
+        "pdf": (io.BytesIO(b"%PDF-1.4 fake"), "r.pdf"), "or_key": "k", "or_model": "m"},
+        content_type="multipart/form-data")
+    assert "halfway through first worship song" in sent["prompt"]
+
+
+# ── Routes ───────────────────────────────────────────────────────────────────
 
 def test_the_api_reads_the_live_state(sm_enabled):
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
     h = sm_enabled.get("/api/lighting").get_json()
-    assert (h["now"], h["next"], h["next_section"], h["has_lighting"], h["section"]) == (
-        "House lights 12%", "House lights 30%", "Message", True, "Worship")
+    assert (h["now"], h["next"]["level"], h["then"]["level"], h["done"], h["section"]) == (
+        "30%", "12%", "8%", 0, "Worship")
+
+
+def test_ticking_moves_the_next_step_up_and_undo_puts_it_back(sm_enabled):
+    from propresenterrunsheet.service_mate import state as sm_state
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
+    assert sm_enabled.post("/api/lighting/done", json={}).get_json()["ok"]
+    h = sm_enabled.get("/api/lighting").get_json()
+    assert (h["now"], h["next"]["level"], h["done"]) == ("12%", "8%", 1)
+    sm_enabled.post("/api/lighting/done", json={"undo": True})
+    assert sm_enabled.get("/api/lighting").get_json()["next"]["level"] == "12%"
+
+
+def test_ticks_belong_to_the_section_they_were_made_in(sm_enabled):
+    from propresenterrunsheet.service_mate import state as sm_state
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
+    sm_enabled.post("/api/lighting/done", json={})
+    state = sm_state._read_runsheet_state()
+    sm_state._write_runsheet_state({**state, "current_index": 2})     # ProPresenter moved on
+    assert sm_enabled.get("/api/lighting").get_json()["done"] == 0
+
+
+def test_nothing_to_tick_once_the_section_is_done(sm_enabled):
+    from propresenterrunsheet.service_mate import state as sm_state
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 3})   # Notices: a repeat only
+    assert sm_enabled.post("/api/lighting/done", json={}).status_code == 409
 
 
 def test_a_bad_current_index_does_not_break_the_card(sm_enabled):
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": "abc"})
-    assert sm_enabled.get("/api/lighting").get_json()["section"] == "Pre-service"
+    assert sm_enabled.get("/api/lighting").get_json()["section"] == "Walk-in"
 
+
+def test_the_operators_own_text_is_saved_as_is(sm_enabled):
+    """Pasted or corrected cues are the operator's: never re-tidied."""
+    text = "1. Walk-in — when: countdown on — 30%\n2. Welcome — when: host walks on — 12%"
+    g = sm_enabled.post("/api/lighting/guide", json={"text": text}).get_json()
+    assert (g["has_guide"], g["text"], g["moments"], g["tidied"]) == (True, text, 2, None)
+    assert sm_enabled.get("/api/lighting/guide").get_json()["text"] == text
+    assert not sm_enabled.post("/api/lighting/guide", json={"clear": True}).get_json()["has_guide"]
+
+
+@pytest.mark.parametrize("tidy, tidied", [("1. Walk-in — when: countdown on — 30%", True), ("", False)])
+def test_an_uploaded_guide_is_tidied_once(sm_enabled, monkeypatch, tidy, tidied):
+    """One model call turns the jumbled PDF text into a numbered list; when
+    that can't run (no key), the text is kept as read."""
+    import propresenterrunsheet.parsing.guide as guide_mod
+    import propresenterrunsheet.routes.parse as parse_mod
+    monkeypatch.setattr(parse_mod, "_extracted_or_error", lambda f: ("Walk-in 30% Countdown on", "pdf", None))
+    monkeypatch.setattr(guide_mod, "tidy_guide", lambda text, key, model: tidy)
+    g = sm_enabled.post("/api/lighting/guide", data={"file": (io.BytesIO(b"%PDF"), "guide.pdf")},
+                        content_type="multipart/form-data").get_json()
+    assert g["tidied"] is tidied
+    assert g["text"] == (tidy or "Walk-in 30% Countdown on")
+
+
+def test_tidying_keeps_only_the_numbered_lines(monkeypatch):
+    import propresenterrunsheet.parsing.guide as guide_mod
+
+    class _R:
+        status_code = 200
+        def json(self):
+            return {"choices": [{"message": {"content":
+                    "Here you go:\n1. Walk-in — when: countdown on — 30%\n\n2. Welcome — when: host walks on — 12%\nHope that helps"}}]}
+    monkeypatch.setattr(guide_mod, "fetch_catalogue", lambda: None)
+    monkeypatch.setattr(guide_mod, "resolve_model", lambda *a, **k: "openai/gpt-4.1-mini")
+    monkeypatch.setattr(guide_mod, "chat", lambda *a, **k: _R())
+    assert guide_mod.tidy_guide("jumbled", "sk-or-x", "") == (
+        "1. Walk-in — when: countdown on — 30%\n2. Welcome — when: host walks on — 12%")
+    assert guide_mod.tidy_guide("jumbled", "", "") == ""       # no key: no call
+
+
+def test_the_guide_is_part_of_service_mate(client):
+    assert client.post("/api/lighting/guide", json={"text": "x"}).status_code == 409
+
+
+def test_an_unreadable_guide_upload_says_so(sm_enabled):
+    r = sm_enabled.post("/api/lighting/guide", data={"file": (io.BytesIO(b"not a pdf"), "guide.txt")},
+                        content_type="multipart/form-data")
+    assert r.status_code == 400 and r.get_json()["error"]
+
+
+# ── The floating window ──────────────────────────────────────────────────────
 
 class _FakeWindow:
     def __init__(self):
@@ -288,4 +425,4 @@ def test_it_is_part_of_service_mate(client):
 
 def test_the_card_page_is_served(client):
     page = client.get("/lighting").data
-    assert b"Lighting" in page and b"/api/lighting" in page
+    assert b"Lighting" in page and b"/api/lighting/done" in page

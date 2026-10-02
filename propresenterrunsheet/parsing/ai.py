@@ -325,14 +325,39 @@ SERVICE_MATE_CUE_ADDENDUM = (
     "  cues.lights = [\"Spot — MCs\", \"House down for video\"]\n"
     "One cue is fine when there is only one thing to say. If you can't tell, "
     "use an empty array.\n\n"
-    "ADDITIONAL FIELD — `lighting`:\n"
-    "For EACH item, a short string (≤ 40 chars): the lighting setting the "
-    "RUNSHEET ITSELF gives for that item, e.g. \"House lights 50%\". Copy "
-    "only what is written: if the runsheet says nothing about lighting for "
-    "the item, use an empty string — unlike `cues`, never suggest one. A "
-    "level with no lights named means the house lights (\"lights to 12%\" "
-    "→ \"House lights 12%\")."
+    "ADDITIONAL FIELD — `lighting_steps`:\n"
+    "For EACH item, an ARRAY of the house-lighting changes that happen "
+    "DURING that item, in order. Each step is "
+    "{\"level\": \"12%\", \"when\": \"halfway through the song\"}: `level` "
+    "short (≤ 20 chars), `when` a loose moment within the item (≤ 45 "
+    "chars) or \"\" — the operator judges the exact moment, so keep it "
+    "general. EVERY lighting level the runsheet writes for an item is a "
+    "step, wherever it is written (\"Lights 30%\" → 30%; \"down to 2%\" → 2%; "
+    "\"20% at thanks band\" → 20% when \"thanks band\"). A level with no "
+    "lights named is the house lights. Unlike `cues`, never invent a "
+    "level; an item the runsheet gives no lighting for gets []."
 )
+
+# Appended after SERVICE_MATE_CUE_ADDENDUM when the church has given the
+# app its lighting guide (Service Mate settings): the usual cue for each
+# moment of a service. The runsheet still wins wherever the two differ.
+LIGHTING_GUIDE_ADDENDUM = (
+    "\n\nLIGHTING GUIDE — this church's usual lighting cues:\n---\n{GUIDE}\n---\n"
+    "Use it for `lighting_steps`. Go through the guide's moments IN ORDER "
+    "and give each moment that happens in this runsheet ONE step, on the "
+    "item it happens in. In a worship set the first song is praise and the "
+    "songs after it are worship, so the \"first worship song\" is the "
+    "SECOND song of the set: \"first worship song starts\" and \"halfway "
+    "through the first worship song\" both go on that second song. Each "
+    "step's `level`: the runsheet's own level for that moment where it "
+    "gives one, otherwise the guide's (that is not inventing one). Each "
+    "step's `when`: ALWAYS the guide's cue for that moment — what happens "
+    "in the room, e.g. \"halfway through the song\", \"host walks on\", "
+    "\"preacher says 'thanks band'\" — never the moment's name. A level "
+    "the runsheet writes for an item no guide moment covers is its own "
+    "step. Skip guide moments this runsheet doesn't have."
+)
+LIGHTING_GUIDE_MAX_CHARS = 12000
 
 
 # Appended to the prompt when the operator has a TEMPLATE PLAYLIST set up
@@ -368,7 +393,8 @@ LIBRARY_NAMES_MAX = 200
 
 
 def assemble_prompt(template: str, runsheet_text: str,
-                    library_names: Optional[list] = None) -> str:
+                    library_names: Optional[list] = None,
+                    lighting_guide: str = "") -> str:
     """Substitute the runsheet text into the user's (or default) template,
     appending the Service Mate cue addendum so the model also emits
     per-role cue lines. If `library_names` is provided, also append the
@@ -386,7 +412,9 @@ def assemble_prompt(template: str, runsheet_text: str,
         if names:
             block = "\n".join(f"- {n}" for n in names)
             prompt += LIBRARY_CONTEXT_ADDENDUM.replace("{LIBRARY_NAMES}", block)
-    return prompt + SERVICE_MATE_CUE_ADDENDUM
+    prompt += SERVICE_MATE_CUE_ADDENDUM
+    guide = (lighting_guide or "").strip()[:LIGHTING_GUIDE_MAX_CHARS]
+    return prompt + LIGHTING_GUIDE_ADDENDUM.replace("{GUIDE}", guide) if guide else prompt
 
 
 def parse_ai_response(content: str):

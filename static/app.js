@@ -2907,6 +2907,7 @@ async function smInit() {
     document.getElementById('sm-brightness').value = cfg.brightness || 70;
     document.getElementById('sm-brightness-val').textContent = cfg.brightness || 70;
     if (cfg.lighting_window) _restoreLightingWindow();
+    smLoadLightingGuide();
     // Sync the master-switch visual state + body visibility with the saved
     // enabled flag. Card starts COLLAPSED for a clean default look — the
     // operator clicks the chevron to expand once they enable it.
@@ -3131,6 +3132,59 @@ async function _restoreLightingWindow() {
     box.checked = false;
     _postLightingWindow(false, false).catch(() => {});
   }
+}
+
+// ─── Lighting guide ───────────────────────────────────────────────────────
+// The church's usual cue for each moment of a service (a PDF or a picture
+// of it). Read into every parse: it supplies the "when" wording, and a
+// level wherever the runsheet gives none. The runsheet still wins.
+function _renderLightingGuide(g) {
+  const has = !!(g && g.has_guide);
+  document.getElementById('sm-guide-status').textContent = !has
+    ? 'None — lighting comes from the runsheet only.'
+    : `${g.moments ? g.moments + ' moments' : 'Guide loaded'} · used from the next parse` +
+      (g.tidied === false ? ' (kept as read: add an OpenRouter key to tidy it)' : '');
+  document.getElementById('sm-guide-clear').hidden = !has;
+  document.getElementById('sm-guide-details').hidden = !has;
+  const box = document.getElementById('sm-guide-text');
+  if (document.activeElement !== box) box.value = has ? g.text : '';
+}
+
+async function smSaveLightingGuideText() {
+  const r = await fetch('/api/lighting/guide', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: document.getElementById('sm-guide-text').value}),
+  });
+  _renderLightingGuide(await r.json().catch(() => null));
+  setStatus('✓ Lighting cues saved — used from the next parse.', 'var(--grn)');
+}
+
+async function smLoadLightingGuide() {
+  const g = await fetch('/api/lighting/guide').then(r => r.json()).catch(() => null);
+  _renderLightingGuide(g);
+}
+
+async function smUploadLightingGuide(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  document.getElementById('sm-guide-status').textContent = 'Reading and tidying the guide…';
+  const r = await fetch('/api/lighting/guide', {method: 'POST', body: form});
+  const g = await r.json().catch(() => ({}));
+  document.getElementById('sm-guide-file').value = '';
+  if (!r.ok) {
+    setStatus(escapeHtml(g.error || 'Could not read that guide.'), 'var(--org)');
+    return smLoadLightingGuide();
+  }
+  _renderLightingGuide(g);
+}
+
+async function smClearLightingGuide() {
+  const r = await fetch('/api/lighting/guide', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({clear: true}),
+  });
+  _renderLightingGuide(await r.json().catch(() => null));
 }
 
 // Closed with its own button: the switch follows, within one poll.

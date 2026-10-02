@@ -434,6 +434,24 @@
           <span id="sm-brightness-val" style="font-size:0.78rem;color:var(--muted);min-width:30px">70</span>
         </label>
       </div>
+      <!-- The church's lighting guide: its usual cue for each moment. Read
+           into every parse; the runsheet's levels win where they differ. -->
+      <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <span style="font-size:0.85rem">Lighting guide</span>
+        <span id="sm-guide-status" style="font-size:0.78rem;color:var(--muted)">None — lighting comes from the runsheet only.</span>
+        <button class="btn btn-dim btn-sm" type="button"
+                onclick="document.getElementById('sm-guide-file').click()">Upload PDF…</button>
+        <button class="btn btn-dim btn-sm" type="button" id="sm-guide-clear" hidden
+                onclick="smClearLightingGuide()">Remove</button>
+        <input type="file" id="sm-guide-file" accept=".pdf,.png,.jpg,.jpeg" hidden
+               aria-label="Lighting guide file" onchange="smUploadLightingGuide(this.files[0])">
+      </div>
+      <details id="sm-guide-details" hidden style="margin:-6px 0 12px">
+        <summary style="font-size:0.78rem;color:var(--muted);cursor:pointer">Show the cues — fix any line, then Save</summary>
+        <textarea id="sm-guide-text" rows="9" aria-label="Lighting guide cues"
+                  style="width:100%;font-size:0.78rem;margin:6px 0"></textarea>
+        <button class="btn btn-dim btn-sm" type="button" onclick="smSaveLightingGuideText()">Save cues</button>
+      </details>
 
       <div class="row" style="align-items:flex-start;gap:18px;flex-wrap:wrap">
         <div style="flex:1 1 220px">
