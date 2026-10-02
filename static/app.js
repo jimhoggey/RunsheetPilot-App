@@ -3138,12 +3138,17 @@ async function _restoreLightingWindow() {
 // The church's usual cue for each moment of a service (a PDF or a picture
 // of it). Read into every parse: it supplies the "when" wording, and a
 // level wherever the runsheet gives none. The runsheet still wins.
-function _renderLightingGuide(g) {
+const _GUIDE_KEPT_AS_READ = {
+  no_key: ' — kept as read: add an OpenRouter key, then upload it again to tidy it',
+  failed: ' — kept as read: tidying failed, check the cues below or upload it again',
+};
+
+function _renderLightingGuide(g, note = '') {
   const has = !!(g && g.has_guide);
-  document.getElementById('sm-guide-status').textContent = !has
+  document.getElementById('sm-guide-status').textContent = note || (!has
     ? 'None — lighting comes from the runsheet only.'
     : `${g.moments ? g.moments + ' moments' : 'Guide loaded'} · used from the next parse` +
-      (g.tidied === false ? ' (kept as read: add an OpenRouter key to tidy it)' : '');
+      (_GUIDE_KEPT_AS_READ[g.tidied] || ''));
   document.getElementById('sm-guide-clear').hidden = !has;
   document.getElementById('sm-guide-details').hidden = !has;
   const box = document.getElementById('sm-guide-text');
@@ -3154,9 +3159,10 @@ async function smSaveLightingGuideText() {
   const r = await fetch('/api/lighting/guide', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({text: document.getElementById('sm-guide-text').value}),
-  });
-  _renderLightingGuide(await r.json().catch(() => null));
-  setStatus('✓ Lighting cues saved — used from the next parse.', 'var(--grn)');
+  }).catch(() => null);
+  const g = r && await r.json().catch(() => null);
+  _renderLightingGuide(g, r && r.ok ? '✓ Cues saved · used from the next parse'
+                                     : (g && g.error) || 'Couldn’t save the cues — try again.');
 }
 
 async function smLoadLightingGuide() {
@@ -3169,22 +3175,34 @@ async function smUploadLightingGuide(file) {
   const form = new FormData();
   form.append('file', file);
   document.getElementById('sm-guide-status').textContent = 'Reading and tidying the guide…';
-  const r = await fetch('/api/lighting/guide', {method: 'POST', body: form});
-  const g = await r.json().catch(() => ({}));
+  const r = await fetch('/api/lighting/guide', {method: 'POST', body: form}).catch(() => null);
+  const g = (r && await r.json().catch(() => null)) || {};
   document.getElementById('sm-guide-file').value = '';
-  if (!r.ok) {
-    setStatus(escapeHtml(g.error || 'Could not read that guide.'), 'var(--org)');
-    return smLoadLightingGuide();
+  if (!(r && r.ok)) {
+    const now = await fetch('/api/lighting/guide').then(x => x.json()).catch(() => null);
+    return _renderLightingGuide(now, g.error || 'Couldn’t read that guide — try a PDF or a clear photo.');
   }
   _renderLightingGuide(g);
 }
 
+// Remove asks once: the first click arms it for a few seconds.
+let _guideClearArmed = null;
 async function smClearLightingGuide() {
+  const btn = document.getElementById('sm-guide-clear');
+  if (!_guideClearArmed) {
+    btn.textContent = 'Click again to remove';
+    _guideClearArmed = setTimeout(() => { _guideClearArmed = null; btn.textContent = 'Remove'; }, 4000);
+    return;
+  }
+  clearTimeout(_guideClearArmed);
+  _guideClearArmed = null;
+  btn.textContent = 'Remove';
   const r = await fetch('/api/lighting/guide', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({clear: true}),
-  });
-  _renderLightingGuide(await r.json().catch(() => null));
+  }).catch(() => null);
+  const g = r && await r.json().catch(() => null);
+  _renderLightingGuide(g, r && r.ok ? '' : 'Couldn’t remove the guide — try again.');
 }
 
 // Closed with its own button: the switch follows, within one poll.

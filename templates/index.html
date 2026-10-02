@@ -438,9 +438,9 @@
            into every parse; the runsheet's levels win where they differ. -->
       <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <span style="font-size:0.85rem">Lighting guide</span>
-        <span id="sm-guide-status" style="font-size:0.78rem;color:var(--muted)">None — lighting comes from the runsheet only.</span>
-        <button class="btn btn-dim btn-sm" type="button"
-                onclick="document.getElementById('sm-guide-file').click()">Upload PDF…</button>
+        <span id="sm-guide-status" role="status" style="font-size:0.78rem;color:var(--muted)">None — lighting comes from the runsheet only.</span>
+        <button class="btn btn-dim btn-sm" type="button" title="A PDF or a photo of the church's lighting one-pager"
+                onclick="document.getElementById('sm-guide-file').click()">Upload guide…</button>
         <button class="btn btn-dim btn-sm" type="button" id="sm-guide-clear" hidden
                 onclick="smClearLightingGuide()">Remove</button>
         <input type="file" id="sm-guide-file" accept=".pdf,.png,.jpg,.jpeg" hidden

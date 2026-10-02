@@ -269,24 +269,34 @@ def api_lighting():
 
 @bp.route("/api/lighting/done", methods=["POST"])
 def api_lighting_done():
-    """Tick the next change in the live section off ({"undo": true} puts the
-    last one back). The app can't hear where the band is; the operator can."""
+    """Tick the next change in the live section off. The app can't hear where
+    the band is; the operator can.
+
+    A tick names the step the card showed ({index, step}) and is refused
+    unless that is still the next change, so a double-click or a card a
+    second out of date can't silently skip a cue. Undo names the tick count
+    the card showed ({undo: true, done}) and goes back to the change before,
+    past any repeats the tick skipped, in one click."""
     cfg = _read_clocks_config()
     blocked = _check_sm_enabled(cfg)
     if blocked:
         return blocked
+    body = request.get_json(silent=True) or {}
     state = _read_runsheet_state() or {}
     items = state.get("items") or []
     if not items:
         return jsonify({"ok": False}), 409
     idx = current_index(state, items)
     count = done_for(state, idx)
-    if (request.get_json(silent=True) or {}).get("undo"):
-        count = max(0, count - 1)
+    nxt = heads_up(items, idx, count)["next"]
+    if body.get("undo"):
+        if count == 0 or body.get("done") != count:
+            return jsonify({"ok": False}), 409
+        count = next((k for k in range(count - 1, -1, -1)
+                      if heads_up(items, idx, k)["next"] != nxt), 0)
     else:
-        nxt = heads_up(items, idx, count)["next"]
-        if not (nxt and nxt["here"]):
-            return jsonify({"ok": False}), 409     # nothing left in this section
+        if not (nxt and nxt["here"]) or [body.get("index"), body.get("step")] != [nxt["index"], nxt["step"]]:
+            return jsonify({"ok": False}), 409     # not what the card showed any more
         count = nxt["step"] + 1
     state["lighting_done"] = {"index": idx, "count": count}
     _write_runsheet_state(state)
@@ -299,8 +309,9 @@ def api_lighting_guide():
 
     POST a PDF or picture as `file`: it is read, then tidied into a numbered
     list of moments by one model call (parsing/guide.py) — kept as read when
-    that can't run. JSON {"text": ...} saves the operator's own text as is
-    (their corrections); {"clear": true} removes it."""
+    that can't run, and `tidied` says why: "ok", "no_key" or "failed". JSON
+    {"text": ...} saves the operator's own text as is (their corrections);
+    {"clear": true} removes it."""
     tidied = None
     if request.method == "POST":
         blocked = _check_sm_enabled(_read_clocks_config())
@@ -315,9 +326,10 @@ def api_lighting_guide():
             if error:
                 return jsonify({"ok": False, "error": error}), 400
             settings = load_settings()
-            tidy = tidy_guide(text[:LIGHTING_GUIDE_MAX_CHARS], str(settings.get("or_key") or ""),
-                              str(settings.get("or_model") or ""))
-            tidied, text = bool(tidy), tidy or text
+            key = str(settings.get("or_key") or "")
+            tidy = tidy_guide(text[:LIGHTING_GUIDE_MAX_CHARS], key, str(settings.get("or_model") or ""))
+            tidied = "ok" if tidy else "failed" if key else "no_key"
+            text = tidy or text
         else:
             text = "" if body.get("clear") else str(body.get("text") or "")
         save_settings({"lighting_guide": text.strip()[:LIGHTING_GUIDE_MAX_CHARS]})

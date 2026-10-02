@@ -238,29 +238,81 @@ def test_the_api_reads_the_live_state(sm_enabled):
         "30%", "12%", "8%", 0, "Worship")
 
 
+def _card(c):
+    return c.get("/api/lighting").get_json()
+
+
+def _tick(c, step=None, **body):
+    """Tick off `step` (default: the one the card shows), as the card does."""
+    if not body:
+        n = step or _card(c)["next"]
+        body = {"index": n["index"], "step": n["step"]}
+    return c.post("/api/lighting/done", json=body)
+
+
 def test_ticking_moves_the_next_step_up_and_undo_puts_it_back(sm_enabled):
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
-    assert sm_enabled.post("/api/lighting/done", json={}).get_json()["ok"]
-    h = sm_enabled.get("/api/lighting").get_json()
+    assert _tick(sm_enabled).get_json()["ok"]
+    h = _card(sm_enabled)
     assert (h["now"], h["next"]["level"], h["done"]) == ("12%", "8%", 1)
-    sm_enabled.post("/api/lighting/done", json={"undo": True})
-    assert sm_enabled.get("/api/lighting").get_json()["next"]["level"] == "12%"
+    assert _tick(sm_enabled, undo=True, done=1).get_json()["ok"]
+    assert _card(sm_enabled)["next"]["level"] == "12%"
+
+
+def test_a_double_click_or_an_old_card_ticks_nothing_extra(sm_enabled):
+    """Each click names the step it saw. Once that step is done, the same
+    click is refused, so a double-click can't skip the step after it."""
+    from propresenterrunsheet.service_mate import state as sm_state
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
+    seen = _card(sm_enabled)["next"]
+    assert _tick(sm_enabled, seen).status_code == 200
+    assert _tick(sm_enabled, seen).status_code == 409                    # the second click
+    assert _tick(sm_enabled, undo=True, done=0).status_code == 409       # undo from before the tick
+    assert _card(sm_enabled)["done"] == 1
+
+
+def test_one_undo_brings_back_the_last_change_across_a_repeat(sm_enabled):
+    """12% → 12% → 8%: the repeated 12% is skipped going forward, and undo
+    skips it going back, so one click always shows the change again."""
+    from propresenterrunsheet.service_mate import state as sm_state
+    items = [{"title": "Worship", "lighting_steps": [
+        {"level": "12%", "when": "a"}, {"level": "12%", "when": "b"}, {"level": "8%", "when": "c"}]},
+        {"title": "Message", "lighting_steps": [{"level": "20%", "when": "d"}]}]
+    sm_state._write_runsheet_state({"items": items, "current_index": 0})
+    _tick(sm_enabled)                                                    # 12%
+    assert _card(sm_enabled)["next"]["level"] == "8%"
+    _tick(sm_enabled)                                                    # 8%
+    _tick(sm_enabled, undo=True, done=_card(sm_enabled)["done"])
+    assert _card(sm_enabled)["next"]["level"] == "8%"
 
 
 def test_ticks_belong_to_the_section_they_were_made_in(sm_enabled):
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
-    sm_enabled.post("/api/lighting/done", json={})
+    _tick(sm_enabled)
     state = sm_state._read_runsheet_state()
     sm_state._write_runsheet_state({**state, "current_index": 2})     # ProPresenter moved on
-    assert sm_enabled.get("/api/lighting").get_json()["done"] == 0
+    assert _card(sm_enabled)["done"] == 0
 
 
 def test_nothing_to_tick_once_the_section_is_done(sm_enabled):
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": 3})   # Notices: a repeat only
-    assert sm_enabled.post("/api/lighting/done", json={}).status_code == 409
+    assert _tick(sm_enabled).status_code == 409        # its next change is Message's, not here
+
+
+def test_a_rerun_mid_service_keeps_the_ticks(isolated_state):
+    """Update mode re-run with the same items keeps the live position, and
+    with it the lighting steps already ticked off."""
+    from propresenterrunsheet.routes.playlist import _write_sm_state
+    from propresenterrunsheet.service_mate import state as sm_state
+    done = {"index": 1, "count": 2}
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1, "lighting_done": done})
+    _write_sm_state("Sunday", [{"parsed": it} for it in ITEMS], None, keep_position=True)
+    assert sm_state._read_runsheet_state()["lighting_done"] == done
+    _write_sm_state("Sunday", [{"parsed": it} for it in ITEMS[:2]], None, keep_position=True)
+    assert "lighting_done" not in sm_state._read_runsheet_state()     # a different runsheet
 
 
 def test_a_bad_current_index_does_not_break_the_card(sm_enabled):
@@ -278,17 +330,23 @@ def test_the_operators_own_text_is_saved_as_is(sm_enabled):
     assert not sm_enabled.post("/api/lighting/guide", json={"clear": True}).get_json()["has_guide"]
 
 
-@pytest.mark.parametrize("tidy, tidied", [("1. Walk-in — when: countdown on — 30%", True), ("", False)])
-def test_an_uploaded_guide_is_tidied_once(sm_enabled, monkeypatch, tidy, tidied):
+@pytest.mark.parametrize("key, tidy, tidied", [
+    ("sk-or-x", "1. Walk-in — when: countdown on — 30%", "ok"),
+    ("", "", "no_key"),
+    ("sk-or-x", "", "failed"),
+])
+def test_an_uploaded_guide_is_tidied_once(sm_enabled, monkeypatch, key, tidy, tidied):
     """One model call turns the jumbled PDF text into a numbered list; when
-    that can't run (no key), the text is kept as read."""
+    that can't run, the text is kept as read and the page is told why."""
     import propresenterrunsheet.parsing.guide as guide_mod
     import propresenterrunsheet.routes.parse as parse_mod
+    from propresenterrunsheet.settings import save_settings
+    save_settings({"or_key": key})
     monkeypatch.setattr(parse_mod, "_extracted_or_error", lambda f: ("Walk-in 30% Countdown on", "pdf", None))
     monkeypatch.setattr(guide_mod, "tidy_guide", lambda text, key, model: tidy)
     g = sm_enabled.post("/api/lighting/guide", data={"file": (io.BytesIO(b"%PDF"), "guide.pdf")},
                         content_type="multipart/form-data").get_json()
-    assert g["tidied"] is tidied
+    assert g["tidied"] == tidied
     assert g["text"] == (tidy or "Walk-in 30% Countdown on")
 
 
