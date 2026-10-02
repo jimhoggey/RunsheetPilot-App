@@ -112,7 +112,11 @@ def _clocks_loop_tick(tick: int) -> None:
         role = clock.get("role") or clock.get("id") or "screen"
         # The lights station shows the lighting heads-up (where the lights
         # are now, the next change) when the runsheet states any lighting.
-        view = lights_view(state) if role == "lights" else state
+        try:
+            view = lights_view(state) if role == "lights" else state
+        except Exception:
+            log.exception("lights view failed; showing the plain cues")
+            view = state
         cid = clock.get("id") or role
         verbosity = (clock.get("verbosity") or SM_VERBOSITY_DEFAULT).lower()
         if verbosity not in SM_VERBOSITIES:

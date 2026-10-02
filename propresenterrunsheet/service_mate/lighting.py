@@ -20,7 +20,7 @@ def _same(a: str, b: str) -> bool:
 
 
 def _stated(item) -> str:
-    return str((item or {}).get("lighting") or "").strip()
+    return str(item.get("lighting") or "").strip() if isinstance(item, dict) else ""
 
 
 def has_lighting(items) -> bool:
@@ -48,17 +48,32 @@ def lights_view(state: dict) -> dict:
     """The runsheet state as the LIGHTS clock should show it: its cue is
     where the lights are now, and its "next" is the next lighting change
     rather than simply the next item. A runsheet that states no lighting
-    is returned unchanged, so the station keeps today's cues."""
+    is returned unchanged, so the station keeps today's cues.
+
+    The next change's SETTING leads its title ("House lights 30% ·
+    Message"): every clock layout shows the next title, but the compact
+    ones never show a next cue. Its duration is dropped, since "30 MIN"
+    would describe that item, not the one actually up next. With no
+    change left, the real next item stays next, so the clock doesn't say
+    END OF SERVICE halfway through."""
     items = state.get("items") or []
-    if not has_lighting(items):
+    try:
+        idx = max(0, min(int(state.get("current_index") or 0), len(items) - 1))
+    except (TypeError, ValueError):
         return state
-    idx = max(0, min(int(state.get("current_index") or 0), len(items) - 1))
+    if not has_lighting(items) or not isinstance(items[idx], dict):
+        return state
     hu = heads_up(items, idx)
 
     def with_cue(item, cue):
-        return {**item, "cues": {**(item.get("cues") or {}), "lights": [cue] if cue else []}}
+        return {**item, "cues": {**(item.get("cues") or {}), "lights": [cue]}}
 
-    view = [with_cue(items[idx], f"Now: {hu['now']}" if hu["now"] else "")]
+    # Before the first stated setting, the station keeps its usual cues.
+    view = [with_cue(items[idx], f"Now: {hu['now']}") if hu["now"] else items[idx]]
     if hu["next_index"] is not None:
-        view.append(with_cue(items[hu["next_index"]], f"Coming up: {hu['next']}"))
+        nxt = {k: v for k, v in with_cue(items[hu["next_index"]], f"Coming up: {hu['next']}").items()
+               if k != "duration_min"}
+        view.append({**nxt, "title": f"{hu['next']} · {hu['next_section']}"})
+    elif idx + 1 < len(items) and isinstance(items[idx + 1], dict):
+        view.append(items[idx + 1])
     return {**state, "items": view, "current_index": 0}

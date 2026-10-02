@@ -42,12 +42,34 @@ def test_a_runsheet_with_no_lighting_says_nothing():
 
 
 def test_the_lights_clock_shows_now_and_coming_up():
-    view = lights_view({"items": ITEMS, "current_index": 1, "current_started_at": "x"})
-    assert [it["title"] for it in view["items"]] == ["Worship", "Message"]
+    items = [*ITEMS[:4], {**ITEMS[4], "duration_min": 30}, ITEMS[5]]
+    view = lights_view({"items": items, "current_index": 1, "current_started_at": "x"})
+    # The setting leads the next title: compact layouts show no next cue.
+    assert [it["title"] for it in view["items"]] == ["Worship", "House lights 30% · Message"]
+    assert "duration_min" not in view["items"][1]   # "30 MIN" isn't the next item's length
     assert view["current_index"] == 0 and view["current_started_at"] == "x"
     assert view["items"][0]["cues"]["lights"] == ["Now: House lights 12%"]
     assert view["items"][1]["cues"]["lights"] == ["Coming up: House lights 30%"]
     assert ITEMS[1].get("cues") is None          # the real state is untouched
+
+
+def test_with_no_change_left_the_real_next_item_stays_next():
+    """Not END OF SERVICE halfway through: the clock's NEXT keeps meaning next."""
+    view = lights_view({"items": ITEMS, "current_index": 4})
+    assert [it["title"] for it in view["items"]] == ["Message", "Close"]
+
+
+def test_before_the_first_setting_the_station_keeps_its_usual_cues():
+    items = [{"title": "Doors", "cues": {"lights": ["House up"]}}, *ITEMS]
+    view = lights_view({"items": items, "current_index": 0})
+    assert view["items"][0]["cues"]["lights"] == ["House up"]
+    assert view["items"][1]["title"] == "House lights 50% · Pre-service"
+
+
+def test_a_malformed_state_is_shown_plainly():
+    for state in ({"items": ["junk", *ITEMS], "current_index": 0},
+                  {"items": ITEMS, "current_index": "abc"}):
+        assert lights_view(state) is state
 
 
 def test_the_lights_clock_is_unchanged_without_stated_lighting():
@@ -61,7 +83,8 @@ def test_the_payload_for_the_lights_station(monkeypatch):
     view = lights_view({"items": ITEMS, "current_index": 0})
     p = build_state_payload("lights", "compact", view, None, dt.datetime(2026, 10, 4, 18))
     assert p["cues"] == ["Now: House lights 50%"]
-    assert (p["next_title"], p["next_cue"]) == ("Worship", "Coming up: House lights 12%")
+    assert (p["next_title"], p["next_cue"]) == ("House lights 12% · Worship",
+                                                "Coming up: House lights 12%")
 
 
 def test_only_the_lights_clock_gets_the_heads_up(monkeypatch, isolated_state):
@@ -81,7 +104,7 @@ def test_only_the_lights_clock_gets_the_heads_up(monkeypatch, isolated_state):
     daemon._ENDS_AT.reset()
     daemon._clocks_loop_tick(1)
     assert sent["10.0.0.3"]["cues"] == ["Now: House lights 12%"]
-    assert sent["10.0.0.3"]["next_title"] == "Message"
+    assert sent["10.0.0.3"]["next_title"] == "House lights 30% · Message"
     assert sent["10.0.0.2"]["next_title"] == "Prayer"       # sound: the plain next item
 
 
@@ -210,6 +233,40 @@ def test_no_native_window_when_the_page_opened_a_popup(sm_enabled, fake_webview)
 def test_in_a_browser_the_page_is_told_to_open_a_popup(sm_enabled):
     r = sm_enabled.post("/api/lighting/window", json={"on": True}).get_json()
     assert r == {"ok": True, "on": True, "native": False}
+
+
+def test_switching_service_mate_off_closes_the_card(sm_enabled, fake_webview):
+    from propresenterrunsheet import native
+    sm_enabled.post("/api/lighting/window", json={"on": True})
+    win = native._lighting
+    sm_enabled.post("/api/clocks", json={"enabled": False})
+    assert win.destroyed and native._lighting is None
+    h = sm_enabled.get("/api/lighting").get_json()
+    assert h["off"] is True and h["on"] is False
+
+
+def test_closing_the_main_window_takes_the_card_but_keeps_it_on(monkeypatch, isolated_state):
+    """pywebview only returns when every window is closed: the card must
+    close with the main window, or the app never quits."""
+    import types
+    from propresenterrunsheet import native, server
+    closed = _Handlers()
+    fake = types.SimpleNamespace(
+        create_window=lambda *a, **k: types.SimpleNamespace(events=types.SimpleNamespace(closed=closed)),
+        start=lambda: None)
+    assert server._run_native_window(5757, webview_module=fake)
+    assert native.close_lighting_window in closed
+
+
+def test_a_failed_native_start_leaves_no_phantom_window(isolated_state):
+    import types
+    from propresenterrunsheet import native, server
+
+    def boom():
+        raise RuntimeError("no WebView2")
+    fake = types.SimpleNamespace(create_window=lambda *a, **k: object(), start=boom)
+    assert server._run_native_window(5757, webview_module=fake) is False
+    assert native.webview is None
 
 
 def test_it_is_part_of_service_mate(client):

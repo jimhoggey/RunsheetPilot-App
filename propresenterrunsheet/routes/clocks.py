@@ -105,6 +105,11 @@ def api_clocks_post():
         if cfg["enabled"]:
             from ..licensing import start_trial_if_needed
             start_trial_if_needed()
+        else:
+            # The lighting card is part of Service Mate: it goes too,
+            # rather than staying on top with a frozen heads-up.
+            cfg["lighting_window"] = False
+            close_lighting_window()
     _write_clocks_config(cfg)
     return jsonify({"ok": True, "config": cfg})
 
@@ -241,6 +246,12 @@ def lighting_page():
 
 @bp.route("/api/lighting", methods=["GET"])
 def api_lighting():
+    # Service Mate off or its trial over (the window might be open in a
+    # browser popup): say so, rather than keep showing a frozen heads-up.
+    cfg = _read_clocks_config()
+    if _check_sm_enabled(cfg):
+        return jsonify({"off": True, "on": bool(cfg.get("lighting_window")),
+                        "has_lighting": False, "now": "", "next": "", "section": ""})
     state = _read_runsheet_state() or {}
     items = [it for it in state.get("items") or [] if isinstance(it, dict)]
     try:
@@ -249,9 +260,9 @@ def api_lighting():
         idx = 0
     out = heads_up(items, idx)
     del out["next_index"]
-    return jsonify({**out, "has_lighting": has_lighting(items),
-                    "section": str(items[idx].get("title") or "") if items else "",
-                    "on": bool(_read_clocks_config().get("lighting_window"))})
+    section = items[idx].get("title") if items and isinstance(items[idx], dict) else ""
+    return jsonify({**out, "has_lighting": has_lighting(items), "section": str(section or ""),
+                    "on": bool(cfg.get("lighting_window"))})
 
 
 @bp.route("/api/lighting/window", methods=["POST"])

@@ -46,9 +46,9 @@
     catch (_) { return; }   // the app is restarting or closed: keep the last card
     // Only touch the page when something changed, so the screen reader
     // isn't re-told the same thing every second and the slide plays once.
-    const key = [h.has_lighting, h.now, h.next, h.next_section].join('\u0000');
+    const key = [h.now, h.off, h.has_lighting, h.next, h.next_section].join('\u0000');
     if (key === shown) return;
-    const moved = shown !== null && h.now !== (shown.split('\u0000')[1]);
+    const moved = shown !== null && h.now !== shown.split('\u0000')[0];
     shown = key;
     const quiet = !h.has_lighting || !h.next;
     document.body.classList.toggle('quiet', quiet);
@@ -56,7 +56,8 @@
     el('now').textContent = h.now || '';
     el('next-label').innerHTML = h.next
       ? 'Next <span>· at ' + escape(h.next_section) + '</span>' : '';
-    el('next').textContent = !h.has_lighting ? 'This runsheet doesn’t mention lighting.'
+    el('next').textContent = h.off ? 'Service Mate is off.'
+      : !h.has_lighting ? 'This runsheet doesn’t mention lighting.'
       : h.next || 'No more lighting changes.';
     document.body.classList.remove('moved');
     if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
