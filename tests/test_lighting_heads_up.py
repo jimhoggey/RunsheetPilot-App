@@ -85,6 +85,23 @@ def test_only_the_lights_clock_gets_the_heads_up(monkeypatch, isolated_state):
     assert sent["10.0.0.2"]["next_title"] == "Prayer"       # sound: the plain next item
 
 
+@pytest.mark.parametrize("verbosity", ["compact", "detailed"])
+def test_an_item_saved_with_no_type_still_renders(verbosity):
+    """Seen in the log 48 times: `"type": null` crashed the stock clock render."""
+    from propresenterrunsheet.service_mate.render import _render_cue
+    jpg = _render_cue("lights", {"items": [{"title": "Welcome", "type": None}],
+                                 "current_index": 0}, verbosity=verbosity)
+    assert jpg[:2] == b"\xff\xd8"
+
+
+def test_the_preview_shows_the_lights_heads_up(sm_enabled):
+    """The Lights station's preview must match its real clock."""
+    from propresenterrunsheet.service_mate import state as sm_state
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
+    r = sm_enabled.get("/api/clocks/preview?role=lights")
+    assert r.status_code == 200 and r.data[:2] == b"\xff\xd8"
+
+
 # ── The parse ────────────────────────────────────────────────────────────────
 
 def test_the_prompt_asks_for_the_stated_lighting_only():
@@ -201,4 +218,5 @@ def test_it_is_part_of_service_mate(client):
 
 
 def test_the_card_page_is_served(client):
-    assert b"Next change" in client.get("/lighting").data
+    page = client.get("/lighting").data
+    assert b"Lighting" in page and b"/api/lighting" in page

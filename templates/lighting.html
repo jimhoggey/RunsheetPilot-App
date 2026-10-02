@@ -4,42 +4,62 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lighting — coming up</title>
-<!-- The floating lighting heads-up (service_mate/lighting.py). Says what is
-     COMING UP, never "change now": the moment is the room's call. Small
-     and self-contained, so it sits on top of ProPresenter or the desk. -->
+<!-- The floating lighting heads-up (service_mate/lighting.py). Reads top to
+     bottom in time order: where the lights are NOW, greyed, then the NEXT
+     change, large. It never says "change now": the moment is the room's
+     call. When the section moves on, the next setting slides up into now. -->
 <style>
-  :root { --bg: #111118; --text: #ececf3; --muted: #a4a4b8; --amber: #f59e0b; }
+  :root { --bg: #111118; --text: #ececf3; --muted: #8b8b9c; --amber: #f59e0b; }
   * { box-sizing: border-box; }
   body { margin: 0; height: 100vh; background: var(--bg); color: var(--text);
-         font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         display: flex; flex-direction: column; justify-content: center; gap: 6px;
-         padding: 12px 16px; border-top: 3px solid var(--amber); }
-  .label { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-  .label b { color: var(--amber); font-weight: 700; }
-  #next { font-size: clamp(1.2rem, 7vw, 2rem); font-weight: 700; }
-  #now { color: var(--muted); }
+         font: 15px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         display: flex; flex-direction: column; justify-content: center;
+         padding: 10px 16px; border-top: 3px solid var(--amber); overflow: hidden; }
+  .label { font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; }
+  #now-row { color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+  #now { font-size: 1rem; }
+  #arrow { color: var(--muted); font-size: .9rem; line-height: 1; margin: 2px 0 2px 2px; }
+  #next-label { color: var(--amber); font-weight: 700; }
+  #next-label span { color: var(--muted); font-weight: 400; }
+  #next { font-size: clamp(1.25rem, 7.5vw, 2.1rem); font-weight: 700; }
   .quiet #next { font-size: 1rem; font-weight: 600; color: var(--muted); }
+  [hidden] { display: none !important; }
+  /* The next setting moving up into "now" when the section changes. */
+  .moved #now-row, .moved #next-block { animation: up .45s ease-out; }
+  @keyframes up { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .moved #now-row, .moved #next-block { animation: none; } }
 </style>
 </head>
 <body>
-  <div id="card" aria-live="polite">
-    <div class="label" id="next-label"><b>Next change</b></div>
+  <div id="now-row"><span class="label">Now</span><span id="now"></span></div>
+  <div id="arrow" aria-hidden="true">↓</div>
+  <div id="next-block" aria-live="polite">
+    <div class="label" id="next-label"></div>
     <div id="next">—</div>
-    <div id="now"></div>
   </div>
 <script>
   const el = id => document.getElementById(id);
+  let shown = null;
   async function refresh() {
-    try {
-      const h = await fetch('/api/lighting', {cache: 'no-store'}).then(r => r.json());
-      const quiet = !h.has_lighting || !h.next;
-      document.body.classList.toggle('quiet', quiet);
-      el('next-label').innerHTML = h.next
-        ? '<b>Next change</b> · at ' + escape(h.next_section) : '<b>Lighting</b>';
-      el('next').textContent = !h.has_lighting ? 'This runsheet doesn’t mention lighting.'
-        : h.next || 'No more lighting changes.';
-      el('now').textContent = h.now ? 'Now: ' + h.now : '';
-    } catch (_) { /* the app is restarting or closed: keep the last card */ }
+    let h;
+    try { h = await fetch('/api/lighting', {cache: 'no-store'}).then(r => r.json()); }
+    catch (_) { return; }   // the app is restarting or closed: keep the last card
+    // Only touch the page when something changed, so the screen reader
+    // isn't re-told the same thing every second and the slide plays once.
+    const key = [h.has_lighting, h.now, h.next, h.next_section].join('\u0000');
+    if (key === shown) return;
+    const moved = shown !== null && h.now !== (shown.split('\u0000')[1]);
+    shown = key;
+    const quiet = !h.has_lighting || !h.next;
+    document.body.classList.toggle('quiet', quiet);
+    el('now-row').hidden = el('arrow').hidden = !h.now;
+    el('now').textContent = h.now || '';
+    el('next-label').innerHTML = h.next
+      ? 'Next <span>· at ' + escape(h.next_section) + '</span>' : '';
+    el('next').textContent = !h.has_lighting ? 'This runsheet doesn’t mention lighting.'
+      : h.next || 'No more lighting changes.';
+    document.body.classList.remove('moved');
+    if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
   }
   function escape(s) {
     return String(s || '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));

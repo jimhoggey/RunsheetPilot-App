@@ -8,7 +8,7 @@ import datetime as _dt
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from ..native import close_lighting_window, open_lighting_window
-from ..service_mate.lighting import has_lighting, heads_up
+from ..service_mate.lighting import has_lighting, heads_up, lights_view
 
 from ..service_mate.constants import (
     ROLE_ACCENT, SM_TESTCARD_FILENAME, SM_VERBOSITIES, SM_VERBOSITY_DEFAULT,
@@ -224,7 +224,9 @@ def api_clocks_preview():
             "current_index": 0,
             "current_started_at": _dt.datetime.now().isoformat(),
         }
-    jpg = _render_cue(role, state, verbosity=verbosity)
+    # The Lights station previews what its clock really shows: the heads-up.
+    jpg = _render_cue(role, lights_view(state) if role == "lights" else state,
+                      verbosity=verbosity)
     return Response(jpg, mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store"})
 
