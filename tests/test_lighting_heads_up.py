@@ -53,6 +53,18 @@ def test_the_lights_clock_shows_now_and_coming_up():
     assert ITEMS[1].get("cues") is None          # the real state is untouched
 
 
+def test_the_next_change_never_reports_a_length():
+    """Review finding: "30 min" in the notes or title of the next change's
+    item reached the clock as the length of what's up next."""
+    import datetime as dt
+    from propresenterrunsheet.service_mate.protocol import build_state_payload
+    items = [{"title": "Worship", "lighting": "House lights 12%"},
+             {"title": "Preach (30 min)", "notes": "Ps David — 30 min", "lighting": "House lights 30%"}]
+    p = build_state_payload("lights", "compact", lights_view({"items": items, "current_index": 0}),
+                            None, dt.datetime(2026, 10, 4, 18))
+    assert p["next_title"].startswith("House lights 30%") and "next_duration_s" not in p
+
+
 def test_with_no_change_left_the_real_next_item_stays_next():
     """Not END OF SERVICE halfway through: the clock's NEXT keeps meaning next."""
     view = lights_view({"items": ITEMS, "current_index": 4})

@@ -50,8 +50,10 @@ def _iso(t):
 
 
 def _duration_seconds(item):
-    """Whole seconds for an item, or None when it has no usable duration."""
-    if not item:
+    """Whole seconds for an item, or None when it has no usable duration.
+    `no_duration` marks lighting.lights_view's next-change item, which
+    stands for a lighting change, not an item with a length."""
+    if not item or item.get("no_duration"):
         return None
     from ..parsing.duration import _extract_duration_min
     mins = _extract_duration_min(item)

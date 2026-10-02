@@ -71,9 +71,12 @@ def lights_view(state: dict) -> dict:
     # Before the first stated setting, the station keeps its usual cues.
     view = [with_cue(items[idx], f"Now: {hu['now']}") if hu["now"] else items[idx]]
     if hu["next_index"] is not None:
-        nxt = {k: v for k, v in with_cue(items[hu["next_index"]], f"Coming up: {hu['next']}").items()
-               if k != "duration_min"}
-        view.append({**nxt, "title": f"{hu['next']} · {hu['next_section']}"})
+        # Only what the clock shows. No notes or duration: the clock would
+        # read "30 min" out of either as the length of what's up next.
+        view.append({"title": f"{hu['next']} · {hu['next_section']}",
+                     "type": items[hu["next_index"]].get("type"),
+                     "cues": {"lights": [f"Coming up: {hu['next']}"]},
+                     "no_duration": True})
     elif idx + 1 < len(items) and isinstance(items[idx + 1], dict):
         view.append(items[idx + 1])
     return {**state, "items": view, "current_index": 0}
