@@ -58,6 +58,10 @@ _PP_PLAYLIST_CACHE_TTL_S = 60
 SECTION_ADVANCE_MIN_POLLS = 2
 _PENDING_SECTION_TARGET: dict = {"index": None, "count": 0}
 
+# Whether PP answered the last /v1/playlist/active request at all. The
+# daemon polls every tick while it does and backs off while it doesn't.
+PP_REACHABLE = {"ok": True}
+
 # Strip header decorations the create-playlist code adds, so we can match the
 # header name back to the original runsheet item title.
 _HDR_ACTION_RE   = re.compile(r"^\s*⚠\s*ACTION NEEDED\s*—\s*", re.IGNORECASE)
@@ -145,6 +149,12 @@ def _pp_active_section_probe(state: dict, base: str) -> dict:
     result = {"section_idx": None, "has_active_playlist": False}
     try:
         r = req.get(f"{base}/v1/playlist/active", timeout=2)
+    except Exception:
+        PP_REACHABLE["ok"] = False
+        log.debug("PP /v1/playlist/active unreachable", exc_info=True)
+        return result
+    PP_REACHABLE["ok"] = True
+    try:
         if not r.ok:
             return result
         data = r.json() or {}

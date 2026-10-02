@@ -22,11 +22,16 @@ SM_TESTCARD_FILENAME = "rb_test.jpg"
 SM_JPEG_QUALITY = 90
 SM_ULTRA_IMAGE_THEME = 3   # Theme 3 = "Photo Album" (custom image full-screen)
 
-# Daemon loop cadence — render every TICK; only POLL ProPresenter every Nth
-# tick. 500 ms render lets the on-screen countdown step every 1 s instead of
-# every 2 s; PP polling stays at 2 s so we don't hammer ProPresenter's API.
+# Daemon loop cadence — render every TICK (500 ms lets the countdown step
+# every 1 s), and ask ProPresenter what's live on every tick too. Polling
+# every 4th tick, plus pp_track's two-polls-in-a-row rule, put a click in
+# PP 2-4 s behind on the clocks, which operators noticed; now it's 0.5-1 s.
+# Two small local requests a tick are nothing to PP. While PP isn't
+# answering, back off to every 4th tick: each failed request can hang for
+# its 2 s timeout, and the countdowns must keep stepping meanwhile.
 SM_LOOP_INTERVAL_S = 0.5
-SM_PP_POLL_EVERY_N_TICKS = 4
+SM_PP_POLL_EVERY_N_TICKS = 1
+SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS = 4
 
 # Per-verbosity font sizes — tweak here, layouts in render.py pick from these.
 SM_FONTS = {
