@@ -28,7 +28,7 @@ from .state import _cue_for, _cues_for, _next_visible_item
 
 # How far a freshly computed deadline must move before we believe it is a real
 # timer change rather than sampling phase. pp_remaining_seconds is a whole
-# second sampled every 2s, so it can legitimately imply a deadline up to ~1s
+# second sampled every 0.5-2s, so it can legitimately imply a deadline up to ~1s
 # either side of the held one; an operator resetting a timer moves it by far
 # more than 2s.
 ENDS_AT_TOLERANCE_S = 2.0
@@ -63,7 +63,7 @@ class EndsAtHolder:
 
     `_compute_remaining_seconds` prefers `state["pp_remaining_seconds"]`, which
     `pp_track` sets from ProPresenter's own timer display — a WHOLE-SECOND
-    value, sampled every 2s. Computing `ends_at = now + remaining` on each push
+    value, sampled every 0.5-2s. Computing `ends_at = now + remaining` on each push
     therefore lands on a different absolute instant every time, wobbling by up
     to a second as the sample phase drifts.
 

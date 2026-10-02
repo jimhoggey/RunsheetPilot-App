@@ -44,6 +44,10 @@ _BLOCKED = {ipaddress.ip_address("169.254.169.254"),
 # every few seconds, and re-asking mDNS each time is pointless. Short TTL
 # so a machine that changes address is picked up within a minute.
 _CACHE_TTL_S = 30
+# A name that didn't resolve is remembered too, more briefly. Such a lookup
+# can take ~5 s ("worship-mac.local" while that Mac is off), and the Service
+# Mate loop would otherwise pay it on every poll and freeze the countdowns.
+_NEGATIVE_TTL_S = 15
 _cache: dict = {}
 
 
@@ -114,6 +118,7 @@ def resolve_pp_host(host):
     try:
         infos = socket.getaddrinfo(host, None)
     except Exception:
+        _cache[host] = (now + _NEGATIVE_TTL_S, None)
         return None                      # unresolvable: fail closed
 
     v4 = v6 = None

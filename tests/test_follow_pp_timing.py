@@ -69,6 +69,36 @@ def test_reachability_follows_the_last_request(loop):
     assert pp_track.PP_REACHABLE["ok"] is True
 
 
+def test_a_host_that_will_not_resolve_counts_as_not_answering(loop):
+    """"worship-mac.local" with that Mac switched off: the lookup fails
+    before any request is made, and must still trigger the backoff."""
+    from propresenterrunsheet import settings as pp_settings
+    from propresenterrunsheet.propresenter import net
+    loop.setattr(pp_settings, "load_settings", lambda: {"pp_host": "worship-mac.local"})
+    loop.setattr(net, "pp_base", lambda *_a: (_ for _ in ()).throw(net.UnreachableHost("x")))
+    pp_track._maybe_advance_from_pp({"items": [{"title": "Welcome"}]})
+    assert pp_track.PP_REACHABLE["ok"] is False
+
+
+def test_a_failed_name_lookup_is_remembered_briefly(monkeypatch):
+    """A failing lookup can take ~5 s; asking again on every poll froze the
+    countdowns. It is cached (still as "not allowed") for a few seconds."""
+    from propresenterrunsheet.propresenter import net
+    lookups = []
+
+    def fails(host, *_a, **_k):
+        lookups.append(host)
+        raise OSError("no such host")
+    monkeypatch.setattr(net.socket, "getaddrinfo", fails)
+    net.reset_cache()
+    try:
+        assert net.resolve_pp_host("worship-mac.local") is None
+        assert net.resolve_pp_host("worship-mac.local") is None
+        assert lookups == ["worship-mac.local"]
+    finally:
+        net.reset_cache()
+
+
 def test_a_section_change_in_pp_reaches_service_mate_within_two_ticks(loop):
     """End to end through the real tracker: the operator clicks "Message"
     in PP; two ticks later (one second) Service Mate is on it."""
