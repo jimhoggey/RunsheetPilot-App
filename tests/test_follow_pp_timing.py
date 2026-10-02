@@ -55,6 +55,18 @@ def test_the_state_file_is_written_only_when_pp_moved_something(loop):
     assert [w["current_index"] for w in writes] == [1]
 
 
+def test_a_save_made_while_pp_was_asked_is_kept(loop):
+    """PP's requests take up to 2 s. A lighting step ticked off meanwhile
+    must survive the loop writing PP's answer back."""
+    def advance(s):
+        sm_state._write_runsheet_state({**s, "lighting_done": {"index": 0, "count": 1}})
+        return {**s, "pp_remaining_seconds": 42}
+    _count_polls(loop, advance)
+    daemon._clocks_loop_tick(0)
+    saved = sm_state._read_runsheet_state()
+    assert (saved["lighting_done"], saved["pp_remaining_seconds"]) == ({"index": 0, "count": 1}, 42)
+
+
 def test_reachability_follows_the_last_request(loop):
     def refused(url, **kw):
         raise requests.exceptions.ConnectionError("PP closed")

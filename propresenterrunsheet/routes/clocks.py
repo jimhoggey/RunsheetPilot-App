@@ -8,7 +8,11 @@ import datetime as _dt
 from flask import Blueprint, Response, jsonify, render_template, request
 
 from ..native import close_lighting_window, open_lighting_window
-from ..service_mate.lighting import has_lighting, heads_up, lights_view
+from ..parsing.ai import LIGHTING_GUIDE_MAX_CHARS
+from ..service_mate.lighting import (
+    current_index, done_for, has_lighting, heads_up, lights_view,
+)
+from ..settings import load_settings, save_settings
 
 from ..service_mate.constants import (
     ROLE_ACCENT, SM_TESTCARD_FILENAME, SM_VERBOSITIES, SM_VERBOSITY_DEFAULT,
@@ -251,18 +255,88 @@ def api_lighting():
     cfg = _read_clocks_config()
     if _check_sm_enabled(cfg):
         return jsonify({"off": True, "on": bool(cfg.get("lighting_window")),
-                        "has_lighting": False, "now": "", "next": "", "section": ""})
+                        "has_lighting": False, "now": "", "next": None, "then": None,
+                        "section": ""})
     state = _read_runsheet_state() or {}
-    items = [it for it in state.get("items") or [] if isinstance(it, dict)]
-    try:
-        idx = max(0, min(int(state.get("current_index") or 0), len(items) - 1))
-    except (TypeError, ValueError):
-        idx = 0
-    out = heads_up(items, idx)
-    del out["next_index"]
+    items = state.get("items") or []
+    idx = current_index(state, items)
     section = items[idx].get("title") if items and isinstance(items[idx], dict) else ""
-    return jsonify({**out, "has_lighting": has_lighting(items), "section": str(section or ""),
+    done = done_for(state, idx)
+    return jsonify({**heads_up(items, idx, done), "done": done,
+                    "has_lighting": has_lighting(items), "section": str(section or ""),
                     "on": bool(cfg.get("lighting_window"))})
+
+
+@bp.route("/api/lighting/done", methods=["POST"])
+def api_lighting_done():
+    """Tick the next change in the live section off. The app can't hear where
+    the band is; the operator can.
+
+    A tick names the step the card showed ({index, step}) and is refused
+    unless that is still the next change, so a double-click or a card a
+    second out of date can't silently skip a cue. Undo names the tick count
+    the card showed ({undo: true, done}) and goes back to the change before,
+    past any repeats the tick skipped, in one click."""
+    cfg = _read_clocks_config()
+    blocked = _check_sm_enabled(cfg)
+    if blocked:
+        return blocked
+    body = request.get_json(silent=True) or {}
+    state = _read_runsheet_state() or {}
+    items = state.get("items") or []
+    if not items:
+        return jsonify({"ok": False}), 409
+    idx = current_index(state, items)
+    count = done_for(state, idx)
+    nxt = heads_up(items, idx, count)["next"]
+    if body.get("undo"):
+        if count == 0 or body.get("done") != count:
+            return jsonify({"ok": False}), 409
+        count = next((k for k in range(count - 1, -1, -1)
+                      if heads_up(items, idx, k)["next"] != nxt), 0)
+    else:
+        if not (nxt and nxt["here"]) or [body.get("index"), body.get("step")] != [nxt["index"], nxt["step"]]:
+            return jsonify({"ok": False}), 409     # not what the card showed any more
+        count = nxt["step"] + 1
+    state["lighting_done"] = {"index": idx, "count": count}
+    _write_runsheet_state(state)
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/lighting/guide", methods=["GET", "POST"])
+def api_lighting_guide():
+    """The church's lighting guide, read into every parse (parsing/ai.py).
+
+    POST a PDF or picture as `file`: it is read, then tidied into a numbered
+    list of moments by one model call (parsing/guide.py) — kept as read when
+    that can't run, and `tidied` says why: "ok", "no_key" or "failed". JSON
+    {"text": ...} saves the operator's own text as is (their corrections);
+    {"clear": true} removes it."""
+    tidied = None
+    if request.method == "POST":
+        blocked = _check_sm_enabled(_read_clocks_config())
+        if blocked:
+            return blocked
+        upload = request.files.get("file")
+        body = {} if upload else (request.get_json(silent=True) or {})
+        if upload is not None:
+            from ..parsing.guide import tidy_guide
+            from .parse import _extracted_or_error
+            text, _source, error = _extracted_or_error(upload)
+            if error:
+                return jsonify({"ok": False, "error": error}), 400
+            settings = load_settings()
+            key = str(settings.get("or_key") or "")
+            tidy = tidy_guide(text[:LIGHTING_GUIDE_MAX_CHARS], key, str(settings.get("or_model") or ""))
+            tidied = "ok" if tidy else "failed" if key else "no_key"
+            text = tidy or text
+        else:
+            text = "" if body.get("clear") else str(body.get("text") or "")
+        save_settings({"lighting_guide": text.strip()[:LIGHTING_GUIDE_MAX_CHARS]})
+    guide = str(load_settings().get("lighting_guide") or "")
+    return jsonify({"ok": True, "has_guide": bool(guide), "text": guide,
+                    "moments": sum(1 for ln in guide.splitlines() if ln.strip()[:1].isdigit()),
+                    "tidied": tidied})
 
 
 @bp.route("/api/lighting/window", methods=["POST"])
