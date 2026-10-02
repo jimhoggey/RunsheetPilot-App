@@ -1,6 +1,7 @@
 """ProPresenter auto-tracking for Service Mate.
 
-Polls ProPresenter every couple of seconds and updates the runsheet state's
+Polls ProPresenter every 0.5 s (every 2 s while it isn't answering) and
+updates the runsheet state's
 `current_index` / `pp_remaining_seconds` so the clocks follow whatever the
 operator is actually doing in PP. Three signals, in priority order:
 
@@ -22,8 +23,8 @@ operator is actually doing in PP. Three signals, in priority order:
        * Stickiness. Even with UUID matching we require the same target
          section to come back from two consecutive polls before we commit
          to advancing — that way a single bad poll right after a click
-         can't drag the clocks to the wrong section. Adds up to one
-         poll-interval (~2 s) of lag, which is acceptable for service ops.
+         can't drag the clocks to the wrong section. Adds one poll
+         interval (0.5 s) of lag.
   2. Running [RB] timer. Provides accurate remaining time when one of our
      timers is actually running.
   3. Active presentation name match. Fallback for non-playlist usage —
@@ -57,6 +58,10 @@ _PP_PLAYLIST_CACHE_TTL_S = 60
 # or off-by-one indices before its internal state settles).
 SECTION_ADVANCE_MIN_POLLS = 2
 _PENDING_SECTION_TARGET: dict = {"index": None, "count": 0}
+
+# Whether PP answered the last /v1/playlist/active request at all. The
+# daemon polls every tick while it does and backs off while it doesn't.
+PP_REACHABLE = {"ok": True}
 
 # Strip header decorations the create-playlist code adds, so we can match the
 # header name back to the original runsheet item title.
@@ -145,6 +150,12 @@ def _pp_active_section_probe(state: dict, base: str) -> dict:
     result = {"section_idx": None, "has_active_playlist": False}
     try:
         r = req.get(f"{base}/v1/playlist/active", timeout=2)
+    except Exception:
+        PP_REACHABLE["ok"] = False
+        log.debug("PP /v1/playlist/active unreachable", exc_info=True)
+        return result
+    PP_REACHABLE["ok"] = True
+    try:
         if not r.ok:
             return result
         data = r.json() or {}
@@ -238,8 +249,11 @@ def _maybe_advance_from_pp(state: dict) -> dict:
         from ..propresenter.net import pp_base
         base = pp_base(host, port)
     except Exception:
-        # Bad saved host: auto-track just has nothing to track this
-        # tick. The daemon must never die over a settings value.
+        # Bad saved host, or a name that won't resolve (its Mac is off):
+        # auto-track has nothing to track this tick. Counts as PP not
+        # answering, so the daemon backs off instead of paying a slow
+        # failed lookup on every tick. It must never die over a setting.
+        PP_REACHABLE["ok"] = False
         return state
     items = state.get("items") or []
     if not items:

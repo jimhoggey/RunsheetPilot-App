@@ -17,12 +17,12 @@ import threading
 import time
 
 from .constants import (
-    SM_LOOP_INTERVAL_S, SM_PP_POLL_EVERY_N_TICKS, SM_VERBOSITIES,
-    SM_VERBOSITY_DEFAULT,
+    SM_LOOP_INTERVAL_S, SM_PP_POLL_EVERY_N_TICKS,
+    SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS, SM_VERBOSITIES, SM_VERBOSITY_DEFAULT,
 )
 from .geekmagic import _probe_custom, _push_state, _push_to_clock
 from .protocol import EndsAtHolder, build_state_payload
-from .pp_track import _maybe_advance_from_pp
+from .pp_track import PP_REACHABLE, _maybe_advance_from_pp
 from .render import _render_cue, _render_standby
 from .state import _read_clocks_config, _read_runsheet_state, _write_runsheet_state
 
@@ -66,9 +66,9 @@ def _state_fingerprint(payload: dict) -> str:
 
 
 def _clocks_loop_tick(tick: int) -> None:
-    """One pass of the background loop. `tick` increments each call; we use it
-    to throttle ProPresenter polling so the loop can render at 500 ms while PP
-    only gets hit every SM_PP_POLL_EVERY_N_TICKS ticks."""
+    """One pass of the background loop. `tick` increments each call; PP is
+    asked what's live every SM_PP_POLL_EVERY_N_TICKS ticks, or every
+    SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS while it isn't answering."""
     state = _read_runsheet_state() or {}
     cfg = _read_clocks_config()
     if not cfg.get("enabled") or not cfg.get("clocks"):
@@ -85,12 +85,19 @@ def _clocks_loop_tick(tick: int) -> None:
     # In both cases we want the clocks showing a clean waiting page rather
     # than a stale cue or going dark.
     standby = bool(state.get("standby")) or not state.get("items")
-    if not standby and tick % SM_PP_POLL_EVERY_N_TICKS == 0:
+    every = (SM_PP_POLL_EVERY_N_TICKS if PP_REACHABLE["ok"]
+             else SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS)
+    if not standby and tick % every == 0:
+        before = json.dumps(state, sort_keys=True, default=str)
         state = _maybe_advance_from_pp(state)
-        try:
-            _write_runsheet_state(state)
-        except Exception:
-            log.exception("Failed to persist runsheet state mid-loop")
+        # Only when PP moved something: polling every tick would otherwise
+        # rewrite the file twice a second, each time risking overwriting a
+        # cue the operator clicked in between.
+        if json.dumps(state, sort_keys=True, default=str) != before:
+            try:
+                _write_runsheet_state(state)
+            except Exception:
+                log.exception("Failed to persist runsheet state mid-loop")
     # Resolved ONCE per tick, before the per-clock loop, so every clock in this
     # pass is given the same deadline.
     ends_at = None if standby else _ENDS_AT.resolve(state, _dt.datetime.now())
@@ -153,8 +160,9 @@ def _clocks_loop_tick(tick: int) -> None:
 
 
 def _clocks_loop() -> None:
-    log.info(f"Service Mate loop started "
-             f"(tick={SM_LOOP_INTERVAL_S}s, pp-poll every {SM_PP_POLL_EVERY_N_TICKS} ticks)")
+    log.info(f"Service Mate loop started (tick={SM_LOOP_INTERVAL_S}s, "
+             f"pp-poll every {SM_PP_POLL_EVERY_N_TICKS} tick(s), every "
+             f"{SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS} while PP is unreachable)")
     tick = 0
     while True:
         try:
