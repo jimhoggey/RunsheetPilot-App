@@ -28,6 +28,15 @@ if str(ROOT) not in sys.path:
 import propresenter_app as ppa  # noqa: E402  — path tweak above is intentional
 
 
+@pytest.fixture(autouse=True)
+def _no_native_window(monkeypatch):
+    """server._run_native_window hands its webview module to native.py; a
+    test's fake must not leak into the next test."""
+    from propresenterrunsheet import native
+    monkeypatch.setattr(native, "webview", None)
+    monkeypatch.setattr(native, "_lighting", None)
+
+
 @pytest.fixture
 def app_module():
     """The imported `propresenter_app` module."""

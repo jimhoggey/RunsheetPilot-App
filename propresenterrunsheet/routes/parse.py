@@ -984,6 +984,10 @@ def _upload_and_parse(stop: threading.Event):
                 log.info(f"Item type clamped: {log_safe(raw_type, 60)!r} -> "
                          f"{it['type']!r} ({log_safe(it.get('title'), 40)!r})")
             _ensure_item_cues(it)
+            # The lighting the runsheet states (service_mate/lighting.py):
+            # one short line, or "" — never a list or an object.
+            lighting = it.get("lighting")
+            it["lighting"] = " ".join(lighting.split())[:60] if isinstance(lighting, str) else ""
             raw_match = it.get("library_match")
             # The model sometimes returns the full dict, sometimes a bare
             # string, sometimes null, sometimes the literal "null" str.

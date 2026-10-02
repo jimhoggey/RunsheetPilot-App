@@ -422,6 +422,11 @@
           <input type="checkbox" id="sm-autotrack" onchange="smSaveAutoTrack()">
           <span style="font-size:0.85rem">Auto-track ProPresenter</span>
         </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0"
+               title="A small always-on-top card with the runsheet's next lighting change. The Lights clock shows the same.">
+          <input type="checkbox" id="sm-lighting" onchange="smToggleLightingWindow()">
+          <span style="font-size:0.85rem">Lighting heads-up window</span>
+        </label>
         <label style="display:flex;align-items:center;gap:8px;margin:0">
           <span style="font-size:0.85rem">Brightness</span>
           <input type="range" id="sm-brightness" min="1" max="100" value="70"

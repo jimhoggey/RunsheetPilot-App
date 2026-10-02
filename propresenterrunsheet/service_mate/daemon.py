@@ -22,6 +22,7 @@ from .constants import (
 )
 from .geekmagic import _probe_custom, _push_state, _push_to_clock
 from .protocol import EndsAtHolder, build_state_payload
+from .lighting import lights_view
 from .pp_track import PP_REACHABLE, _maybe_advance_from_pp
 from .render import _render_cue, _render_standby
 from .state import _read_clocks_config, _read_runsheet_state, _write_runsheet_state
@@ -71,7 +72,9 @@ def _clocks_loop_tick(tick: int) -> None:
     SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS while it isn't answering."""
     state = _read_runsheet_state() or {}
     cfg = _read_clocks_config()
-    if not cfg.get("enabled") or not cfg.get("clocks"):
+    # The floating lighting window needs ProPresenter followed too, so with
+    # it on the loop runs even where no clocks are set up.
+    if not cfg.get("enabled") or not (cfg.get("clocks") or cfg.get("lighting_window")):
         return
     # Paid add-on gate. Stamp the trial on first active tick (covers existing
     # users who already had the switch on before this feature shipped — they
@@ -104,9 +107,16 @@ def _clocks_loop_tick(tick: int) -> None:
     if standby:
         _ENDS_AT.reset()
 
-    for clock in cfg["clocks"]:
+    for clock in cfg.get("clocks") or []:
         ip = (clock.get("ip") or "").strip()
         role = clock.get("role") or clock.get("id") or "screen"
+        # The lights station shows the lighting heads-up (where the lights
+        # are now, the next change) when the runsheet states any lighting.
+        try:
+            view = lights_view(state) if role == "lights" else state
+        except Exception:
+            log.exception("lights view failed; showing the plain cues")
+            view = state
         cid = clock.get("id") or role
         verbosity = (clock.get("verbosity") or SM_VERBOSITY_DEFAULT).lower()
         if verbosity not in SM_VERBOSITIES:
@@ -121,7 +131,7 @@ def _clocks_loop_tick(tick: int) -> None:
             layout = "standby" if standby else verbosity
             try:
                 payload = build_state_payload(
-                    role, layout, state, ends_at,
+                    role, layout, view, ends_at,
                     # Stamped HERE, immediately before this clock's POST, and
                     # deliberately not once above the loop. A single `now`
                     # reused across sequential pushes gives the last clock an
@@ -145,7 +155,7 @@ def _clocks_loop_tick(tick: int) -> None:
         # it is what every clock not yet reflashed depends on.
         try:
             jpg = (_render_standby(role) if standby
-                   else _render_cue(role, state, verbosity=verbosity))
+                   else _render_cue(role, view, verbosity=verbosity))
         except Exception:
             log.exception(f"render failed for role={role}")
             continue

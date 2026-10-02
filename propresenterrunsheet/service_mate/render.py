@@ -204,7 +204,7 @@ def _render_cue_compact(role: str, state: dict) -> bytes:
     f_next  = _sm_font(f["next"])
     f_cue   = _sm_font(f["cue"])
 
-    type_label = (cur.get("type") if cur else "").upper().replace("_", " ") or "—"
+    type_label = ((cur or {}).get("type") or "").upper().replace("_", " ") or "—"
     _draw_role_strip(draw, role, accent, type_label, height=28, font=f_label)
 
     cur_title = (cur.get("title") if cur else "(no runsheet)") or "(empty)"
@@ -253,7 +253,7 @@ def _render_cue_detailed(role: str, state: dict) -> bytes:
     f_then  = _sm_font(f["then"])
     f_cue   = _sm_font(f["cue"])
 
-    type_label = (cur.get("type") if cur else "").upper().replace("_", " ") or "—"
+    type_label = ((cur or {}).get("type") or "").upper().replace("_", " ") or "—"
     _draw_role_strip(draw, role, accent, type_label, height=22, font=f_label)
 
     # Title + notes — leave 12 px each side so glyphs don't bleed past the

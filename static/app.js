@@ -2906,6 +2906,7 @@ async function smInit() {
     document.getElementById('sm-enabled').checked = !!cfg.enabled;
     document.getElementById('sm-brightness').value = cfg.brightness || 70;
     document.getElementById('sm-brightness-val').textContent = cfg.brightness || 70;
+    if (cfg.lighting_window) _restoreLightingWindow();
     // Sync the master-switch visual state + body visibility with the saved
     // enabled flag. Card starts COLLAPSED for a clean default look — the
     // operator clicks the chevron to expand once they enable it.
@@ -3087,7 +3088,65 @@ async function smTest(id) {
   }
 }
 
+// ─── Lighting heads-up window ─────────────────────────────────────────────
+// A small always-on-top card with the runsheet's next lighting change
+// (service_mate/lighting.py; the Lights clock shows the same). Inside the
+// app's own window the server opens it natively; in a browser it's a popup,
+// opened inside the click itself so it isn't blocked.
+let _lightingPopup = null;
+
+function _postLightingWindow(on, popup) {
+  return fetch('/api/lighting/window', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({on, popup}),
+  }).then(async r => ({ok: r.ok, ...(await r.json())}));
+}
+
+async function smToggleLightingWindow() {
+  const box = document.getElementById('sm-lighting');
+  const on = box.checked;
+  // `popup` tells the server this page opened its own, so it doesn't open a
+  // native one too.
+  const popup = on && !window.pywebview;
+  if (popup) _lightingPopup = window.open('/lighting', 'rp-lighting', 'width=380,height=180');
+  if (!on && _lightingPopup) { _lightingPopup.close(); _lightingPopup = null; }
+  try {
+    const res = await _postLightingWindow(on, popup);
+    if (!res.ok) {
+      box.checked = false;
+      if (_lightingPopup) { _lightingPopup.close(); _lightingPopup = null; }
+      setStatus(escapeHtml(res.error || 'Could not open the lighting window.'), 'var(--org)');
+    }
+  } catch (e) { box.checked = !on; }
+}
+
+// Left on last time: reopen it — natively, inside the app. A browser can't
+// open a popup without a click, so there it switches off instead. Asks the
+// server rather than window.pywebview, which pywebview adds after load.
+async function _restoreLightingWindow() {
+  const box = document.getElementById('sm-lighting');
+  box.checked = true;
+  const res = await _postLightingWindow(true, false).catch(() => ({ok: false}));
+  if (!res.ok || !res.native) {
+    box.checked = false;
+    _postLightingWindow(false, false).catch(() => {});
+  }
+}
+
+// Closed with its own button: the switch follows, within one poll.
+async function _syncLightingToggle() {
+  const box = document.getElementById('sm-lighting');
+  if (!box || !box.checked) return;
+  if (_lightingPopup) {
+    if (_lightingPopup.closed) { _lightingPopup = null; box.checked = false; smToggleLightingWindow(); }
+    return;
+  }
+  const h = await fetch('/api/lighting').then(r => r.json()).catch(() => null);
+  if (h && !h.on) box.checked = false;
+}
+
 async function smRefreshState() {
+  _syncLightingToggle();
   try {
     const state = await fetch('/api/runsheet/state').then(r => r.json());
     const items = state.items || [];
