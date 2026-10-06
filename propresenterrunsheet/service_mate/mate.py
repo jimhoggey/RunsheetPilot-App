@@ -18,13 +18,19 @@ from .state import _cues_for, _next_visible_item
 # here yet, though build_state_payload already serves it.
 STATIONS = ("screen", "lights")
 SHOW = ("timing", "notes", "next_cues", "later")
-_MAX_DRIFT_MIN = 60     # further out than this, the segment wasn't started live
+# Further out than these, the segment wasn't started live: a runsheet
+# loaded the day before (behind), or before the service began (ahead —
+# loading it sets the first segment's start to the moment of loading).
+_MAX_BEHIND_MIN = 60
+_MAX_AHEAD_MIN = 15
 _LATER = 3              # segments listed after the next one
 # (height, minimum height) of the native window per desk, measured at 360
-# wide with the title bar: the default view fits, and the minimum still
-# shows the essentials — with Lights, the NEXT card. Both stations: the rest.
-_WINDOW = {("screen",): (180, 150), ("lights",): (240, 170)}
-_WINDOW_BOTH = (320, 240)
+# wide with Windows' title bar (taller than macOS's): the default view fits
+# whole, undo included, and the minimum still shows the essentials — with
+# Lights, the NEXT card. mate.html drops sections that don't fit, so these
+# needn't match its content to the pixel. Both stations: the rest.
+_WINDOW = {("screen",): (190, 150), ("lights",): (270, 200)}
+_WINDOW_BOTH = (330, 270)
 
 
 def window_size(stations: list[str]) -> tuple[int, int]:
@@ -73,7 +79,7 @@ def _drift_min(start: str, planned: int, started_at: str | None,
     midnight = _dt.datetime.combine(now.date(), _dt.time())
     late_s = min(((began - midnight).total_seconds() - m * 60 for m in readings), key=abs)
     drift = int(late_s / 60)                    # toward zero: within a minute is on time
-    return drift if abs(drift) <= _MAX_DRIFT_MIN else None
+    return drift if -_MAX_AHEAD_MIN <= drift <= _MAX_BEHIND_MIN else None
 
 
 def segment_timing(item: dict, started_at: str | None, now: _dt.datetime) -> dict | None:

@@ -3128,7 +3128,7 @@ async function smToggleMate() {
   const popup = choice.on && !window.pywebview;
   if (popup) {
     // service_mate/mate.py window_size: the same fit as the native window.
-    const height = choice.stations.length > 1 ? 320 : choice.stations[0] === 'lights' ? 240 : 180;
+    const height = choice.stations.length > 1 ? 330 : choice.stations[0] === 'lights' ? 270 : 190;
     _matePopup = window.open('/mate', 'rp-mate', `width=360,height=${height}`);
   }
   if (!choice.on) _closeMatePopup();

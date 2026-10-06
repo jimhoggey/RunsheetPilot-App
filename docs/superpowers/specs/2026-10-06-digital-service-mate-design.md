@@ -101,7 +101,10 @@ real Sundays:
 
 - **Timing** compares when the segment actually started (`current_started_at`,
   set as ProPresenter moves) with the start time the runsheet gave it.
-  Within a minute it reads "on time". With no start time on the segment,
+  Within a minute it reads "on time". More than 15 minutes ahead or 60
+  behind isn't shown. That isn't a live start: loading a runsheet sets the
+  first segment's start to the moment of loading, often well before the
+  service, or the day before. With no start time on the segment,
   it shows only the length. With neither, it doesn't appear.
 - A ticked section with nothing to say for this segment doesn't appear, the
   same rule as everything else.
@@ -198,15 +201,20 @@ drift from the clocks.
 
 - `open_lighting_window` / `close_lighting_window` become `open_mate_window` /
   `close_mate_window`, with the title "Service Mate".
-- Width 360. Heights were measured at 360 wide, title bar included, so the
-  default view fits (`mate.window_size`):
-  - Screens alone: 180, minimum 150.
-  - Lights alone: 240, minimum 170.
-  - Both: 320, minimum 240.
+- Width 360. Heights were measured at 360 wide with Windows' title bar, which
+  is taller than macOS's, so the default view fits whole, undo included
+  (`mate.window_size`):
+  - Screens alone: 190, minimum 150.
+  - Lights alone: 270, minimum 200.
+  - Both: 330, minimum 270.
 
   Each minimum still shows the essentials; with Lights, that's the NEXT
   card. Ticking or unticking a station while the window is open refits its
   height and keeps the operator's width. A Show box never resizes it.
+- When the window is too short for everything, the page measures what fits
+  and drops sections in order, rather than using fixed pixel cut-offs:
+  1. THEN and Coming later go first.
+  2. Then Up next and Timing.
 - It still closes with the main window, keeps its on/off setting, and opens as
   a popup in a plain browser.
 
