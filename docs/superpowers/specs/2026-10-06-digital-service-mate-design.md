@@ -87,6 +87,12 @@ Where it differs from the clock, it differs only to stay uncluttered:
 - **Readable in a dark booth.** The segment is the one bright anchor, with
   its countdown. Secondary text is dim but never faint: the operator reads
   this at a glance, mid-service, from a seated distance.
+- **A− / A+ on the card** size the whole view, through one root font size
+  (every size on the page is in `rem`). Five steps, 1× to 1.75×, saved per
+  desk as `mate.scale`. The window grows and shrinks with the text rather
+  than dropping sections to fit, so A+ always shows *more*, never less.
+  Its own route, `POST /api/mate/scale`, so sizing the text can never be
+  taken for a request to open a window.
 - **Small windows:** a short window drops THEN first, then UP NEXT.
 
 ### Optional sections: try them, keep what earns its place
@@ -141,8 +147,9 @@ Show: ☑ Timing ☐ Tech notes ☐ Up next in full ☐ Coming later
 
 - The clocks table, brightness and the lighting guide row are unchanged.
 - Saved in `clocks.json` as
-  `"mate": {"on": bool, "stations": ["screen", "lights"], "show": ["timing"]}`.
-  Unknown names in `stations` or `show` are ignored.
+  `"mate": {"on": bool, "stations": ["screen", "lights"], "show": ["timing"], "scale": 1}`.
+  Unknown names in `stations` or `show` are ignored, and a `scale` the card
+  can't have asked for reads as normal size.
 - A new setup defaults to Screens ticked and shows Timing.
 - The "Show" row appears only while the switch is on.
 - **Carrying over:** when the config is read, `lighting_window: true` with no

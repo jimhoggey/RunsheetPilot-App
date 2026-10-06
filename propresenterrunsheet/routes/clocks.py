@@ -7,7 +7,7 @@ import datetime as _dt
 
 from flask import Blueprint, Response, jsonify, redirect, render_template, request
 
-from ..native import close_mate_window, open_mate_window
+from ..native import close_mate_window, open_mate_window, size_mate_window
 from ..parsing.ai import LIGHTING_GUIDE_MAX_CHARS
 from ..service_mate.lighting import current_index, done_for, heads_up, lights_view
 from ..service_mate.mate import mate_config, mate_view, window_size
@@ -274,7 +274,28 @@ def api_mate():
                      _dt.datetime.now())
     auto = state.get("auto_track")
     tracking = isinstance(auto, dict) and bool(auto.get("enabled"))
-    return jsonify({**view, "pp_ok": PP_REACHABLE["ok"] or not tracking})
+    return jsonify({**view, "scale": desk["scale"],
+                    "pp_ok": PP_REACHABLE["ok"] or not tracking})
+
+
+@bp.route("/api/mate/scale", methods=["POST"])
+def api_mate_scale():
+    """A− / A+ on the card. Its own route, not part of the window save: the
+    card must be able to size its own text without the server taking that
+    for a request to open a window."""
+    cfg = _read_clocks_config()
+    blocked = _check_sm_enabled(cfg)
+    if blocked:
+        return blocked
+    body = request.get_json(silent=True)
+    scale = (body or {}).get("scale") if isinstance(body, dict) else None
+    desk = mate_config({"mate": {**mate_config(cfg), "scale": scale}})
+    cfg["mate"] = desk
+    cfg.pop("lighting_window", None)
+    _write_clocks_config(cfg)
+    width, height, _floor = window_size(desk["stations"], desk["scale"])
+    size_mate_window(width, height)
+    return jsonify({"ok": True, "mate": desk})
 
 
 @bp.route("/api/lighting/done", methods=["POST"])
@@ -373,5 +394,6 @@ def api_mate_window():
     elif body.get("popup"):
         native = False
     else:
-        native = open_mate_window(request.host_url + "mate", *window_size(desk["stations"]))
+        native = open_mate_window(request.host_url + "mate",
+                                  *window_size(desk["stations"], desk["scale"]))
     return jsonify({"ok": True, "on": on, "native": native, "mate": desk})

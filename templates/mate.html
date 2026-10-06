@@ -17,8 +17,11 @@
   :root { --bg: #111118; --text: #f5f5fa; --dim: #cdcdda; --faint: #adadc0; --line: #353545;
           --screen: rgb(125, 177, 255); --lights: rgb(252, 188, 70); --over: #ff9a9a; }
   * { box-sizing: border-box; }
+  /* Every size below is in rem, so A− / A+ scales the whole view by moving
+     this one number (service_mate/mate.py SCALES). */
+  html { font-size: calc(16px * var(--scale, 1)); }
   body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
-         font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         font: .875rem/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          padding: 8px 14px 10px; border-top: 3px solid var(--accent, var(--screen));
          overflow-y: auto; }
   [hidden] { display: none !important; }
@@ -35,7 +38,15 @@
   [data-role="lights"] .station-label { color: var(--lights); }
   .station-label { font-weight: 700; }
   #msg { margin: 0; padding-top: 18px; text-align: center; color: var(--dim); font-size: 1rem; }
-  .seg { display: flex; align-items: baseline; gap: 10px; }
+  .seg { display: flex; align-items: baseline; gap: 8px; }
+  /* Text size, adjusted from the card itself — dim until wanted. */
+  #size { display: flex; gap: 3px; align-self: center; }
+  #size button { background: none; color: var(--faint); font: inherit; font-size: .72rem;
+                 line-height: 1; border: 1px solid var(--line); border-radius: 5px;
+                 width: 1.6rem; height: 1.45rem; cursor: pointer; padding: 0; }
+  #size button:hover:enabled, #size button:focus-visible { color: var(--text); border-color: var(--faint); }
+  #size button:disabled { opacity: .35; cursor: default; }
+  #size button:focus-visible { outline: 2px solid var(--lights); outline-offset: 1px; }
   #seg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                font-size: 1.05rem; font-weight: 600; }
   #countdown { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.15rem; }
@@ -53,7 +64,7 @@
   #next:disabled { cursor: default; border-color: transparent; padding-left: 0; }
   #next:focus-visible, #undo:focus-visible, #notes:focus-visible { outline: 2px solid var(--lights); outline-offset: 2px; }
   #next-label { color: var(--lights); font-weight: 700; }
-  #next-level { font-size: clamp(1.3rem, 7vw, 2rem); font-weight: 700; line-height: 1.1; }
+  #next-level { font-size: 1.8rem; font-weight: 700; line-height: 1.1; }
   #next-when { font-size: .88rem; }
   #tick { font-size: .72rem; color: var(--dim); border: 1px solid var(--faint); border-radius: 999px; padding: 2px 8px; }
   #next:disabled #tick { display: none; }
@@ -76,7 +87,14 @@
 <body>
   <p id="msg" hidden></p>
   <main id="live" hidden>
-    <div class="seg"><span id="seg-title"></span><span id="countdown" hidden></span></div>
+    <div class="seg">
+      <span id="seg-title"></span>
+      <span id="countdown" hidden></span>
+      <span id="size">
+        <button id="smaller" type="button" aria-label="Smaller text">A−</button>
+        <button id="bigger" type="button" aria-label="Larger text">A+</button>
+      </span>
+    </div>
     <div id="timing" class="muted" hidden></div>
 
     <section id="sec-screen" data-role="screen" hidden>
@@ -118,8 +136,9 @@
 <script>
   const el = id => document.getElementById(id);
   const NAMES = {screen: 'Screens', lights: 'Lights'};
+  const SCALES = [1, 1.15, 1.3, 1.5, 1.75];      // service_mate/mate.py SCALES
   const PLAIN = {off: 'Service Mate is off.', standby: 'Standby', empty: 'No runsheet loaded'};
-  let shown = null, last = null, busy = false, deadline = null;
+  let shown = null, last = null, busy = false, deadline = null, scale = 1, sizing = false;
 
   const moment = s => s.here ? s.when : [s.section && 'at ' + s.section, s.when].filter(Boolean).join(' · ');
 
@@ -160,6 +179,28 @@
     c.hidden = false;
   }
 
+  // A− / A+ scale the whole view by one root font-size. Applied here at
+  // once and saved after, so the card never waits on the network to resize.
+  function applyScale(v) {
+    scale = SCALES.includes(v) ? v : 1;
+    document.documentElement.style.setProperty('--scale', scale);
+    el('smaller').disabled = scale === SCALES[0];
+    el('bigger').disabled = scale === SCALES[SCALES.length - 1];
+  }
+
+  async function setScale(step) {
+    const next = SCALES[SCALES.indexOf(scale) + step];
+    if (next === undefined || sizing) return;
+    sizing = true;
+    applyScale(next);
+    fit();
+    try {
+      await fetch('/api/mate/scale', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                      body: JSON.stringify({scale: next})});
+    } catch (_) { /* the size holds for this run either way */ }
+    sizing = false;
+  }
+
   // Measured, not guessed: what fits depends on the stations, the sections
   // ticked, the cues this segment has and the platform's title bar.
   function fit() {
@@ -171,6 +212,7 @@
 
   function draw(h) {
     const live = h.state === 'live';
+    if (!sizing) applyScale(h.scale);
     el('msg').hidden = live;
     el('live').hidden = !live;
     el('pp').hidden = h.pp_ok !== false || !live;
@@ -301,7 +343,10 @@
     b.setAttribute('aria-expanded', String(b.getAttribute('aria-expanded') !== 'true'));
     fit();
   });
+  el('smaller').addEventListener('click', () => setScale(-1));
+  el('bigger').addEventListener('click', () => setScale(1));
   addEventListener('resize', fit);
+  applyScale(1);
   refresh();
   setInterval(refresh, 1000);
   setInterval(tickCountdown, 250);

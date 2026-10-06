@@ -35,6 +35,20 @@ def _state(**kw):
 # ── Settings: which stations sit at this desk, which extras show ─────────────
 
 @pytest.mark.parametrize("cfg, want", [
+    ({"mate": {"on": True, "scale": 1.3}},
+     {"on": True, "stations": ["screen"], "show": ["timing"], "scale": 1.3}),
+    # A size the card can't have asked for: back to normal rather than a
+    # window of 4pt text nobody can read their way out of.
+    ({"mate": {"on": True, "scale": 9}},
+     {"on": True, "stations": ["screen"], "show": ["timing"], "scale": 1}),
+    ({"mate": {"on": True, "scale": "big"}},
+     {"on": True, "stations": ["screen"], "show": ["timing"], "scale": 1}),
+])
+def test_the_text_size_is_read_safely(cfg, want):
+    assert mate_config(cfg) == want
+
+
+@pytest.mark.parametrize("cfg, want", [
     ({}, {"on": False, "stations": ["screen"], "show": ["timing"]}),
     # The lighting window, switched on before the digital Service Mate existed.
     ({"lighting_window": True}, {"on": True, "stations": ["lights"], "show": ["timing"]}),
@@ -49,7 +63,7 @@ def _state(**kw):
     ({"mate": "on"}, {"on": False, "stations": ["screen"], "show": ["timing"]}),
 ])
 def test_the_desk_settings_are_read_safely(cfg, want):
-    assert mate_config(cfg) == want
+    assert mate_config(cfg) == {**want, "scale": 1}
 
 
 # ── Timing: planned start and length, and how far ahead or behind ────────────
@@ -225,6 +239,21 @@ def test_it_says_when_propresenter_is_not_answering(desk, monkeypatch, reachable
     assert desk.get("/api/mate").get_json()["pp_ok"] is ok
 
 
+def test_the_card_sizes_its_own_text_up_and_down(desk):
+    """A− / A+ on the card: saved for next time, and nothing but the size."""
+    assert desk.get("/api/mate").get_json()["scale"] == 1
+    r = desk.post("/api/mate/scale", json={"scale": 1.3}).get_json()
+    assert r["mate"]["scale"] == 1.3
+    view = desk.get("/api/mate").get_json()
+    assert view["scale"] == 1.3
+    assert view["stations"]["screen"]["title"] == "Worship"      # nothing else moved
+    assert desk.post("/api/mate/scale", json={"scale": 99}).get_json()["mate"]["scale"] == 1
+
+
+def test_sizing_the_card_is_part_of_service_mate(client):
+    assert client.post("/api/mate/scale", json={"scale": 1.3}).status_code == 409
+
+
 def test_the_old_lighting_page_leads_to_the_mate(client):
     r = client.get("/lighting")
     assert r.status_code == 302 and r.headers["Location"].endswith("/mate")
@@ -299,7 +328,25 @@ def test_it_is_as_tall_as_the_stations_it_shows(sm_enabled, fake_webview, statio
     — with Lights, the NEXT card."""
     sm_enabled.post("/api/mate/window", json={"on": True, "stations": stations})
     kw = fake_webview[0][2]
-    assert (kw["height"], kw["min_size"]) == (height, (280, min_height))
+    assert (kw["width"], kw["height"], kw["min_size"]) == (360, height, (360, min_height))
+
+
+def test_sizing_the_text_up_grows_the_window_with_it(sm_enabled, fake_webview):
+    """A+ makes the whole view bigger — the window follows, instead of the
+    card dropping sections to fit the old one."""
+    from propresenterrunsheet import native
+    sm_enabled.post("/api/mate/window", json={"on": True, "stations": ["screen", "lights"]})
+    sm_enabled.post("/api/mate/scale", json={"scale": 1.5})
+    assert native._mate.resized == (540, 495)                 # 360x330, half as big again
+    sm_enabled.post("/api/mate/scale", json={"scale": 1})
+    assert native._mate.resized == (360, 330)
+
+
+def test_sizing_the_text_with_no_native_window_is_harmless(sm_enabled, fake_webview):
+    """In a browser popup there is no window to resize; the size still saves."""
+    sm_enabled.post("/api/mate/window", json={"on": True, "popup": True})
+    r = sm_enabled.post("/api/mate/scale", json={"scale": 1.3})
+    assert r.status_code == 200 and r.get_json()["mate"]["scale"] == 1.3
 
 
 def test_ticking_a_station_while_open_keeps_the_one_window_and_fits_it(sm_enabled, fake_webview):
@@ -308,7 +355,7 @@ def test_ticking_a_station_while_open_keeps_the_one_window_and_fits_it(sm_enable
     r = sm_enabled.post("/api/mate/window", json={"on": True, "stations": ["lights", "bogus"],
                                                   "show": ["notes"]}).get_json()
     assert len(fake_webview) == 1
-    assert r["mate"] == {"on": True, "stations": ["lights"], "show": ["notes"]}
+    assert r["mate"] == {"on": True, "stations": ["lights"], "show": ["notes"], "scale": 1}
     assert native._mate.resized == (400, 270)            # the operator's width kept
 
 

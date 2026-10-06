@@ -18,6 +18,9 @@ from .state import _cues_for, _next_visible_item
 # here yet, though build_state_payload already serves it.
 STATIONS = ("screen", "lights")
 SHOW = ("timing", "notes", "next_cues", "later")
+# What A− / A+ on the card step through. Only these: a size the card can't
+# have asked for means text nobody can read their way back out of.
+SCALES = (1, 1.15, 1.3, 1.5, 1.75)
 # Further out than these, the segment wasn't started live: a runsheet
 # loaded the day before (behind), or before the service began (ahead —
 # loading it sets the first segment's start to the moment of loading).
@@ -29,17 +32,26 @@ _LATER = 3              # segments listed after the next one
 # whole, undo included, and the minimum still shows the essentials — with
 # Lights, the NEXT card. mate.html drops sections that don't fit, so these
 # needn't match its content to the pixel. Both stations: the rest.
+_WINDOW_W = 360
 _WINDOW = {("screen",): (190, 150), ("lights",): (270, 200)}
 _WINDOW_BOTH = (330, 270)
 
 
-def window_size(stations: list[str]) -> tuple[int, int]:
-    """(height, minimum height) for the window showing these stations."""
-    return _WINDOW.get(tuple(stations), _WINDOW_BOTH)
+def window_size(stations: list[str], scale: float = 1) -> tuple[int, int, int]:
+    """(width, height, minimum height) for the window showing these stations
+    at this text size. A− / A+ size the whole view, so the window grows with
+    it rather than dropping sections to fit."""
+    height, floor = _WINDOW.get(tuple(stations), _WINDOW_BOTH)
+    return round(_WINDOW_W * scale), round(height * scale), round(floor * scale)
 
 
 def _defaults() -> dict:
-    return {"on": False, "stations": ["screen"], "show": ["timing"]}
+    return {"on": False, "stations": ["screen"], "show": ["timing"], "scale": 1}
+
+
+def _scale(value: object) -> float:
+    """One of SCALES, else normal size."""
+    return value if value in SCALES and not isinstance(value, bool) else 1
 
 
 def _pick(value: object, allowed: tuple[str, ...], default: list[str]) -> list[str]:
@@ -62,7 +74,8 @@ def mate_config(cfg: dict) -> dict:
     return {"on": bool(mate.get("on")),
             "stations": _pick(mate.get("stations"), STATIONS, default["stations"])
                         or default["stations"],
-            "show": _pick(mate.get("show"), SHOW, default["show"])}
+            "show": _pick(mate.get("show"), SHOW, default["show"]),
+            "scale": _scale(mate.get("scale", 1))}
 
 
 def _drift_min(start: str, planned: int, started_at: str | None,
