@@ -95,6 +95,12 @@ class EndsAtHolder:
         self._key = None
         self._ends_at = None
 
+    def peek(self, state):
+        """The deadline the loop is holding for this state's current item,
+        or None. Read-only, unlike `resolve`: the on-screen Service Mate
+        shows the clocks' deadline without ever moving it."""
+        return self._ends_at if self._key == self._item_key(state) else None
+
     def resolve(self, state, now):
         """The deadline to send, or None when there is no countdown."""
         from .render import _compute_remaining_seconds
