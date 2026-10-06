@@ -29,13 +29,14 @@ from ..parsing.models import (
     model_reading, next_usable_model, provider_failure, reasoning_for,
     resolve_model,
 )
+from ..parsing.lighting_plan import plan_lighting
 from ..parsing.openrouter import Stopped, chat
 from .flags import matching_enabled
 from ..parsing.ocr import (
     OCR_UNAVAILABLE_MESSAGE, OCRUnavailable, image_to_text, images_to_text,
 )
 from ..parsing.pdf import extract_pdf_text, pdf_text_or_images, render_pdf_pages
-from ..parsing.timed_rows import rescue_missing_rows, service_header
+from ..parsing.timed_rows import _norm_time, rescue_missing_rows, service_header
 from .. import stats
 from ..propresenter.library import fuzzy_match
 from ..propresenter.net import UnreachableHost, pp_base
@@ -283,6 +284,28 @@ def _clean_lighting_steps(raw) -> list:
     steps = [{"level": line(s.get("level"), 30), "when": line(s.get("when"), 60)}
              for s in (raw if isinstance(raw, list) else []) if isinstance(s, dict)]
     return [s for s in steps if s["level"]][:6]
+
+
+# A time of day at the very start of a note, e.g. "9:55 AM Tech Team: ...".
+# Bounded and unanchored at the end, so it can't backtrack on a long note.
+_LEADING_TIME = re.compile(r"^(\d{1,2}[:.]\d{2}\s?(?:[AaPp]\.?[Mm]\.?)?)\s*")
+
+
+def _clean_notes(raw, start_time) -> str:
+    """The item's notes without its own start time repeated at the front.
+
+    Runsheets commonly carry the time in the notes column too, so items
+    arrive with notes of just "9:55 AM", or with it stuck on the front of
+    the real note. Either way it says nothing `start_time` doesn't, and on
+    a small display it crowds out what does. Only a leading time that
+    MATCHES this item's own start time goes — anything else is a real note.
+    """
+    note = " ".join(str(raw or "").split())
+    want = _norm_time(str(start_time or ""))
+    head = _LEADING_TIME.match(note) if note and want else None
+    if head and _norm_time(head.group(1)) == want:
+        note = note[head.end():].strip()
+    return note
 
 
 def _pre_read_hint(upload_name: str, raw) -> str:
@@ -624,8 +647,7 @@ def _upload_and_parse(stop: threading.Event):
 
         lighting_guide = str(settings.get("lighting_guide") or "")
         prompt = assemble_prompt(prompt_template, runsheet_text,
-                                 library_names=section_names,
-                                 lighting_guide=lighting_guide)
+                                 library_names=section_names)
 
         # 6. Call OpenRouter
         # Specific 4xx responses become friendly JSON errors (HTTP 200 so the
@@ -649,8 +671,7 @@ def _upload_and_parse(stop: threading.Event):
                     {"type": "text", "text": assemble_prompt(
                         prompt_template, f"(The runsheet is the attached "
                         f"{'PDF' if mime == _PDF_MIME else 'picture'}.)",
-                        library_names=section_names,
-                        lighting_guide=lighting_guide)},
+                        library_names=section_names)},
                     {"type": "file", "file": {"filename": "runsheet.pdf",
                                               "file_data": url}}
                     if mime == _PDF_MIME else
@@ -1001,6 +1022,7 @@ def _upload_and_parse(stop: threading.Event):
             # up to six {level, when} steps of short single-line text.
             it["lighting_steps"] = _clean_lighting_steps(it.get("lighting_steps"))
             it.pop("lighting", None)
+            it["notes"] = _clean_notes(it.get("notes"), it.get("start_time"))
             raw_match = it.get("library_match")
             # The model sometimes returns the full dict, sometimes a bare
             # string, sometimes null, sometimes the literal "null" str.
@@ -1051,6 +1073,20 @@ def _upload_and_parse(stop: threading.Event):
                 resolved_object_hits += 1
             else:
                 it["library_match"] = None
+        # The church's lighting guide, mapped on by its own call — only over
+        # the items the runsheet left dark, so its own levels always stand
+        # (parsing/lighting_plan.py).
+        if lighting_guide:
+            try:
+                planned = plan_lighting(items, lighting_guide, or_key,
+                                        str(settings.get("or_model") or ""))
+                for i, steps in planned.items():
+                    items[i]["lighting_steps"] = steps[:6]
+                log.info(f"Lighting guide: filled {len(planned)} of "
+                         f"{sum(1 for it in items if not it.get('lighting_steps'))+len(planned)} "
+                         f"unlit items")
+            except Exception:
+                log.exception("Lighting guide pass failed; the runsheet's own lighting stands")
         repeats = share_repeated_links(items)
         if sections or objects:
             log.info(f"Template-context parse: "

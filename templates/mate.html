@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service Mate</title>
+<!-- The on-screen Service Mate (service_mate/mate.py): what this desk's
+     clocks would show — the segment and its countdown, each ticked
+     station's cues, the lighting card (NEXT, then THEN), up next — plus the
+     sections the operator ticks in settings. A section with nothing to say
+     isn't drawn. Clicking NEXT ticks a lighting change off; undo puts it
+     back. -->
+<style>
+  /* Read at a glance, in a dark booth: one bright anchor (the segment and
+     its countdown), each station a colour-barred block, and secondary text
+     dim but never faint. */
+  :root { --bg: #111118; --text: #f5f5fa; --dim: #cdcdda; --faint: #adadc0; --line: #353545;
+          --screen: rgb(125, 177, 255); --lights: rgb(252, 188, 70); --over: #ff9a9a; }
+  * { box-sizing: border-box; }
+  /* Every size below is in rem, so A− / A+ scales the whole view by moving
+     this one number (service_mate/mate.py SCALES). */
+  html { font-size: calc(16px * var(--scale, 1)); }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+         font: .875rem/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         padding: 8px 14px 10px; border-top: 3px solid var(--accent, var(--screen));
+         overflow-y: auto; }
+  [hidden] { display: none !important; }
+  main { display: flex; flex-direction: column; gap: 7px; }
+  ul { margin: 0; padding-left: 17px; }
+  li { margin: 1px 0; }
+  .muted { color: var(--dim); }
+  .label { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  /* Each station is its own block, marked down the side in its clock's colour. */
+  section[data-role] { border-left: 3px solid var(--line); padding-left: 9px; }
+  section[data-role="screen"] { border-left-color: var(--screen); }
+  section[data-role="lights"] { border-left-color: var(--lights); }
+  [data-role="screen"] .station-label { color: var(--screen); }
+  [data-role="lights"] .station-label { color: var(--lights); }
+  .station-label { font-weight: 700; }
+  #msg { margin: 0; padding-top: 18px; text-align: center; color: var(--dim); font-size: 1rem; }
+  .seg { display: flex; align-items: baseline; gap: 8px; }
+  /* Text size, adjusted from the card itself — dim until wanted. */
+  #size { display: flex; gap: 3px; align-self: center; }
+  #size button { background: none; color: var(--faint); font: inherit; font-size: .72rem;
+                 line-height: 1; border: 1px solid var(--line); border-radius: 5px;
+                 width: 1.6rem; height: 1.45rem; cursor: pointer; padding: 0; }
+  #size button:hover:enabled, #size button:focus-visible { color: var(--text); border-color: var(--faint); }
+  #size button:disabled { opacity: .35; cursor: default; }
+  #size button:focus-visible { outline: 2px solid var(--lights); outline-offset: 1px; }
+  #seg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+               font-size: 1.05rem; font-weight: 600; }
+  #countdown { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.15rem; }
+  #countdown.over { color: var(--over); }
+  #timing { font-size: .8rem; margin-top: -3px; }
+  #notes { all: unset; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+           overflow: hidden; font-size: .82rem; color: var(--dim); cursor: pointer; white-space: pre-line; }
+  #notes[aria-expanded="true"] { display: block; }
+  .head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+  #undo { margin-left: auto; background: none; color: var(--dim); font: inherit; font-size: .78rem;
+          border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; min-height: 26px; cursor: pointer; }
+  #next { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+          width: 100%; text-align: left; background: none; color: inherit; font: inherit;
+          border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  #next:disabled { cursor: default; border-color: transparent; padding-left: 0; }
+  #next:focus-visible, #undo:focus-visible, #notes:focus-visible { outline: 2px solid var(--lights); outline-offset: 2px; }
+  #next-label { color: var(--lights); font-weight: 700; }
+  #next-level { font-size: 1.8rem; font-weight: 700; line-height: 1.1; }
+  #next-when { font-size: .88rem; }
+  #tick { font-size: .72rem; color: var(--dim); border: 1px solid var(--faint); border-radius: 999px; padding: 2px 8px; }
+  #next:disabled #tick { display: none; }
+  .row { display: flex; gap: 8px; align-items: baseline; }
+  /* What's coming sits inside its station's block, below a rule. */
+  #upnext { border-top: 1px solid var(--line); padding-top: 5px; margin-top: 6px; }
+  #upnext-text { color: var(--text); }
+  #upnext-cues li .station-label { margin-right: 4px; }
+  #later-list { list-style: none; padding: 0; font-size: .82rem; }
+  #later-list time { color: var(--faint); margin-right: 6px; font-variant-numeric: tabular-nums; }
+  #pp { font-size: .75rem; margin: 6px 0 0; color: var(--dim); }
+  /* A window too short for everything keeps the essentials (fit() below):
+     THEN and Later go first, then Up next and Timing. */
+  .tight #then-row, .tight #later, .tighter #upnext, .tighter #timing { display: none !important; }
+  .moved #next { animation: up .2s ease-out; }
+  @keyframes up { from { transform: translateY(6px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .moved #next { animation: none; } }
+</style>
+</head>
+<body>
+  <p id="msg" hidden></p>
+  <main id="live" hidden>
+    <div class="seg">
+      <span id="seg-title"></span>
+      <span id="countdown" hidden></span>
+      <span id="size">
+        <button id="smaller" type="button" aria-label="Smaller text">A−</button>
+        <button id="bigger" type="button" aria-label="Larger text">A+</button>
+      </span>
+    </div>
+    <div id="timing" class="muted" hidden></div>
+
+    <section id="sec-screen" data-role="screen" hidden>
+      <span class="label station-label">Screens</span>
+      <ul id="screen-cues"></ul>
+    </section>
+
+    <button id="notes" type="button" aria-expanded="false" hidden></button>
+
+    <section id="sec-lights" data-role="lights" hidden>
+      <div class="head" id="lights-head">
+        <span class="label station-label">Lights</span>
+        <button id="undo" type="button" hidden>undo</button>
+      </div>
+      <ul id="lights-cues" hidden></ul>
+      <button id="next" type="button" aria-live="polite" hidden>
+        <span>
+          <span class="label" id="next-label">Next</span>
+          <div id="next-level"></div>
+          <div id="next-when"></div>
+        </span>
+        <span id="tick">done ✓</span>
+      </button>
+      <div id="then-row" class="row muted" hidden><span class="label">Then</span><span id="then"></span></div>
+      <p id="lights-over" class="muted" hidden>No more lighting changes.</p>
+    </section>
+
+    <div id="upnext" hidden>
+      <div class="row"><span class="label">Up next</span><span id="upnext-text"></span></div>
+      <ul id="upnext-cues" hidden></ul>
+    </div>
+
+    <div id="later" hidden>
+      <span class="label">Later</span>
+      <ul id="later-list"></ul>
+    </div>
+  </main>
+  <!-- One line on purpose: wrapped, it pushed the next lighting change off
+       a short card, and a warning must not crowd out what it warns about. -->
+  <p id="pp" class="muted" hidden>ProPresenter isn’t answering</p>
+<script>
+  const el = id => document.getElementById(id);
+  const NAMES = {screen: 'Screens', lights: 'Lights'};
+  const SCALES = [1, 1.15, 1.3, 1.5, 1.75];      // service_mate/mate.py SCALES
+  const PLAIN = {off: 'Service Mate is off.', standby: 'Standby', empty: 'No runsheet loaded'};
+  let shown = null, last = null, busy = false, deadline = null, scale = 1, sizing = false;
+
+  const moment = s => s.here ? s.when : [s.section && 'at ' + s.section, s.when].filter(Boolean).join(' · ');
+
+  function fillList(ul, rows) {          // rows: [{text, role?}] — textContent only
+    ul.replaceChildren(...rows.map(r => {
+      const li = document.createElement('li');
+      if (r.role) {
+        const tag = document.createElement('span');
+        tag.className = 'label station-label';
+        tag.textContent = NAMES[r.role];
+        li.dataset.role = r.role;
+        li.append(tag);
+      }
+      li.append(r.text);
+      return li;
+    }));
+    ul.hidden = !rows.length;
+  }
+
+  function timingText(t) {
+    const drift = t.drift_min === null ? ''
+      : t.drift_min === 0 ? 'on time'
+      : `${Math.abs(t.drift_min)} min ${t.drift_min > 0 ? 'behind' : 'ahead'}`;
+    return [t.start, t.length_min ? `${t.length_min} min` : '', drift].filter(Boolean).join(' · ');
+  }
+
+  // The clocks' own deadline, counted down here between polls. `now` is the
+  // server's clock at the same instant, so this machine's clock never matters.
+  // Over by more than an hour, the segment isn't live (a runsheet loaded
+  // days ago, ProPresenter not followed): no countdown rather than −6074:52.
+  function tickCountdown() {
+    const c = el('countdown');
+    const s = deadline && Math.round((deadline.ms - (performance.now() - deadline.at)) / 1000);
+    if (!deadline || s < -3600) { c.hidden = true; return; }
+    const a = Math.abs(s);
+    c.textContent = `${s < 0 ? '−' : ''}${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`;
+    c.classList.toggle('over', s < 0);
+    c.hidden = false;
+  }
+
+  // A− / A+ scale the whole view by one root font-size. Applied here at
+  // once and saved after, so the card never waits on the network to resize.
+  function applyScale(v) {
+    scale = SCALES.includes(v) ? v : 1;
+    document.documentElement.style.setProperty('--scale', scale);
+    el('smaller').disabled = scale === SCALES[0];
+    el('bigger').disabled = scale === SCALES[SCALES.length - 1];
+  }
+
+  async function setScale(step) {
+    const next = SCALES[SCALES.indexOf(scale) + step];
+    if (next === undefined || sizing) return;
+    sizing = true;
+    applyScale(next);
+    fit();
+    try {
+      await fetch('/api/mate/scale', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                      body: JSON.stringify({scale: next})});
+    } catch (_) { /* the size holds for this run either way */ }
+    sizing = false;
+  }
+
+  // Measured, not guessed: what fits depends on the stations, the sections
+  // ticked, the cues this segment has and the platform's title bar.
+  function fit() {
+    const b = document.body, over = () => document.documentElement.scrollHeight > innerHeight;
+    b.classList.remove('tight', 'tighter');
+    if (over()) b.classList.add('tight');
+    if (over()) b.classList.add('tighter');
+  }
+
+  function draw(h) {
+    const live = h.state === 'live';
+    if (!sizing) applyScale(h.scale);
+    el('msg').hidden = live;
+    el('live').hidden = !live;
+    el('pp').hidden = h.pp_ok !== false || !live;
+    if (!live) { el('msg').textContent = PLAIN[h.state] || ''; return; }
+
+    // h.order, not Object.keys: `stations` is a JSON object whose keys the
+    // server sorts, so reading the operator's order off it would lead with
+    // Lights whenever both are ticked.
+    const roles = h.order;
+    const lead = h.stations[roles[0]];
+    document.body.style.setProperty('--accent', `var(--${roles[0]})`);
+    el('seg-title').textContent = lead.title;
+
+    const x = h.extras || {};
+    el('timing').hidden = !x.timing;
+    el('timing').textContent = x.timing ? timingText(x.timing) : '';
+
+    const sc = h.stations.screen;
+    const screenCues = sc ? sc.cues : [];
+    fillList(el('screen-cues'), screenCues.map(text => ({text})));
+
+    el('notes').hidden = !x.notes;
+    el('notes').textContent = x.notes || '';
+
+    const lightsHas = drawLights(h);
+
+    // What's coming belongs to the station that reads it, so it sits inside
+    // that block: Screens where it's ticked, since its cue is the next slide.
+    const full = x.next_cues;
+    el('upnext').hidden = !lead.next_title;
+    el('upnext-text').textContent = full || !lead.next_cue ? lead.next_title
+      : `${lead.next_title} · ${lead.next_cue}`;
+    fillList(el('upnext-cues'), full
+      ? roles.flatMap(role => (full[role] || []).map(text => ({text, role: roles.length > 1 ? role : null})))
+      : []);
+    el('sec-' + roles[0]).append(el('upnext'));
+
+    // A block shows when it has anything of its own to say.
+    const hosts = role => roles[0] === role && !el('upnext').hidden;
+    el('sec-screen').hidden = !sc || !(screenCues.length || hosts('screen'));
+    el('sec-lights').hidden = !h.stations.lights || !(lightsHas || hosts('lights'));
+
+    el('later').hidden = !x.later;
+    fillList(el('later-list'), []);
+    for (const it of x.later || []) {
+      const li = document.createElement('li');
+      if (it.start_time) {
+        const t = document.createElement('time');
+        t.textContent = it.start_time;
+        li.append(t);
+      }
+      // The gap before the title is a margin, which a screen reader doesn't
+      // see — without this it reads "6:35 PMNotices".
+      li.append((it.start_time ? ' ' : '') + it.title);
+      el('later-list').append(li);
+    }
+    el('later-list').hidden = !(x.later || []).length;
+  }
+
+  // Draws the Lights block and says whether it has anything of its own:
+  // the card when the runsheet has lighting steps, the Lights clock's cues
+  // when it has none.
+  function drawLights(h) {
+    const lt = h.lighting, cues = (h.stations.lights || {}).cues || [];
+    const n = lt && lt.next;
+    fillList(el('lights-cues'), lt ? [] : cues.map(text => ({text})));
+    el('undo').hidden = !(lt && lt.done);
+    el('next').hidden = !n;
+    el('lights-over').hidden = !(lt && !n && lt.done);
+    if (n) {
+      el('next-level').textContent = n.level;
+      el('next-when').textContent = moment(n);
+      el('next').disabled = !n.here;
+    }
+    const then = lt && lt.then;
+    el('then-row').hidden = !then;
+    el('then').textContent = then ? [then.level, moment(then)].filter(Boolean).join(' · ') : '';
+    return lt ? !!(n || lt.done) : cues.length > 0;
+  }
+
+  async function refresh() {
+    let h;
+    try { h = await fetch('/api/mate', {cache: 'no-store'}).then(r => r.json()); }
+    catch (_) { return; }   // the app is restarting or closed: keep the last view
+    if (busy) return;       // a tick is saving: its own refresh draws the result
+    last = h;
+    const lead = h.state === 'live' && h.stations[Object.keys(h.stations)[0]];
+    deadline = lead && lead.ends_at && lead.now
+      ? {ms: Date.parse(lead.ends_at) - Date.parse(lead.now), at: performance.now()} : null;
+    tickCountdown();
+    // Redraw only on a change (`now` moves every poll): the next change
+    // slides in once, and a screen reader isn't re-told the window each second.
+    const key = JSON.stringify(h, (k, v) => k === 'now' ? undefined : v);
+    if (key !== shown) {
+      const before = shown && JSON.parse(shown);
+      shown = key;
+      draw(h);
+      const moved = before && h.lighting && before.lighting
+        && JSON.stringify(h.lighting.next) !== JSON.stringify(before.lighting.next);
+      document.body.classList.remove('moved');
+      if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
+    }
+    // Every poll, not only on a change: a card measured mid-layout — before
+    // the font lands, or while a warning still wrapped — would otherwise
+    // keep a section hidden for the rest of the service. fit() re-tests from
+    // scratch inside one call, so nothing flickers between the two states.
+    fit();
+  }
+
+  // Each click names what the card showed, so the server refuses it if
+  // that has changed (a double-click, a view a second old) rather than
+  // ticking off a step nobody saw. One request at a time.
+  async function tick(body) {
+    if (busy) return;
+    busy = true;
+    el('next').disabled = el('undo').disabled = true;
+    try {
+      await fetch('/api/lighting/done', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify(body)});
+    } catch (_) { /* the poll shows whatever is true */ }
+    busy = false;
+    el('undo').disabled = false;
+    shown = null;           // redraw from the server's answer
+    refresh();
+  }
+  el('next').addEventListener('click', () => {
+    const n = last && last.lighting && last.lighting.next;
+    if (n) tick({index: n.index, step: n.step});
+  });
+  el('undo').addEventListener('click', () => {
+    if (last && last.lighting) tick({undo: true, done: last.lighting.done});
+  });
+  el('notes').addEventListener('click', () => {
+    const b = el('notes');
+    b.setAttribute('aria-expanded', String(b.getAttribute('aria-expanded') !== 'true'));
+    fit();
+  });
+  el('smaller').addEventListener('click', () => setScale(-1));
+  el('bigger').addEventListener('click', () => setScale(1));
+  addEventListener('resize', fit);
+  applyScale(1);
+  refresh();
+  setInterval(refresh, 1000);
+  setInterval(tickCountdown, 250);
+</script>
+</body>
+</html>

@@ -343,19 +343,26 @@ SERVICE_MATE_CUE_ADDENDUM = (
 # moment of a service. The runsheet still wins wherever the two differ.
 LIGHTING_GUIDE_ADDENDUM = (
     "\n\nLIGHTING GUIDE — this church's usual lighting cues:\n---\n{GUIDE}\n---\n"
-    "Use it for `lighting_steps`. Go through the guide's moments IN ORDER "
-    "and give each moment that happens in this runsheet ONE step, on the "
-    "item it happens in. In a worship set the first song is praise and the "
-    "songs after it are worship, so the \"first worship song\" is the "
-    "SECOND song of the set: \"first worship song starts\" and \"halfway "
-    "through the first worship song\" both go on that second song. Each "
-    "step's `level`: the runsheet's own level for that moment where it "
-    "gives one, otherwise the guide's (that is not inventing one). Each "
-    "step's `when`: ALWAYS the guide's cue for that moment — what happens "
-    "in the room, e.g. \"halfway through the song\", \"host walks on\", "
-    "\"preacher says 'thanks band'\" — never the moment's name. A level "
-    "the runsheet writes for an item no guide moment covers is its own "
-    "step. Skip guide moments this runsheet doesn't have."
+    "THE RUNSHEET ALWAYS WINS. Wherever the runsheet writes a level for an "
+    "item — anywhere in its text, including inside a tech-team note (\"Tech "
+    "Team:Lights: house up to 60%\", \"Lights 20%\") — that level is the "
+    "step, exactly as written, with the runsheet's own moment as `when`. "
+    "Never drop it, and never replace it with the guide's.\n"
+    "The guide fills the rest. Go through its moments IN ORDER and give each "
+    "one that happens in this runsheet ONE step, on the item it happens in, "
+    "with the guide's level, and its cue as `when` — what happens in the "
+    "room (\"halfway through the song\", \"host walks on\") — never the "
+    "moment's name. Use each moment once, and only ever move FORWARD: every "
+    "moment goes on the item the one before it went on, or a later one, "
+    "never an earlier one. Skip moments this runsheet doesn't have.\n"
+    "SONGS: where the runsheet lists songs as their own items — a title, "
+    "often with no time or length of its own — the worship-set moments go "
+    "on THOSE items, in the order they are listed; not on a \"Worship\" "
+    "block before them, and never on a later item such as the preach. Such "
+    "a block takes only a moment about the set STARTING. In a worship set "
+    "the first song is praise and the rest are worship, so the \"first "
+    "worship song\" is the SECOND song of the set: both \"first worship "
+    "song starts\" and \"halfway through the first worship song\" go on it."
 )
 LIGHTING_GUIDE_MAX_CHARS = 12000
 
@@ -394,7 +401,7 @@ LIBRARY_NAMES_MAX = 200
 
 def assemble_prompt(template: str, runsheet_text: str,
                     library_names: Optional[list] = None,
-                    lighting_guide: str = "") -> str:
+                    ) -> str:
     """Substitute the runsheet text into the user's (or default) template,
     appending the Service Mate cue addendum so the model also emits
     per-role cue lines. If `library_names` is provided, also append the
@@ -412,9 +419,11 @@ def assemble_prompt(template: str, runsheet_text: str,
         if names:
             block = "\n".join(f"- {n}" for n in names)
             prompt += LIBRARY_CONTEXT_ADDENDUM.replace("{LIBRARY_NAMES}", block)
-    prompt += SERVICE_MATE_CUE_ADDENDUM
-    guide = (lighting_guide or "").strip()[:LIGHTING_GUIDE_MAX_CHARS]
-    return prompt + LIGHTING_GUIDE_ADDENDUM.replace("{GUIDE}", guide) if guide else prompt
+    # The church's lighting guide is NOT appended here. Asking one prompt to
+    # both read the runsheet's own lighting and map the guide's moments onto
+    # it traded them against each other; it gets its own call
+    # (parsing/lighting_plan.py), which also keeps this prompt smaller.
+    return prompt + SERVICE_MATE_CUE_ADDENDUM
 
 
 def parse_ai_response(content: str):

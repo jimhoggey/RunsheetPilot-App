@@ -168,16 +168,13 @@ def test_the_preview_shows_the_lights_heads_up(sm_enabled):
 
 # ── The parse and the prompt ─────────────────────────────────────────────────
 
-def test_the_prompt_asks_for_steps_and_carries_the_guide_only_when_given():
-    from propresenterrunsheet.parsing.ai import (
-        LIGHTING_GUIDE_MAX_CHARS, SERVICE_MATE_CUE_ADDENDUM, assemble_prompt,
-    )
+def test_the_main_prompt_asks_for_the_runsheets_own_lighting_and_nothing_else():
+    """The guide is mapped on by its own call (parsing/lighting_plan.py), so
+    this prompt never carries it — one prompt doing both traded the
+    runsheet's precedence against the guide filling gaps."""
+    from propresenterrunsheet.parsing.ai import SERVICE_MATE_CUE_ADDENDUM, assemble_prompt
     assert "`lighting_steps`" in SERVICE_MATE_CUE_ADDENDUM and "never" in SERVICE_MATE_CUE_ADDENDUM
-    plain = assemble_prompt("{RUNSHEET}", "6:00 Worship")
-    assert "LIGHTING GUIDE" not in plain
-    guided = assemble_prompt("{RUNSHEET}", "6:00 Worship", lighting_guide="Deep 2% · halfway" + "x" * 20000)
-    assert "LIGHTING GUIDE" in guided and "first song is praise" in guided
-    assert len(guided) < len(plain) + LIGHTING_GUIDE_MAX_CHARS + 2000      # capped
+    assert "LIGHTING GUIDE" not in assemble_prompt("{RUNSHEET}", "6:00 Worship")
 
 
 def test_the_parse_keeps_only_well_formed_steps(parse_client, monkeypatch):
@@ -205,41 +202,63 @@ def test_the_parse_keeps_only_well_formed_steps(parse_client, monkeypatch):
     assert items["Notices"]["lighting_steps"] == []
 
 
-def test_the_saved_guide_reaches_the_parse_prompt(parse_client, monkeypatch):
+def test_the_saved_guide_fills_the_items_the_runsheet_left_dark(parse_client, monkeypatch):
+    """End to end: the guide saved in Service Mate reaches the second call,
+    and only the item the runsheet said nothing about comes back lit."""
     import requests
+    import propresenterrunsheet.routes.parse as parse_mod
     from propresenterrunsheet import settings as pp_settings
-    pp_settings.save_settings({"lighting_guide": "Deep worship — halfway through first worship song — 2%"})
-    sent = {}
+    pp_settings.save_settings({
+        "lighting_guide": "1. Deep worship — when: halfway through first worship song — 2%"})
+    parsed = {"items": [
+        {"title": "Worship", "type": "song",
+         "lighting_steps": [{"level": "8%", "when": "the runsheet's own"}]},
+        {"title": "Reprise", "type": "song"}]}
 
     class _R:
         status_code = 200
         def json(self):
-            return {"model": "m", "choices": [{"message": {"content": '{"items": []}'}}]}
+            return {"model": "m", "choices": [{"message": {"content": json.dumps(parsed)}}]}
         def raise_for_status(self):
             return None
+    monkeypatch.setattr(requests, "post", lambda url, **kw: _R())
+    seen = {}
 
-    def post(url, **kw):
-        sent["prompt"] = json.dumps(kw.get("json"))
-        return _R()
-    monkeypatch.setattr(requests, "post", post)
-    parse_client.post("/api/upload_and_parse", data={
+    def _plan(items, guide, key, model, post=None):
+        seen.update(guide=guide, lit=[it.get("title") for it in items if it.get("lighting_steps")])
+        return {1: [{"level": "2%", "when": "halfway through first worship song"}]}
+    monkeypatch.setattr(parse_mod, "plan_lighting", _plan)
+    r = parse_client.post("/api/upload_and_parse", data={
         "pdf": (io.BytesIO(b"%PDF-1.4 fake"), "r.pdf"), "or_key": "k", "or_model": "m"},
-        content_type="multipart/form-data")
-    assert "halfway through first worship song" in sent["prompt"]
+        content_type="multipart/form-data").get_json()
+    assert "halfway through first worship song" in seen["guide"]
+    assert seen["lit"] == ["Worship"]                      # the guide only sees what's dark
+    steps = [it["lighting_steps"] for it in r["items"]]
+    assert steps[0][0]["level"] == "8%"                    # the runsheet's own, untouched
+    assert steps[1][0]["level"] == "2%"                    # the guide filled the gap
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
-def test_the_api_reads_the_live_state(sm_enabled):
+def _mate(c):
+    """What the digital Service Mate shows, with Lights ticked at this desk."""
     from propresenterrunsheet.service_mate import state as sm_state
-    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
-    h = sm_enabled.get("/api/lighting").get_json()
-    assert (h["now"], h["next"]["level"], h["then"]["level"], h["done"], h["section"]) == (
-        "30%", "12%", "8%", 0, "Worship")
+    cfg = sm_state._read_clocks_config()
+    sm_state._write_clocks_config({**cfg, "mate": {"on": False, "stations": ["lights"]}})
+    return c.get("/api/mate").get_json()
 
 
 def _card(c):
-    return c.get("/api/lighting").get_json()
+    return _mate(c)["lighting"]
+
+
+def test_the_card_reads_the_live_state(sm_enabled):
+    from propresenterrunsheet.service_mate import state as sm_state
+    sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
+    view = _mate(sm_enabled)
+    lt = view["lighting"]
+    assert (lt["next"]["level"], lt["then"]["level"], lt["done"]) == ("12%", "8%", 0)
+    assert view["stations"]["lights"]["title"] == "Worship"
 
 
 def _tick(c, step=None, **body):
@@ -255,7 +274,7 @@ def test_ticking_moves_the_next_step_up_and_undo_puts_it_back(sm_enabled):
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": 1})
     assert _tick(sm_enabled).get_json()["ok"]
     h = _card(sm_enabled)
-    assert (h["now"], h["next"]["level"], h["done"]) == ("12%", "8%", 1)
+    assert (h["next"]["level"], h["then"]["level"], h["done"]) == ("8%", "2%", 1)
     assert _tick(sm_enabled, undo=True, done=1).get_json()["ok"]
     assert _card(sm_enabled)["next"]["level"] == "12%"
 
@@ -318,7 +337,7 @@ def test_a_rerun_mid_service_keeps_the_ticks(isolated_state):
 def test_a_bad_current_index_does_not_break_the_card(sm_enabled):
     from propresenterrunsheet.service_mate import state as sm_state
     sm_state._write_runsheet_state({"items": ITEMS, "current_index": "abc"})
-    assert sm_enabled.get("/api/lighting").get_json()["section"] == "Walk-in"
+    assert _mate(sm_enabled)["stations"]["lights"]["title"] == "Walk-in"
 
 
 def test_the_operators_own_text_is_saved_as_is(sm_enabled):
@@ -375,112 +394,4 @@ def test_an_unreadable_guide_upload_says_so(sm_enabled):
                         content_type="multipart/form-data")
     assert r.status_code == 400 and r.get_json()["error"]
 
-
-# ── The floating window ──────────────────────────────────────────────────────
-
-class _FakeWindow:
-    def __init__(self):
-        self.destroyed = False
-        self.events = type("E", (), {"closed": _Handlers()})()
-
-    def destroy(self):
-        self.destroyed = True
-
-
-class _Handlers(list):
-    def __iadd__(self, fn):
-        self.append(fn)
-        return self
-
-    def __isub__(self, fn):
-        self.remove(fn)
-        return self
-
-
-@pytest.fixture
-def fake_webview(monkeypatch):
-    from propresenterrunsheet import native
-    made = []
-
-    class _Webview:
-        @staticmethod
-        def create_window(title, url, **kw):
-            made.append((url, kw))
-            return _FakeWindow()
-    monkeypatch.setattr(native, "webview", _Webview)
-    return made
-
-
-def test_the_window_opens_on_top_inside_the_app_and_closes(sm_enabled, fake_webview):
-    from propresenterrunsheet import native
-    r = sm_enabled.post("/api/lighting/window", json={"on": True}).get_json()
-    assert r["native"] is True
-    (url, kw), = fake_webview
-    assert url.endswith("/lighting") and kw["on_top"] is True
-    win = native._lighting
-    sm_enabled.post("/api/lighting/window", json={"on": False})
-    assert win.destroyed and native._lighting is None
-    assert sm_enabled.get("/api/lighting").get_json()["on"] is False
-
-
-def test_closing_it_with_its_own_button_switches_the_setting_off(sm_enabled, fake_webview):
-    from propresenterrunsheet import native
-    sm_enabled.post("/api/lighting/window", json={"on": True})
-    for handler in list(native._lighting.events.closed):
-        handler()
-    assert native._lighting is None
-    assert sm_enabled.get("/api/lighting").get_json()["on"] is False
-
-
-def test_no_native_window_when_the_page_opened_a_popup(sm_enabled, fake_webview):
-    r = sm_enabled.post("/api/lighting/window", json={"on": True, "popup": True}).get_json()
-    assert r["native"] is False and fake_webview == []
-
-
-def test_in_a_browser_the_page_is_told_to_open_a_popup(sm_enabled):
-    r = sm_enabled.post("/api/lighting/window", json={"on": True}).get_json()
-    assert r == {"ok": True, "on": True, "native": False}
-
-
-def test_switching_service_mate_off_closes_the_card(sm_enabled, fake_webview):
-    from propresenterrunsheet import native
-    sm_enabled.post("/api/lighting/window", json={"on": True})
-    win = native._lighting
-    sm_enabled.post("/api/clocks", json={"enabled": False})
-    assert win.destroyed and native._lighting is None
-    h = sm_enabled.get("/api/lighting").get_json()
-    assert h["off"] is True and h["on"] is False
-
-
-def test_closing_the_main_window_takes_the_card_but_keeps_it_on(monkeypatch, isolated_state):
-    """pywebview only returns when every window is closed: the card must
-    close with the main window, or the app never quits."""
-    import types
-    from propresenterrunsheet import native, server
-    closed = _Handlers()
-    fake = types.SimpleNamespace(
-        create_window=lambda *a, **k: types.SimpleNamespace(events=types.SimpleNamespace(closed=closed)),
-        start=lambda: None)
-    assert server._run_native_window(5757, webview_module=fake)
-    assert native.close_lighting_window in closed
-
-
-def test_a_failed_native_start_leaves_no_phantom_window(isolated_state):
-    import types
-    from propresenterrunsheet import native, server
-
-    def boom():
-        raise RuntimeError("no WebView2")
-    fake = types.SimpleNamespace(create_window=lambda *a, **k: object(), start=boom)
-    assert server._run_native_window(5757, webview_module=fake) is False
-    assert native.webview is None
-
-
-def test_it_is_part_of_service_mate(client):
-    """Off with the master switch, like every other Service Mate action."""
-    assert client.post("/api/lighting/window", json={"on": True}).status_code == 409
-
-
-def test_the_card_page_is_served(client):
-    page = client.get("/lighting").data
-    assert b"Lighting" in page and b"/api/lighting/done" in page
+# The window itself is the digital Service Mate: tests/test_digital_service_mate.py.

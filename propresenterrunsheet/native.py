@@ -12,44 +12,79 @@ import logging
 log = logging.getLogger("pp_runsheet")
 
 webview = None            # the pywebview module, set by server.py
-_lighting = None          # the open lighting heads-up window, if any
+_mate = None              # the open digital Service Mate window, if any
+# The height the window was last FITTED to — deliberately not its current
+# height, which the operator may have dragged. Only a change in the fitted
+# height resizes it, so ticking a Show box never undoes their resizing.
+# Held in a dict, as the other module state here is (pp_track.PP_REACHABLE),
+# so no function needs a `global` to record it.
+_fitted = {"height": None}
 
 
-def _forget_lighting():
-    global _lighting
-    _lighting = None
+def _forget_mate():
+    global _mate
+    _mate = None
     # Closed with its own button: switch the setting off, so the toggle in
-    # the main window follows (its Service Mate poll reads it back).
+    # the main window follows (its Service Mate poll reads it back). Logged,
+    # not raised: this runs inside pywebview's event dispatch.
     try:
+        from .service_mate.mate import mate_config
         from .service_mate.state import _read_clocks_config, _write_clocks_config
         cfg = _read_clocks_config()
-        cfg["lighting_window"] = False
+        cfg["mate"] = {**mate_config(cfg), "on": False}
+        cfg.pop("lighting_window", None)
         _write_clocks_config(cfg)
     except Exception:
-        log.exception("Couldn't record the lighting window as closed")
+        log.exception("Couldn't record the Service Mate window as closed")
 
 
-def open_lighting_window(url: str) -> bool:
-    """Open (or keep) the always-on-top lighting heads-up. False when there
-    is no native window toolkit to open it with."""
-    global _lighting
+def open_mate_window(url: str, width: int, height: int, min_height: int) -> bool:
+    """Open (or keep) the always-on-top digital Service Mate, fitted to the
+    stations it shows. False when there is no native window toolkit."""
+    global _mate
     if webview is None:
         return False
-    if _lighting is None:
-        _lighting = webview.create_window(
-            "Lighting — coming up", url, width=380, height=180,
-            min_size=(280, 150), on_top=True,
+    if _mate is None:
+        _mate = webview.create_window(
+            "Service Mate", url, width=width, height=height,
+            min_size=(width, min_height), on_top=True,
             background_color="#111118")   # the card's own, so it doesn't flash white
-        _lighting.events.closed += _forget_lighting
+        _mate.events.closed += _forget_mate
+        _fitted["height"] = height
+    elif height != _fitted["height"]:
+        # A station ticked or unticked while open: refit, keeping the width
+        # the operator chose.
+        _resize(_mate.width, height)
     return True
 
 
-def close_lighting_window() -> bool:
-    global _lighting
+def _resize(width: int, height: int) -> None:
+    """Resize the open window, and remember the height it's fitted to — only
+    once it really resized, so a failure is retried rather than recorded as
+    done. Cosmetic either way: a failure is logged, never raised."""
+    try:
+        _mate.resize(width, height)
+        _fitted["height"] = height
+    except Exception:
+        log.exception("Couldn't resize the Service Mate window")
+
+
+def size_mate_window(width: int, height: int) -> bool:
+    """A− / A+ size the whole view, so the window grows or shrinks with it,
+    width included. False when there is no native window to size (a browser
+    popup, or the toolkit is missing) — the size still saves."""
+    if webview is None or _mate is None:
+        return False
+    _resize(width, height)
+    return True
+
+
+def close_mate_window() -> bool:
+    global _mate
     if webview is None:
         return False
-    win, _lighting = _lighting, None
+    win, _mate = _mate, None
     if win is not None:
-        win.events.closed -= _forget_lighting   # we're the ones closing it
+        win.events.closed -= _forget_mate   # we're the ones closing it
         win.destroy()
     return True
