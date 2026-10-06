@@ -20,6 +20,16 @@ STATIONS = ("screen", "lights")
 SHOW = ("timing", "notes", "next_cues", "later")
 _MAX_DRIFT_MIN = 60     # further out than this, the segment wasn't started live
 _LATER = 3              # segments listed after the next one
+# (height, minimum height) of the native window per desk, measured at 360
+# wide with the title bar: the default view fits, and the minimum still
+# shows the essentials — with Lights, the NEXT card. Both stations: the rest.
+_WINDOW = {("screen",): (180, 150), ("lights",): (240, 170)}
+_WINDOW_BOTH = (320, 240)
+
+
+def window_size(stations: list[str]) -> tuple[int, int]:
+    """(height, minimum height) for the window showing these stations."""
+    return _WINDOW.get(tuple(stations), _WINDOW_BOTH)
 
 
 def _defaults() -> dict:
@@ -115,7 +125,9 @@ def mate_view(state: dict, stations: list[str], show: list[str],
                                       if isinstance(it, dict)]):
         extras["later"] = later
 
+    # The cleaned position: build_state_payload int()s whatever it's given.
+    plain = {**state, "current_index": idx}
     return {"state": "live",
-            "stations": {role: build_state_payload(role, "detailed", state, ends_at, now)
+            "stations": {role: build_state_payload(role, "detailed", plain, ends_at, now)
                          for role in stations},
             "lighting": lighting, "extras": extras}

@@ -34,7 +34,7 @@ def _no_native_window(monkeypatch):
     test's fake must not leak into the next test."""
     from propresenterrunsheet import native
     monkeypatch.setattr(native, "webview", None)
-    monkeypatch.setattr(native, "_lighting", None)
+    monkeypatch.setattr(native, "_mate", None)
 
 
 @pytest.fixture

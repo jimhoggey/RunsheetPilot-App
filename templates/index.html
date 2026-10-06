@@ -422,16 +422,49 @@
           <input type="checkbox" id="sm-autotrack" onchange="smSaveAutoTrack()">
           <span style="font-size:0.85rem">Auto-track ProPresenter</span>
         </label>
-        <label style="display:flex;align-items:center;gap:6px;margin:0"
-               title="A small always-on-top card with the runsheet's next lighting change. The Lights clock shows the same.">
-          <input type="checkbox" id="sm-lighting" onchange="smToggleLightingWindow()">
-          <span style="font-size:0.85rem">Lighting heads-up window</span>
-        </label>
         <label style="display:flex;align-items:center;gap:8px;margin:0">
           <span style="font-size:0.85rem">Brightness</span>
           <input type="range" id="sm-brightness" min="1" max="100" value="70"
                  style="width:120px" onchange="smSaveSettings()">
           <span id="sm-brightness-val" style="font-size:0.78rem;color:var(--muted);min-width:30px">70</span>
+        </label>
+      </div>
+      <!-- Service Mate on this computer: an always-on-top window with what
+           this desk's clocks would show (service_mate/mate.py). -->
+      <div class="row" style="align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:6px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0"
+               title="An always-on-top window showing what this desk's clocks would: for a desk with no clock, or beside one.">
+          <input type="checkbox" id="sm-mate" onchange="smToggleMate()">
+          <span style="font-size:0.85rem">Service Mate on this computer</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" class="sm-mate-station" value="screen" checked onchange="smSaveMate(this)">
+          <span style="font-size:0.85rem">Screens</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0"
+               title="Tick when the person at this computer runs the lights too.">
+          <input type="checkbox" class="sm-mate-station" value="lights" onchange="smSaveMate(this)">
+          <span style="font-size:0.85rem">Lights</span>
+        </label>
+      </div>
+      <div class="row" id="sm-mate-show" hidden
+           style="align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 12px 22px">
+        <span style="font-size:0.78rem;color:var(--muted)">Show</span>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" class="sm-mate-show" value="timing" checked onchange="smSaveMate(this)">
+          <span style="font-size:0.8rem">Timing</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" class="sm-mate-show" value="notes" onchange="smSaveMate(this)">
+          <span style="font-size:0.8rem">Tech notes</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" class="sm-mate-show" value="next_cues" onchange="smSaveMate(this)">
+          <span style="font-size:0.8rem">Up next in full</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0">
+          <input type="checkbox" class="sm-mate-show" value="later" onchange="smSaveMate(this)">
+          <span style="font-size:0.8rem">Coming later</span>
         </label>
       </div>
       <!-- The church's lighting guide: its usual cue for each moment. Read

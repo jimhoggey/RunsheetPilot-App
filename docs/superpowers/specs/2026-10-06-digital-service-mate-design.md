@@ -198,8 +198,15 @@ drift from the clocks.
 
 - `open_lighting_window` / `close_lighting_window` become `open_mate_window` /
   `close_mate_window`, with the title "Service Mate".
-- Width 360. Height 170 with one station ticked and 260 with two. Minimum
-  (280, 150).
+- Width 360. Heights were measured at 360 wide, title bar included, so the
+  default view fits (`mate.window_size`):
+  - Screens alone: 180, minimum 150.
+  - Lights alone: 240, minimum 170.
+  - Both: 320, minimum 240.
+
+  Each minimum still shows the essentials; with Lights, that's the NEXT
+  card. Ticking or unticking a station while the window is open refits its
+  height and keeps the operator's width. A Show box never resizes it.
 - It still closes with the main window, keeps its on/off setting, and opens as
   a popup in a plain browser.
 
