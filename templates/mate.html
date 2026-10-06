@@ -56,9 +56,9 @@
   #later-list { list-style: none; padding: 0; font-size: .82rem; }
   #later-list time { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
   #pp { font-size: .75rem; margin: 6px 0 0; }
-  /* A short window keeps the essentials: THEN and Later go first, then Up next. */
-  @media (max-height: 230px) { #then-row, #later { display: none !important; } }
-  @media (max-height: 190px) { #upnext { display: none !important; } }
+  /* A window too short for everything keeps the essentials (fit() below):
+     THEN and Later go first, then Up next and Timing. */
+  .tight #then-row, .tight #later, .tighter #upnext, .tighter #timing { display: none !important; }
   .moved #next { animation: up .2s ease-out; }
   @keyframes up { from { transform: translateY(6px); } to { transform: none; } }
   @media (prefers-reduced-motion: reduce) { .moved #next { animation: none; } }
@@ -151,6 +151,15 @@
     c.hidden = false;
   }
 
+  // Measured, not guessed: what fits depends on the stations, the sections
+  // ticked, the cues this segment has and the platform's title bar.
+  function fit() {
+    const b = document.body, over = () => document.documentElement.scrollHeight > innerHeight;
+    b.classList.remove('tight', 'tighter');
+    if (over()) b.classList.add('tight');
+    if (over()) b.classList.add('tighter');
+  }
+
   function draw(h) {
     const live = h.state === 'live';
     el('msg').hidden = live;
@@ -240,6 +249,7 @@
     const before = shown && JSON.parse(shown);
     shown = key;
     draw(h);
+    fit();
     const moved = before && h.lighting && before.lighting
       && JSON.stringify(h.lighting.next) !== JSON.stringify(before.lighting.next);
     document.body.classList.remove('moved');
@@ -272,7 +282,9 @@
   el('notes').addEventListener('click', () => {
     const b = el('notes');
     b.setAttribute('aria-expanded', String(b.getAttribute('aria-expanded') !== 'true'));
+    fit();
   });
+  addEventListener('resize', fit);
   refresh();
   setInterval(refresh, 1000);
   setInterval(tickCountdown, 250);

@@ -59,6 +59,8 @@ def test_the_desk_settings_are_read_safely(cfg, want):
     ("6:10 PM", "2026-10-11T18:13:00", 3),       # behind
     ("6:10 PM", "2026-10-11T18:08:00", -2),      # ahead
     ("6:10", "2026-10-11T18:13:00", 3),          # no am/pm: the nearer reading
+    ("6:10 PM", "2026-10-11T17:58:00", -12),     # started a little early
+    ("6:10 PM", "2026-10-11T17:35:00", None),    # loaded before the service: not "35 min ahead"
     ("6:10 PM", "2026-10-11T19:30:00", None),    # over an hour out: not a live start
     ("6:10 PM", "2026-10-10T18:30:00", None),    # loaded the day before
     ("6:10 PM", None, None),
@@ -282,10 +284,11 @@ def test_the_window_opens_on_top_inside_the_app_and_closes(sm_enabled, fake_webv
 
 
 @pytest.mark.parametrize("stations, height, min_height", [
-    (["screen"], 180, 150), (["lights"], 240, 170), (["screen", "lights"], 320, 240)])
+    (["screen"], 190, 150), (["lights"], 270, 200), (["screen", "lights"], 330, 270)])
 def test_it_is_as_tall_as_the_stations_it_shows(sm_enabled, fake_webview, stations, height, min_height):
-    """Measured at 360 wide: the whole view fits, and the minimum still
-    shows the essentials — with Lights, the NEXT card."""
+    """Measured at 360 wide with Windows' taller title bar: the default view
+    fits whole, undo included, and the minimum still shows the essentials
+    — with Lights, the NEXT card."""
     sm_enabled.post("/api/mate/window", json={"on": True, "stations": stations})
     kw = fake_webview[0][2]
     assert (kw["height"], kw["min_size"]) == (height, (280, min_height))
@@ -298,7 +301,7 @@ def test_ticking_a_station_while_open_keeps_the_one_window_and_fits_it(sm_enable
                                                   "show": ["notes"]}).get_json()
     assert len(fake_webview) == 1
     assert r["mate"] == {"on": True, "stations": ["lights"], "show": ["notes"]}
-    assert native._mate.resized == (400, 240)            # the operator's width kept
+    assert native._mate.resized == (400, 270)            # the operator's width kept
 
 
 def test_a_show_box_leaves_the_operators_window_size_alone(sm_enabled, fake_webview):
