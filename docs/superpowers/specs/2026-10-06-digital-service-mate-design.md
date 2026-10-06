@@ -32,64 +32,63 @@ physical clock, on this computer, or both. The lighting window becomes the
 **digital Service Mate**: one floating, always-on-top window for whoever sits
 at the ProPresenter computer, showing the stations ticked for this desk.
 
-## Principle: less on screen
+## Principle: the clock's content, drawn for a window
 
-The window exists to answer three questions at a glance, and nothing else:
+The window shows what that station's clock is sent. It uses the same title,
+countdown, cues and next item, worked out by the same code from the same
+state, generic cues included. Which cues are actually useful, and where a
+generic cue helps when an item has no tech notes, gets refined once it has
+been used on real Sundays. That needs real data, not a rule guessed now.
 
-1. What does the runsheet say this desk needs for the segment we're in?
-2. What's the next lighting change, and the one after? (only when Lights is ticked)
-3. What's up next?
+Where it differs from the clock, it differs only to stay uncluttered:
 
-Rules that follow from it:
-
+- **All of a station's cues at once**, rather than rotated five seconds each:
+  a window has the room.
+- **Lights as the one-step card:** NEXT (large) and THEN (greyed), with no
+  "now" row. This is the owner's call for the window; the Lights clock keeps
+  its "Now: 30%".
 - **A section appears only when it has something to say.** There are no
-  placeholders such as "nothing for screens".
-- **Only what came from the runsheet.** At parse time every item is given a
-  generic cue for each station when the runsheet says nothing ("Cue song
-  slides" for any song, "Stand by" for anything else, from
-  `ROLE_CUE_TABLES`). The window hides any cue that equals its station's
-  generic cue for that item type. The clocks keep showing them, as today.
-- **No NOW row for lights.** The operator knows where the lights are. The
-  card shows NEXT (large) and THEN (greyed).
-- **No countdown.** ProPresenter and the clocks already show it.
+  placeholders.
 
 ## What the window shows
 
 ```
 ┌ Service Mate ───────────────────────────┐
-│ Worship                                 │  the segment we're in (muted, one line)
-│ • Trailer video ready                   │  Screens: from the tech notes, if any
+│ Worship                           03:42 │  segment + countdown, one line
+│ • Cue song slides                       │  Screens: the screen clock's cues
+│ • Trailer video ready                   │
 │ LIGHTS                           undo   │  only when Lights is ticked
 │ NEXT  8%  first worship song   done ✓   │  click to tick it off
 │ then 2%                                 │  greyed
-│ UP NEXT  Welcome · Slide — Welcome      │  next item + its first runsheet cue
+│ UP NEXT  Welcome · Slide — Welcome      │  the clock's next title + next cue
 └─────────────────────────────────────────┘
 ```
 
-- **Segment:** the current item's title, muted, one line. It gives the rest
-  its context.
-- **Screens cues:** the item's `cues.screen` minus the generic one, as a
-  short list of up to 4, all shown at once rather than rotated.
+- **Segment and countdown:** the clock's title and countdown on one line.
+  They use the same deadline the clocks are given, so the window and the
+  clocks tick together.
+- **Screens:** the Screens clock's cues, up to 4.
 - **Lights:**
-  - The one-step card from PR #152, without the NOW row.
+  - When the runsheet has lighting steps, this is the one-step card from
+    PR #152 without the NOW row. Ticking behaves exactly as today
+    (`POST /api/lighting/done`, refused when the card was stale).
+  - When it has none, it shows the Lights clock's cues instead.
   - Undo is a small button, right-aligned on the line above NEXT. It appears
     only once a step in this segment has been ticked. With two stations
     ticked, it shares that line with the LIGHTS label. With Lights alone, the
     line holds only undo and is absent until a tick.
-  - Ticking behaves exactly as today (`POST /api/lighting/done`, refused when
-    the card was stale).
-  - If the runsheet gives no lighting steps but does give runsheet lights
-    cues, those cues show instead.
-  - If it gives neither, the section doesn't appear.
-- **Up next:** the next item's title, plus its first non-generic cue from
-  the ticked stations (Screens first). One line.
+- **Up next:** the next title and next cue from the Screens payload when
+  Screens is ticked, otherwise from the Lights payload. Both are built from
+  the plain state, so this is always the next item, never the next lighting
+  change. One line.
 - **Labels:** a station label in its clock's accent colour appears only when
   two stations are ticked, so a single-station window has no labels at all.
 - **Small windows:** a short window drops THEN first, then UP NEXT.
 
 The Sound station is not offered in the window in v1. Sound runs at the sound
-desk, not the ProPresenter computer. `station_view` (below) handles it, so
-adding it later is a settings change, not a rewrite.
+desk, not the ProPresenter computer. The window builds every section from
+`build_state_payload`, which already handles Sound, so adding it later is a
+settings change, not a rewrite.
 
 ### Plain states
 
@@ -123,31 +122,32 @@ In the Service Mate panel, the "Lighting heads-up window" switch becomes:
 
 ## How it fits together
 
-**One source of facts.** A new `service_mate/station.py` holds
-`station_view(role, state) -> dict`, built only from helpers that already
-exist:
+**The clock's own payload is the window's data.** For each ticked station,
+`GET /api/mate` calls `build_state_payload(role, "detailed", state, ends_at,
+now)`, the same function, from the same state, that builds what that
+station's clock is sent. The page draws the segment, countdown, cues and up
+next straight from those payloads. There is no second derivation that could
+drift from the clocks.
 
-- `current_index` and `heads_up` (lighting.py) for the segment and lighting steps;
-- `done_for` for ticks;
-- `_cues_for` for cues;
-- `_next_visible_item` (state.py) for up next.
-
-The generic-cue filter is one helper beside it,
-`runsheet_cues(role, item)`. It returns `_cues_for(role, item)` minus
-`ROLE_CUE_TABLES[role]` for the item's type and minus "Get ready".
-
-The clocks keep building their payload as today (`build_state_payload`,
-`lights_view`, the stock render). They read the same facts from the same
-helpers, so the window and the clocks can't disagree. The firmware payload is
-deliberately not rewritten around `station_view`: it is a device contract,
-and the change would be risk with nothing to show for it.
+- **Lights** is built from the plain state, not `lights_view`. The window
+  draws its own lighting card from `heads_up` and `done_for`, as the lighting
+  window does today. Up next therefore stays the real next item.
+- **Countdown:** `EndsAtHolder` gains a read-only
+  `peek(state) -> datetime | None`. It returns the deadline the loop is
+  holding, when that deadline belongs to the state's current item. The route
+  never calls `resolve`, which changes the holder's state, so the window can't
+  nudge the clocks' deadline. Until the loop's next tick (0.5 s or less)
+  there is no countdown. The payload's `now` lets the page correct for clock
+  offset, as the firmware does.
+- **The clocks are untouched.** `build_state_payload`, `lights_view` and the
+  stock render keep their behaviour. The existing tests are the guard.
 
 **Routes** (`routes/clocks.py`):
 
 | Route | Change |
 |---|---|
 | `GET /mate` | new page, `templates/mate.html`, replacing `lighting.html` |
-| `GET /api/mate` | new: `{state: "live"\|"off"\|"standby"\|"empty", section, screen: {cues}, lights: {next, then, done, cues}, up_next: {title, cue}, pp_ok}`, with only the ticked stations present |
+| `GET /api/mate` | new: `{state: "live"\|"off"\|"standby"\|"empty", stations: {screen: <payload>, lights: <payload>}, lighting: {next, then, done} \| null, pp_ok}`, with only the ticked stations present |
 | `POST /api/mate/window` | replaces `/api/lighting/window`: `{on, stations}` |
 | `GET /lighting` | redirects to `/mate` |
 | `GET /api/lighting` | removed; nothing else reads it |
@@ -163,19 +163,20 @@ and the change would be risk with nothing to show for it.
   a popup in a plain browser.
 
 **The loop** (`daemon.py`) runs when clocks are set up or `mate.on` is true
-(today: `lighting_window`). That keeps ProPresenter followed for the window
-on a desk with no clocks.
+(today: `lighting_window`). That keeps ProPresenter followed, and the
+deadline held, for the window on a desk with no clocks.
 
 **The page** polls `/api/mate` once a second and redraws only on a change,
-as `lighting.html` does now. It uses only `textContent` and the existing
-colour tokens, and has no native dialogs.
+as `lighting.html` does now. The countdown ticks locally between polls. It
+uses only `textContent` and the existing colour tokens, and has no native
+dialogs.
 
 ## Not in v1
 
-- A countdown in the window.
 - The Sound station in the window.
-- The runsheet's raw notes. The cues are already written from them; the raw
-  text would be the overload this design avoids.
+- The runsheet's raw notes. The cues are already written from them.
+- Deciding which cues to keep, drop or merge. That comes after real use, with
+  the data in hand (see the principle above).
 - Phone or tablet pages over the network. The app listens on 127.0.0.1 only,
   and opening it to the network needs its own locked-down read-only page.
 - An agent or extra model calls during the service. The understanding happens
@@ -185,38 +186,39 @@ colour tokens, and has no native dialogs.
 
 ## Testing
 
-- `station_view` / `runsheet_cues`:
-  - each station with and without runsheet cues;
-  - the generic cues hidden;
-  - lighting present or absent, before and after ticks;
-  - up next taking the first non-generic cue;
-  - the last item, with no up next.
-- `GET /api/mate`:
+- **Parity:** for each ticked station, `/api/mate`'s payload equals what
+  `build_state_payload` gives that station's clock for the same state, with
+  generic cues included.
+- **`GET /api/mate`:**
   - only the ticked stations present, unknown stations ignored;
+  - `lighting` present only with Lights ticked and lighting steps in the runsheet;
   - the off, standby and empty states;
   - `pp_ok` following `PP_REACHABLE`.
-- Settings: `lighting_window: true` reads as `{on: true, stations: ["lights"]}`.
+- **`EndsAtHolder.peek`:**
+  - it returns the held deadline for the current item and None for another item;
+  - it never changes what `resolve` returns next.
+- **Settings:** `lighting_window: true` reads as `{on: true, stations: ["lights"]}`.
   A saved `mate` wins over the old key.
-- The loop runs with only `mate.on` (no clocks), and not with it off.
-- `/lighting` redirects; `/api/mate/window` opens and closes the fake webview
-  as the lighting window tests do now.
+- **The loop** runs with only `mate.on` (no clocks), and not with it off.
+- **Window routes:** `/lighting` redirects; `/api/mate/window` opens and
+  closes the fake webview as the lighting window tests do now.
 - **Regression guard:** the existing Lights-clock and payload tests pass
-  unchanged. The clocks show exactly what they did before.
+  unchanged.
 - **Browser:**
   - Screens alone, Screens + Lights, and Lights alone, at 280×150 and the
     default size;
-  - a runsheet with no tech notes, which should show only the segment and up next;
+  - the countdown matching the clock preview;
   - no console errors.
 
 ## Success looks like
 
 On an ordinary Sunday, the person at ProPresenter, with Screens and Lights
-ticked, sees four things and nothing more:
-- the segment;
-- anything the runsheet's tech notes say screens needs;
+ticked, sees on one small window what their clocks would show them:
+- the segment and its countdown;
+- the screens cues;
 - the next light change and the one after;
 - what's up next.
 
-A runsheet with no tech notes gives an almost empty window, and that's
-correct. People who used the lighting window carry on without touching a
-setting. The physical clocks don't change.
+People who used the lighting window carry on without touching a setting. The
+physical clocks don't change. After a few Sundays, the owner and the app
+decide together which cues earn their place.
