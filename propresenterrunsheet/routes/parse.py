@@ -29,6 +29,7 @@ from ..parsing.models import (
     model_reading, next_usable_model, provider_failure, reasoning_for,
     resolve_model,
 )
+from ..parsing.lighting_plan import plan_lighting
 from ..parsing.openrouter import Stopped, chat
 from .flags import matching_enabled
 from ..parsing.ocr import (
@@ -624,8 +625,7 @@ def _upload_and_parse(stop: threading.Event):
 
         lighting_guide = str(settings.get("lighting_guide") or "")
         prompt = assemble_prompt(prompt_template, runsheet_text,
-                                 library_names=section_names,
-                                 lighting_guide=lighting_guide)
+                                 library_names=section_names)
 
         # 6. Call OpenRouter
         # Specific 4xx responses become friendly JSON errors (HTTP 200 so the
@@ -649,8 +649,7 @@ def _upload_and_parse(stop: threading.Event):
                     {"type": "text", "text": assemble_prompt(
                         prompt_template, f"(The runsheet is the attached "
                         f"{'PDF' if mime == _PDF_MIME else 'picture'}.)",
-                        library_names=section_names,
-                        lighting_guide=lighting_guide)},
+                        library_names=section_names)},
                     {"type": "file", "file": {"filename": "runsheet.pdf",
                                               "file_data": url}}
                     if mime == _PDF_MIME else
@@ -1051,6 +1050,20 @@ def _upload_and_parse(stop: threading.Event):
                 resolved_object_hits += 1
             else:
                 it["library_match"] = None
+        # The church's lighting guide, mapped on by its own call — only over
+        # the items the runsheet left dark, so its own levels always stand
+        # (parsing/lighting_plan.py).
+        if lighting_guide:
+            try:
+                planned = plan_lighting(items, lighting_guide, or_key,
+                                        str(settings.get("or_model") or ""))
+                for i, steps in planned.items():
+                    items[i]["lighting_steps"] = steps[:6]
+                log.info(f"Lighting guide: filled {len(planned)} of "
+                         f"{sum(1 for it in items if not it.get('lighting_steps'))+len(planned)} "
+                         f"unlit items")
+            except Exception:
+                log.exception("Lighting guide pass failed; the runsheet's own lighting stands")
         repeats = share_repeated_links(items)
         if sections or objects:
             log.info(f"Template-context parse: "

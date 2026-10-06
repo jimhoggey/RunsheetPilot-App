@@ -168,16 +168,13 @@ def test_the_preview_shows_the_lights_heads_up(sm_enabled):
 
 # ── The parse and the prompt ─────────────────────────────────────────────────
 
-def test_the_prompt_asks_for_steps_and_carries_the_guide_only_when_given():
-    from propresenterrunsheet.parsing.ai import (
-        LIGHTING_GUIDE_MAX_CHARS, SERVICE_MATE_CUE_ADDENDUM, assemble_prompt,
-    )
+def test_the_main_prompt_asks_for_the_runsheets_own_lighting_and_nothing_else():
+    """The guide is mapped on by its own call (parsing/lighting_plan.py), so
+    this prompt never carries it — one prompt doing both traded the
+    runsheet's precedence against the guide filling gaps."""
+    from propresenterrunsheet.parsing.ai import SERVICE_MATE_CUE_ADDENDUM, assemble_prompt
     assert "`lighting_steps`" in SERVICE_MATE_CUE_ADDENDUM and "never" in SERVICE_MATE_CUE_ADDENDUM
-    plain = assemble_prompt("{RUNSHEET}", "6:00 Worship")
-    assert "LIGHTING GUIDE" not in plain
-    guided = assemble_prompt("{RUNSHEET}", "6:00 Worship", lighting_guide="Deep 2% · halfway" + "x" * 20000)
-    assert "LIGHTING GUIDE" in guided and "first song is praise" in guided
-    assert len(guided) < len(plain) + LIGHTING_GUIDE_MAX_CHARS + 2000      # capped
+    assert "LIGHTING GUIDE" not in assemble_prompt("{RUNSHEET}", "6:00 Worship")
 
 
 def test_the_parse_keeps_only_well_formed_steps(parse_client, monkeypatch):
@@ -205,27 +202,40 @@ def test_the_parse_keeps_only_well_formed_steps(parse_client, monkeypatch):
     assert items["Notices"]["lighting_steps"] == []
 
 
-def test_the_saved_guide_reaches_the_parse_prompt(parse_client, monkeypatch):
+def test_the_saved_guide_fills_the_items_the_runsheet_left_dark(parse_client, monkeypatch):
+    """End to end: the guide saved in Service Mate reaches the second call,
+    and only the item the runsheet said nothing about comes back lit."""
     import requests
+    import propresenterrunsheet.routes.parse as parse_mod
     from propresenterrunsheet import settings as pp_settings
-    pp_settings.save_settings({"lighting_guide": "Deep worship — halfway through first worship song — 2%"})
-    sent = {}
+    pp_settings.save_settings({
+        "lighting_guide": "1. Deep worship — when: halfway through first worship song — 2%"})
+    parsed = {"items": [
+        {"title": "Worship", "type": "song",
+         "lighting_steps": [{"level": "8%", "when": "the runsheet's own"}]},
+        {"title": "Reprise", "type": "song"}]}
 
     class _R:
         status_code = 200
         def json(self):
-            return {"model": "m", "choices": [{"message": {"content": '{"items": []}'}}]}
+            return {"model": "m", "choices": [{"message": {"content": json.dumps(parsed)}}]}
         def raise_for_status(self):
             return None
+    monkeypatch.setattr(requests, "post", lambda url, **kw: _R())
+    seen = {}
 
-    def post(url, **kw):
-        sent["prompt"] = json.dumps(kw.get("json"))
-        return _R()
-    monkeypatch.setattr(requests, "post", post)
-    parse_client.post("/api/upload_and_parse", data={
+    def _plan(items, guide, key, model, post=None):
+        seen.update(guide=guide, lit=[it.get("title") for it in items if it.get("lighting_steps")])
+        return {1: [{"level": "2%", "when": "halfway through first worship song"}]}
+    monkeypatch.setattr(parse_mod, "plan_lighting", _plan)
+    r = parse_client.post("/api/upload_and_parse", data={
         "pdf": (io.BytesIO(b"%PDF-1.4 fake"), "r.pdf"), "or_key": "k", "or_model": "m"},
-        content_type="multipart/form-data")
-    assert "halfway through first worship song" in sent["prompt"]
+        content_type="multipart/form-data").get_json()
+    assert "halfway through first worship song" in seen["guide"]
+    assert seen["lit"] == ["Worship"]                      # the guide only sees what's dark
+    steps = [it["lighting_steps"] for it in r["items"]]
+    assert steps[0][0]["level"] == "8%"                    # the runsheet's own, untouched
+    assert steps[1][0]["level"] == "2%"                    # the guide filled the gap
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
