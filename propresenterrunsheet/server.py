@@ -188,13 +188,13 @@ def _run_native_window(port: int, webview_module=None) -> bool:
             APP_NAME, f"http://127.0.0.1:{port}",
             width=1280, height=860, min_size=(1000, 640))
         from . import native
-        native.webview = webview      # lets routes open the lighting window
+        native.webview = webview      # lets routes open the Service Mate window
         # pywebview runs until EVERY window is closed, so closing the main
-        # window must take the lighting card with it — or the app never
+        # window must take the Service Mate with it — or the app never
         # quits. Closed this way it stays switched on for the next launch.
         events = getattr(main, "events", None)
         if events is not None:
-            events.closed += native.close_lighting_window
+            events.closed += native.close_mate_window
         log.info("Native window open — close it to quit")
         webview.start()
         log.info("Native window closed — shutting down")

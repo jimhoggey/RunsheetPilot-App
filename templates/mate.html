@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Service Mate</title>
+<!-- The on-screen Service Mate (service_mate/mate.py): what this desk's
+     clocks would show — the segment and its countdown, each ticked
+     station's cues, the lighting card (NEXT, then THEN), up next — plus the
+     sections the operator ticks in settings. A section with nothing to say
+     isn't drawn. Clicking NEXT ticks a lighting change off; undo puts it
+     back. -->
+<style>
+  :root { --bg: #111118; --text: #ececf3; --muted: #8b8b9c; --line: #2a2a36;
+          --screen: rgb(59, 130, 246); --lights: rgb(245, 158, 11); --over: #f87171; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+         font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         padding: 8px 14px 10px; border-top: 3px solid var(--accent, var(--screen));
+         overflow-y: auto; }
+  [hidden] { display: none !important; }
+  main { display: flex; flex-direction: column; gap: 6px; }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin: 1px 0; }
+  .muted { color: var(--muted); }
+  .label { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .station-label { display: none; }
+  .two .station-label { display: inline; }
+  [data-role="screen"] .station-label { color: var(--screen); }
+  [data-role="lights"] .station-label { color: var(--lights); }
+  #msg { margin: 0; padding-top: 18px; text-align: center; color: var(--muted); font-size: 1rem; }
+  .seg { display: flex; align-items: baseline; gap: 10px; }
+  #seg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+               color: var(--muted); }
+  #countdown { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.1rem; }
+  #countdown.over { color: var(--over); }
+  #timing { font-size: .8rem; }
+  #notes { all: unset; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+           overflow: hidden; font-size: .82rem; color: var(--muted); cursor: pointer; white-space: pre-line; }
+  #notes[aria-expanded="true"] { display: block; }
+  .head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+  #undo { margin-left: auto; background: none; color: var(--muted); font: inherit; font-size: .78rem;
+          border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; min-height: 26px; cursor: pointer; }
+  #next { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+          width: 100%; text-align: left; background: none; color: inherit; font: inherit;
+          border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  #next:disabled { cursor: default; border-color: transparent; padding-left: 0; }
+  #next:focus-visible, #undo:focus-visible, #notes:focus-visible { outline: 2px solid var(--lights); outline-offset: 2px; }
+  #next-label { color: var(--lights); font-weight: 700; }
+  #next-level { font-size: clamp(1.3rem, 7vw, 2rem); font-weight: 700; line-height: 1.1; }
+  #next-when { font-size: .88rem; }
+  #tick { font-size: .72rem; color: var(--muted); border: 1px solid var(--muted); border-radius: 999px; padding: 2px 8px; }
+  #next:disabled #tick { display: none; }
+  .row { display: flex; gap: 8px; align-items: baseline; }
+  #upnext-cues li .station-label { margin-right: 4px; }
+  #later-list { list-style: none; padding: 0; font-size: .82rem; }
+  #later-list time { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
+  #pp { font-size: .75rem; margin: 6px 0 0; }
+  /* A short window keeps the essentials: THEN and Later go first, then Up next. */
+  @media (max-height: 230px) { #then-row, #later { display: none !important; } }
+  @media (max-height: 190px) { #upnext { display: none !important; } }
+  .moved #next { animation: up .2s ease-out; }
+  @keyframes up { from { transform: translateY(6px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .moved #next { animation: none; } }
+</style>
+</head>
+<body>
+  <p id="msg" hidden></p>
+  <main id="live" hidden>
+    <div class="seg"><span id="seg-title"></span><span id="countdown" hidden></span></div>
+    <div id="timing" class="muted" hidden></div>
+
+    <section id="sec-screen" data-role="screen" hidden>
+      <span class="label station-label">Screens</span>
+      <ul id="screen-cues"></ul>
+    </section>
+
+    <button id="notes" type="button" aria-expanded="false" hidden></button>
+
+    <section id="sec-lights" data-role="lights" hidden>
+      <div class="head" id="lights-head">
+        <span class="label station-label">Lights</span>
+        <button id="undo" type="button" hidden>undo</button>
+      </div>
+      <ul id="lights-cues" hidden></ul>
+      <button id="next" type="button" aria-live="polite" hidden>
+        <span>
+          <span class="label" id="next-label">Next</span>
+          <div id="next-level"></div>
+          <div id="next-when"></div>
+        </span>
+        <span id="tick">done ✓</span>
+      </button>
+      <div id="then-row" class="row muted" hidden><span class="label">Then</span><span id="then"></span></div>
+      <p id="lights-over" class="muted" hidden>No more lighting changes.</p>
+    </section>
+
+    <div id="upnext" hidden>
+      <div class="row"><span class="label">Up next</span><span id="upnext-text"></span></div>
+      <ul id="upnext-cues" hidden></ul>
+    </div>
+
+    <div id="later" hidden>
+      <span class="label">Later</span>
+      <ul id="later-list"></ul>
+    </div>
+  </main>
+  <p id="pp" class="muted" hidden>ProPresenter isn’t answering — the segment may be out of date.</p>
+<script>
+  const el = id => document.getElementById(id);
+  const NAMES = {screen: 'Screens', lights: 'Lights'};
+  const PLAIN = {off: 'Service Mate is off.', standby: 'Standby', empty: 'No runsheet loaded'};
+  let shown = null, last = null, busy = false, deadline = null;
+
+  const moment = s => s.here ? s.when : [s.section && 'at ' + s.section, s.when].filter(Boolean).join(' · ');
+
+  function fillList(ul, rows) {          // rows: [{text, role?}] — textContent only
+    ul.replaceChildren(...rows.map(r => {
+      const li = document.createElement('li');
+      if (r.role) {
+        const tag = document.createElement('span');
+        tag.className = 'label station-label';
+        tag.textContent = NAMES[r.role];
+        li.dataset.role = r.role;
+        li.append(tag);
+      }
+      li.append(r.text);
+      return li;
+    }));
+    ul.hidden = !rows.length;
+  }
+
+  function timingText(t) {
+    const drift = t.drift_min === null ? ''
+      : t.drift_min === 0 ? 'on time'
+      : `${Math.abs(t.drift_min)} min ${t.drift_min > 0 ? 'behind' : 'ahead'}`;
+    return [t.start, t.length_min ? `${t.length_min} min` : '', drift].filter(Boolean).join(' · ');
+  }
+
+  // The clocks' own deadline, counted down here between polls. `now` is the
+  // server's clock at the same instant, so this machine's clock never matters.
+  // Over by more than an hour, the segment isn't live (a runsheet loaded
+  // days ago, ProPresenter not followed): no countdown rather than −6074:52.
+  function tickCountdown() {
+    const c = el('countdown');
+    const s = deadline && Math.round((deadline.ms - (performance.now() - deadline.at)) / 1000);
+    if (!deadline || s < -3600) { c.hidden = true; return; }
+    const a = Math.abs(s);
+    c.textContent = `${s < 0 ? '−' : ''}${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`;
+    c.classList.toggle('over', s < 0);
+    c.hidden = false;
+  }
+
+  function draw(h) {
+    const live = h.state === 'live';
+    el('msg').hidden = live;
+    el('live').hidden = !live;
+    el('pp').hidden = h.pp_ok !== false || !live;
+    if (!live) { el('msg').textContent = PLAIN[h.state] || ''; return; }
+
+    const roles = Object.keys(h.stations);
+    const lead = h.stations[roles[0]];
+    document.body.classList.toggle('two', roles.length > 1);
+    document.body.style.setProperty('--accent', `var(--${roles[0]})`);
+    el('seg-title').textContent = lead.title;
+
+    const x = h.extras || {};
+    el('timing').hidden = !x.timing;
+    el('timing').textContent = x.timing ? timingText(x.timing) : '';
+
+    const sc = h.stations.screen;
+    el('sec-screen').hidden = !(sc && sc.cues.length);
+    fillList(el('screen-cues'), sc ? sc.cues.map(text => ({text})) : []);
+
+    el('notes').hidden = !x.notes;
+    el('notes').textContent = x.notes || '';
+
+    drawLights(h, roles.length > 1);
+
+    // Up next: the lead clock's next title and cue — or, ticked, every cue.
+    el('upnext').hidden = !lead.next_title;
+    const full = x.next_cues;
+    el('upnext-text').textContent = full || !lead.next_cue ? lead.next_title
+      : `${lead.next_title} · ${lead.next_cue}`;
+    fillList(el('upnext-cues'), full
+      ? roles.flatMap(role => (full[role] || []).map(text => ({text, role: roles.length > 1 ? role : null})))
+      : []);
+
+    el('later').hidden = !x.later;
+    fillList(el('later-list'), []);
+    for (const it of x.later || []) {
+      const li = document.createElement('li');
+      if (it.start_time) {
+        const t = document.createElement('time');
+        t.textContent = it.start_time;
+        li.append(t);
+      }
+      li.append(it.title);
+      el('later-list').append(li);
+    }
+    el('later-list').hidden = !(x.later || []).length;
+  }
+
+  function drawLights(h, two) {
+    const lt = h.lighting, cues = (h.stations.lights || {}).cues || [];
+    const sec = el('sec-lights');
+    const n = lt && lt.next;
+    // The card when the runsheet has lighting steps; the Lights clock's cues
+    // when it has none. Nothing at all when there's nothing to say.
+    sec.hidden = !h.stations.lights || (lt ? !(n || lt.done) : !cues.length);
+    fillList(el('lights-cues'), lt ? [] : cues.map(text => ({text})));
+    el('undo').hidden = !(lt && lt.done);
+    el('lights-head').hidden = !two && el('undo').hidden;
+    el('next').hidden = !n;
+    el('lights-over').hidden = !(lt && !n && lt.done);
+    if (n) {
+      el('next-level').textContent = n.level;
+      el('next-when').textContent = moment(n);
+      el('next').disabled = !n.here;
+    }
+    const then = lt && lt.then;
+    el('then-row').hidden = !then;
+    el('then').textContent = then ? [then.level, moment(then)].filter(Boolean).join(' · ') : '';
+  }
+
+  async function refresh() {
+    let h;
+    try { h = await fetch('/api/mate', {cache: 'no-store'}).then(r => r.json()); }
+    catch (_) { return; }   // the app is restarting or closed: keep the last view
+    if (busy) return;       // a tick is saving: its own refresh draws the result
+    last = h;
+    const lead = h.state === 'live' && h.stations[Object.keys(h.stations)[0]];
+    deadline = lead && lead.ends_at && lead.now
+      ? {ms: Date.parse(lead.ends_at) - Date.parse(lead.now), at: performance.now()} : null;
+    tickCountdown();
+    // Redraw only on a change (`now` moves every poll): the next change
+    // slides in once, and a screen reader isn't re-told the window each second.
+    const key = JSON.stringify(h, (k, v) => k === 'now' ? undefined : v);
+    if (key === shown) return;
+    const before = shown && JSON.parse(shown);
+    shown = key;
+    draw(h);
+    const moved = before && h.lighting && before.lighting
+      && JSON.stringify(h.lighting.next) !== JSON.stringify(before.lighting.next);
+    document.body.classList.remove('moved');
+    if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
+  }
+
+  // Each click names what the card showed, so the server refuses it if
+  // that has changed (a double-click, a view a second old) rather than
+  // ticking off a step nobody saw. One request at a time.
+  async function tick(body) {
+    if (busy) return;
+    busy = true;
+    el('next').disabled = el('undo').disabled = true;
+    try {
+      await fetch('/api/lighting/done', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify(body)});
+    } catch (_) { /* the poll shows whatever is true */ }
+    busy = false;
+    el('undo').disabled = false;
+    shown = null;           // redraw from the server's answer
+    refresh();
+  }
+  el('next').addEventListener('click', () => {
+    const n = last && last.lighting && last.lighting.next;
+    if (n) tick({index: n.index, step: n.step});
+  });
+  el('undo').addEventListener('click', () => {
+    if (last && last.lighting) tick({undo: true, done: last.lighting.done});
+  });
+  el('notes').addEventListener('click', () => {
+    const b = el('notes');
+    b.setAttribute('aria-expanded', String(b.getAttribute('aria-expanded') !== 'true'));
+  });
+  refresh();
+  setInterval(refresh, 1000);
+  setInterval(tickCountdown, 250);
+</script>
+</body>
+</html>

@@ -23,6 +23,7 @@ from .constants import (
 from .geekmagic import _probe_custom, _push_state, _push_to_clock
 from .protocol import EndsAtHolder, build_state_payload
 from .lighting import lights_view
+from .mate import mate_config
 from .pp_track import PP_REACHABLE, _maybe_advance_from_pp
 from .render import _render_cue, _render_standby
 from .state import _read_clocks_config, _read_runsheet_state, _write_runsheet_state
@@ -77,9 +78,10 @@ def _clocks_loop_tick(tick: int) -> None:
     SM_PP_UNREACHABLE_POLL_EVERY_N_TICKS while it isn't answering."""
     state = _read_runsheet_state() or {}
     cfg = _read_clocks_config()
-    # The floating lighting window needs ProPresenter followed too, so with
-    # it on the loop runs even where no clocks are set up.
-    if not cfg.get("enabled") or not (cfg.get("clocks") or cfg.get("lighting_window")):
+    # The on-screen Service Mate needs ProPresenter followed (and the
+    # deadline held) too, so with it on the loop runs even where no clocks
+    # are set up.
+    if not cfg.get("enabled") or not (cfg.get("clocks") or mate_config(cfg)["on"]):
         return
     # Paid add-on gate. Stamp the trial on first active tick (covers existing
     # users who already had the switch on before this feature shipped — they

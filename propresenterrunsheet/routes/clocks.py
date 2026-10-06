@@ -5,19 +5,19 @@ devices, render an inline preview, and reset everything to standby."""
 
 import datetime as _dt
 
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, redirect, render_template, request
 
-from ..native import close_lighting_window, open_lighting_window
+from ..native import close_mate_window, open_mate_window
 from ..parsing.ai import LIGHTING_GUIDE_MAX_CHARS
-from ..service_mate.lighting import (
-    current_index, done_for, has_lighting, heads_up, lights_view,
-)
+from ..service_mate.lighting import current_index, done_for, heads_up, lights_view
+from ..service_mate.mate import mate_config, mate_view, window_size
+from ..service_mate.pp_track import PP_REACHABLE
 from ..settings import load_settings, save_settings
 
 from ..service_mate.constants import (
     ROLE_ACCENT, SM_TESTCARD_FILENAME, SM_VERBOSITIES, SM_VERBOSITY_DEFAULT,
 )
-from ..service_mate.daemon import _CLOCKS_LOOP_LAST_PUSHED
+from ..service_mate.daemon import _CLOCKS_LOOP_LAST_PUSHED, _ENDS_AT
 from ..service_mate.geekmagic import _push_to_clock, _set_clock_brightness
 from ..service_mate.render import _render_cue, _render_standby, _render_test_card
 from ..service_mate.state import (
@@ -72,7 +72,9 @@ def _check_sm_enabled(cfg: dict):
 
 @bp.route("/api/clocks", methods=["GET"])
 def api_clocks_get():
-    return jsonify(_read_clocks_config())
+    cfg = _read_clocks_config()
+    # The desk settings as they apply, old lighting switch included.
+    return jsonify({**cfg, "mate": mate_config(cfg)})
 
 
 @bp.route("/api/clocks", methods=["POST"])
@@ -110,10 +112,11 @@ def api_clocks_post():
             from ..licensing import start_trial_if_needed
             start_trial_if_needed()
         else:
-            # The lighting card is part of Service Mate: it goes too,
-            # rather than staying on top with a frozen heads-up.
-            cfg["lighting_window"] = False
-            close_lighting_window()
+            # The on-screen Service Mate goes too, rather than staying on
+            # top with a frozen view.
+            cfg["mate"] = {**mate_config(cfg), "on": False}
+            cfg.pop("lighting_window", None)
+            close_mate_window()
     _write_clocks_config(cfg)
     return jsonify({"ok": True, "config": cfg})
 
@@ -244,27 +247,34 @@ def api_clocks_preview():
 
 @bp.route("/lighting")
 def lighting_page():
-    """The small always-on-top card: where the lights are, the next change."""
-    return render_template("lighting.html")
+    """The lighting card grew into the on-screen Service Mate."""
+    return redirect("/mate")
 
 
-@bp.route("/api/lighting", methods=["GET"])
-def api_lighting():
+# ─── The on-screen Service Mate (service_mate/mate.py) ────────────────────
+
+@bp.route("/mate")
+def mate_page():
+    """The always-on-top window: what this desk's clocks would show."""
+    return render_template("mate.html")
+
+
+@bp.route("/api/mate", methods=["GET"])
+def api_mate():
     # Service Mate off or its trial over (the window might be open in a
-    # browser popup): say so, rather than keep showing a frozen heads-up.
+    # browser popup): say so, rather than keep showing a frozen view.
     cfg = _read_clocks_config()
     if _check_sm_enabled(cfg):
-        return jsonify({"off": True, "on": bool(cfg.get("lighting_window")),
-                        "has_lighting": False, "now": "", "next": None, "then": None,
-                        "section": ""})
+        return jsonify({"state": "off"})
+    desk = mate_config(cfg)
     state = _read_runsheet_state() or {}
-    items = state.get("items") or []
-    idx = current_index(state, items)
-    section = items[idx].get("title") if items and isinstance(items[idx], dict) else ""
-    done = done_for(state, idx)
-    return jsonify({**heads_up(items, idx, done), "done": done,
-                    "has_lighting": has_lighting(items), "section": str(section or ""),
-                    "on": bool(cfg.get("lighting_window"))})
+    # The deadline the loop holds for the clocks — read, never resolved
+    # here, so the window can't nudge the clocks' countdown.
+    view = mate_view(state, desk["stations"], desk["show"], _ENDS_AT.peek(state),
+                     _dt.datetime.now())
+    auto = state.get("auto_track")
+    tracking = isinstance(auto, dict) and bool(auto.get("enabled"))
+    return jsonify({**view, "pp_ok": PP_REACHABLE["ok"] or not tracking})
 
 
 @bp.route("/api/lighting/done", methods=["POST"])
@@ -339,24 +349,29 @@ def api_lighting_guide():
                     "tidied": tidied})
 
 
-@bp.route("/api/lighting/window", methods=["POST"])
-def api_lighting_window():
-    """Show or hide the floating lighting window. `native: false` tells the
+@bp.route("/api/mate/window", methods=["POST"])
+def api_mate_window():
+    """Show or hide the on-screen Service Mate, and save which stations and
+    sections it shows ({on, stations?, show?}). `native: false` tells the
     page there is no native window here. `popup: true` means the page has
     opened a browser popup itself, so no native one is opened as well."""
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
     on = bool(body.get("on"))
     cfg = _read_clocks_config()
     if on:
         blocked = _check_sm_enabled(cfg)
         if blocked:
             return blocked
-    cfg["lighting_window"] = on
+    picked = {k: body[k] for k in ("stations", "show") if k in body}
+    desk = mate_config({"mate": {**mate_config(cfg), **picked, "on": on}})
+    cfg["mate"] = desk
+    cfg.pop("lighting_window", None)
     _write_clocks_config(cfg)
     if not on:
-        native = close_lighting_window()
+        native = close_mate_window()
     elif body.get("popup"):
         native = False
     else:
-        native = open_lighting_window(request.host_url + "lighting")
-    return jsonify({"ok": True, "on": on, "native": native})
+        native = open_mate_window(request.host_url + "mate", *window_size(desk["stations"]))
+    return jsonify({"ok": True, "on": on, "native": native, "mate": desk})

@@ -2906,7 +2906,7 @@ async function smInit() {
     document.getElementById('sm-enabled').checked = !!cfg.enabled;
     document.getElementById('sm-brightness').value = cfg.brightness || 70;
     document.getElementById('sm-brightness-val').textContent = cfg.brightness || 70;
-    if (cfg.lighting_window) _restoreLightingWindow();
+    if (cfg.mate && cfg.mate.on) _restoreMate(cfg.mate); else _renderMate(cfg.mate);
     smLoadLightingGuide();
     // Sync the master-switch visual state + body visibility with the saved
     // enabled flag. Card starts COLLAPSED for a clean default look — the
@@ -3089,48 +3089,80 @@ async function smTest(id) {
   }
 }
 
-// ─── Lighting heads-up window ─────────────────────────────────────────────
-// A small always-on-top card with the runsheet's next lighting change
-// (service_mate/lighting.py; the Lights clock shows the same). Inside the
-// app's own window the server opens it natively; in a browser it's a popup,
-// opened inside the click itself so it isn't blocked.
-let _lightingPopup = null;
+// ─── Service Mate on this computer ────────────────────────────────────────
+// An always-on-top window with what this desk's clocks would show
+// (service_mate/mate.py): the ticked stations, plus the Show sections.
+// Inside the app's own window the server opens it natively; in a browser
+// it's a popup, opened inside the click itself so it isn't blocked.
+let _matePopup = null;
 
-function _postLightingWindow(on, popup) {
-  return fetch('/api/lighting/window', {
+function _mateChoice() {
+  const ticked = sel => [...document.querySelectorAll(sel)].filter(b => b.checked).map(b => b.value);
+  return {on: document.getElementById('sm-mate').checked,
+          stations: ticked('.sm-mate-station'), show: ticked('.sm-mate-show')};
+}
+
+function _renderMate(m) {
+  if (!m) return;
+  document.getElementById('sm-mate').checked = !!m.on;
+  for (const b of document.querySelectorAll('.sm-mate-station')) b.checked = m.stations.includes(b.value);
+  for (const b of document.querySelectorAll('.sm-mate-show')) b.checked = m.show.includes(b.value);
+  document.getElementById('sm-mate-show').hidden = !m.on;
+}
+
+function _postMate(body) {
+  return fetch('/api/mate/window', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({on, popup}),
+    body: JSON.stringify(body),
   }).then(async r => ({ok: r.ok, ...(await r.json())}));
 }
 
-async function smToggleLightingWindow() {
-  const box = document.getElementById('sm-lighting');
-  const on = box.checked;
+function _closeMatePopup() {
+  if (_matePopup) { _matePopup.close(); _matePopup = null; }
+}
+
+async function smToggleMate() {
+  const choice = _mateChoice();
   // `popup` tells the server this page opened its own, so it doesn't open a
   // native one too.
-  const popup = on && !window.pywebview;
-  if (popup) _lightingPopup = window.open('/lighting', 'rp-lighting', 'width=380,height=180');
-  if (!on && _lightingPopup) { _lightingPopup.close(); _lightingPopup = null; }
+  const popup = choice.on && !window.pywebview;
+  if (popup) {
+    // service_mate/mate.py window_size: the same fit as the native window.
+    const height = choice.stations.length > 1 ? 320 : choice.stations[0] === 'lights' ? 240 : 180;
+    _matePopup = window.open('/mate', 'rp-mate', `width=360,height=${height}`);
+  }
+  if (!choice.on) _closeMatePopup();
   try {
-    const res = await _postLightingWindow(on, popup);
+    const res = await _postMate({...choice, popup});
     if (!res.ok) {
-      box.checked = false;
-      if (_lightingPopup) { _lightingPopup.close(); _lightingPopup = null; }
-      setStatus(escapeHtml(res.error || 'Could not open the lighting window.'), 'var(--org)');
+      _closeMatePopup();
+      _renderMate({...choice, on: false});
+      setStatus(escapeHtml(res.error || 'Could not open the Service Mate window.'), 'var(--org)');
+      return;
     }
-  } catch (e) { box.checked = !on; }
+    _renderMate(res.mate);
+  } catch (e) { _closeMatePopup(); _renderMate({...choice, on: false}); }
+}
+
+// A Station or Show box: saved at once; an open window follows within a
+// second. One station stays ticked: a window for none would be empty.
+async function smSaveMate(box) {
+  const choice = _mateChoice();
+  if (!choice.stations.length) { box.checked = true; return; }
+  // Already open: the server keeps the one window. Popup: don't add a native one.
+  const res = await _postMate({...choice, popup: !!_matePopup}).catch(() => null);
+  if (res && res.ok) _renderMate(res.mate);
 }
 
 // Left on last time: reopen it — natively, inside the app. A browser can't
 // open a popup without a click, so there it switches off instead. Asks the
 // server rather than window.pywebview, which pywebview adds after load.
-async function _restoreLightingWindow() {
-  const box = document.getElementById('sm-lighting');
-  box.checked = true;
-  const res = await _postLightingWindow(true, false).catch(() => ({ok: false}));
+async function _restoreMate(m) {
+  _renderMate(m);
+  const res = await _postMate({...m, on: true, popup: false}).catch(() => ({ok: false}));
   if (!res.ok || !res.native) {
-    box.checked = false;
-    _postLightingWindow(false, false).catch(() => {});
+    _renderMate({...m, on: false});
+    _postMate({...m, on: false}).catch(() => {});
   }
 }
 
@@ -3206,19 +3238,19 @@ async function smClearLightingGuide() {
 }
 
 // Closed with its own button: the switch follows, within one poll.
-async function _syncLightingToggle() {
-  const box = document.getElementById('sm-lighting');
+async function _syncMateToggle() {
+  const box = document.getElementById('sm-mate');
   if (!box || !box.checked) return;
-  if (_lightingPopup) {
-    if (_lightingPopup.closed) { _lightingPopup = null; box.checked = false; smToggleLightingWindow(); }
+  if (_matePopup) {
+    if (_matePopup.closed) { _matePopup = null; box.checked = false; smToggleMate(); }
     return;
   }
-  const h = await fetch('/api/lighting').then(r => r.json()).catch(() => null);
-  if (h && !h.on) box.checked = false;
+  const cfg = await fetch('/api/clocks').then(r => r.json()).catch(() => null);
+  if (cfg && cfg.mate && !cfg.mate.on) _renderMate(cfg.mate);
 }
 
 async function smRefreshState() {
-  _syncLightingToggle();
+  _syncMateToggle();
   try {
     const state = await fetch('/api/runsheet/state').then(r => r.json());
     const items = state.items || [];
