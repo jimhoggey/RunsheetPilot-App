@@ -85,6 +85,29 @@ Where it differs from the clock, it differs only to stay uncluttered:
   two stations are ticked, so a single-station window has no labels at all.
 - **Small windows:** a short window drops THEN first, then UP NEXT.
 
+### Optional sections: try them, keep what earns its place
+
+A window isn't limited to 240×240 pixels, so it can show what the clock has
+to leave out. Which of these is worth the space isn't known yet, so none is
+hard-coded. Each is a "Show" tick box in settings (below), to be tried on
+real Sundays:
+
+| Section | Shows | Default |
+|---|---|---|
+| **Timing** | This segment's planned start and length, and how far ahead or behind the service is running, e.g. "6:10 PM · 20 min · 3 min behind". | on |
+| **Tech notes** | The runsheet's own notes for this segment in full, e.g. "Drop lights to 12% for worship." Muted, under the cues; long notes clamp to 3 lines and expand on click. | off |
+| **Up next in full** | Every cue for the next segment, not just the first. | off |
+| **Coming later** | The two or three segments after the next one, with their start times. | off |
+
+- **Timing** compares when the segment actually started (`current_started_at`,
+  set as ProPresenter moves) with the start time the runsheet gave it.
+  Within a minute it reads "on time". With no start time on the segment,
+  it shows only the length. With neither, it doesn't appear.
+- A ticked section with nothing to say for this segment doesn't appear, the
+  same rule as everything else.
+- Order on the window: segment line, Timing, cues, Tech notes, Lights, Up next
+  (or Up next in full), Coming later.
+
 The Sound station is not offered in the window in v1. Sound runs at the sound
 desk, not the ProPresenter computer. The window builds every section from
 `build_state_payload`, which already handles Sound, so adding it later is a
@@ -107,23 +130,33 @@ answering". That way the operator knows the segment may be out of date.
 In the Service Mate panel, the "Lighting heads-up window" switch becomes:
 
 **Service Mate on this computer** [switch] — ☑ Screens ☐ Lights
+Show: ☑ Timing ☐ Tech notes ☐ Up next in full ☐ Coming later
 
 - The clocks table, brightness and the lighting guide row are unchanged.
-- Saved in `clocks.json` as `"mate": {"on": bool, "stations": ["screen", "lights"]}`.
-- A new setup defaults to Screens ticked.
+- Saved in `clocks.json` as
+  `"mate": {"on": bool, "stations": ["screen", "lights"], "show": ["timing"]}`.
+  Unknown names in `stations` or `show` are ignored.
+- A new setup defaults to Screens ticked and shows Timing.
+- The "Show" row appears only while the switch is on.
 - **Carrying over:** when the config is read, `lighting_window: true` with no
-  `mate` key becomes `{"on": true, "stations": ["lights"]}`. Someone who used
-  the lighting window gets the same lights card, minus the NOW row, with no
-  setup. The old key is dropped the next time the config is saved.
-- Ticking a station updates an open window within one poll. The window reads
-  its stations from the config, not from its URL.
+  `mate` key becomes `{"on": true, "stations": ["lights"], "show": ["timing"]}`.
+  Someone who used the lighting window gets the same lights card, minus the
+  NOW row, with no setup. The old key is dropped the next time the config is
+  saved.
+- Ticking a station or a "Show" box updates an open window within one poll.
+  The window reads both from the config, not from its URL.
 - Licence: the window stays under the Service Mate licence and trial, as
   the lighting window is today.
 
 ## How it fits together
 
+**One function builds the whole view.** A new `service_mate/mate.py` holds
+`mate_view(state, stations, show, ends_at, now) -> dict`. `GET /api/mate` only
+reads the config and calls it. It is kept out of the route so a bigger
+physical display can be fed the same view later (see "Not in v1").
+
 **The clock's own payload is the window's data.** For each ticked station,
-`GET /api/mate` calls `build_state_payload(role, "detailed", state, ends_at,
+`mate_view` calls `build_state_payload(role, "detailed", state, ends_at,
 now)`, the same function, from the same state, that builds what that
 station's clock is sent. The page draws the segment, countdown, cues and up
 next straight from those payloads. There is no second derivation that could
@@ -139,6 +172,14 @@ drift from the clocks.
   nudge the clocks' deadline. Until the loop's next tick (0.5 s or less)
   there is no countdown. The payload's `now` lets the page correct for clock
   offset, as the firmware does.
+- **Extras** come from the same state the payloads are built from, and are
+  built only when ticked:
+  - Tech notes are the payload's own `notes`.
+  - Up next in full is `_cues_for(role, next item)`.
+  - Coming later is the titles and `start_time` of the items after the next.
+  - Timing comes from the current item's `start_time`, `duration_min` and the
+    state's `current_started_at`. One small helper, `segment_timing(state, now)`,
+    holds the ahead/behind sum, so it can be tested on its own.
 - **The clocks are untouched.** `build_state_payload`, `lights_view` and the
   stock render keep their behaviour. The existing tests are the guard.
 
@@ -147,7 +188,7 @@ drift from the clocks.
 | Route | Change |
 |---|---|
 | `GET /mate` | new page, `templates/mate.html`, replacing `lighting.html` |
-| `GET /api/mate` | new: `{state: "live"\|"off"\|"standby"\|"empty", stations: {screen: <payload>, lights: <payload>}, lighting: {next, then, done} \| null, pp_ok}`, with only the ticked stations present |
+| `GET /api/mate` | new: `{state: "live"\|"off"\|"standby"\|"empty", stations: {screen: <payload>, lights: <payload>}, lighting: {next, then, done} \| null, extras: {timing, notes, next_cues, later}, pp_ok}`, with only the ticked stations and ticked extras present |
 | `POST /api/mate/window` | replaces `/api/lighting/window`: `{on, stations}` |
 | `GET /lighting` | redirects to `/mate` |
 | `GET /api/lighting` | removed; nothing else reads it |
@@ -174,9 +215,15 @@ dialogs.
 ## Not in v1
 
 - The Sound station in the window.
-- The runsheet's raw notes. The cues are already written from them.
-- Deciding which cues to keep, drop or merge. That comes after real use, with
-  the data in hand (see the principle above).
+- Deciding which cues and which optional sections to keep, drop or merge.
+  That comes after real use, with the data in hand (see the principle above).
+- Tracking which sections people tick. Usage stats stay as they are; the
+  owner judges by using it.
+- A bigger physical Service Mate: the yellow ESP32 development boards with a
+  2.8" 320×240 touchscreen ("Cheap Yellow Display", ESP32-2432S028), instead
+  of today's 240×240 clock. It could show the window's richer view, and its
+  touchscreen could tick off a lighting step. `mate_view` is the hook for
+  it. It needs new firmware, so it's a project of its own.
 - Phone or tablet pages over the network. The app listens on 127.0.0.1 only,
   and opening it to the network needs its own locked-down read-only page.
 - An agent or extra model calls during the service. The understanding happens
@@ -197,8 +244,14 @@ dialogs.
 - **`EndsAtHolder.peek`:**
   - it returns the held deadline for the current item and None for another item;
   - it never changes what `resolve` returns next.
-- **Settings:** `lighting_window: true` reads as `{on: true, stations: ["lights"]}`.
-  A saved `mate` wins over the old key.
+- **Extras:**
+  - each appears only when ticked, and only when it has something to say;
+  - `segment_timing`: on time within a minute, ahead and behind, no start
+    time (length only), neither (absent), and a start time that won't parse
+    (length only).
+- **Settings:** `lighting_window: true` reads as
+  `{on: true, stations: ["lights"], show: ["timing"]}`. A saved `mate` wins
+  over the old key. Unknown names in `stations` or `show` are dropped.
 - **The loop** runs with only `mate.on` (no clocks), and not with it off.
 - **Window routes:** `/lighting` redirects; `/api/mate/window` opens and
   closes the fake webview as the lighting window tests do now.
@@ -217,8 +270,9 @@ ticked, sees on one small window what their clocks would show them:
 - the segment and its countdown;
 - the screens cues;
 - the next light change and the one after;
-- what's up next.
+- what's up next;
+- whether the service is running on time.
 
-People who used the lighting window carry on without touching a setting. The
-physical clocks don't change. After a few Sundays, the owner and the app
-decide together which cues earn their place.
+Anything more is one tick box away. People who used the lighting window
+carry on without touching a setting. The physical clocks don't change. After
+a few Sundays, the owner decides which cues and sections earn their place.
