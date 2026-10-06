@@ -14,8 +14,8 @@
   /* Read at a glance, in a dark booth: one bright anchor (the segment and
      its countdown), each station a colour-barred block, and secondary text
      dim but never faint. */
-  :root { --bg: #111118; --text: #f2f2f8; --dim: #b9b9cc; --faint: #9494a8; --line: #2e2e3c;
-          --screen: rgb(96, 158, 255); --lights: rgb(250, 176, 46); --over: #fb8686; }
+  :root { --bg: #111118; --text: #f5f5fa; --dim: #cdcdda; --faint: #adadc0; --line: #353545;
+          --screen: rgb(125, 177, 255); --lights: rgb(252, 188, 70); --over: #ff9a9a; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
          font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -58,8 +58,8 @@
   #tick { font-size: .72rem; color: var(--dim); border: 1px solid var(--faint); border-radius: 999px; padding: 2px 8px; }
   #next:disabled #tick { display: none; }
   .row { display: flex; gap: 8px; align-items: baseline; }
-  /* What's coming sits below a rule, so the live segment reads as one block. */
-  #upnext { border-top: 1px solid var(--line); padding-top: 6px; }
+  /* What's coming sits inside its station's block, below a rule. */
+  #upnext { border-top: 1px solid var(--line); padding-top: 5px; margin-top: 6px; }
   #upnext-text { color: var(--text); }
   #upnext-cues li .station-label { margin-right: 4px; }
   #later-list { list-style: none; padding: 0; font-size: .82rem; }
@@ -189,22 +189,29 @@
     el('timing').textContent = x.timing ? timingText(x.timing) : '';
 
     const sc = h.stations.screen;
-    el('sec-screen').hidden = !(sc && sc.cues.length);
-    fillList(el('screen-cues'), sc ? sc.cues.map(text => ({text})) : []);
+    const screenCues = sc ? sc.cues : [];
+    fillList(el('screen-cues'), screenCues.map(text => ({text})));
 
     el('notes').hidden = !x.notes;
     el('notes').textContent = x.notes || '';
 
-    drawLights(h);
+    const lightsHas = drawLights(h);
 
-    // Up next: the lead clock's next title and cue — or, ticked, every cue.
-    el('upnext').hidden = !lead.next_title;
+    // What's coming belongs to the station that reads it, so it sits inside
+    // that block: Screens where it's ticked, since its cue is the next slide.
     const full = x.next_cues;
+    el('upnext').hidden = !lead.next_title;
     el('upnext-text').textContent = full || !lead.next_cue ? lead.next_title
       : `${lead.next_title} · ${lead.next_cue}`;
     fillList(el('upnext-cues'), full
       ? roles.flatMap(role => (full[role] || []).map(text => ({text, role: roles.length > 1 ? role : null})))
       : []);
+    el('sec-' + roles[0]).append(el('upnext'));
+
+    // A block shows when it has anything of its own to say.
+    const hosts = role => roles[0] === role && !el('upnext').hidden;
+    el('sec-screen').hidden = !sc || !(screenCues.length || hosts('screen'));
+    el('sec-lights').hidden = !h.stations.lights || !(lightsHas || hosts('lights'));
 
     el('later').hidden = !x.later;
     fillList(el('later-list'), []);
@@ -221,13 +228,12 @@
     el('later-list').hidden = !(x.later || []).length;
   }
 
+  // Draws the Lights block and says whether it has anything of its own:
+  // the card when the runsheet has lighting steps, the Lights clock's cues
+  // when it has none.
   function drawLights(h) {
     const lt = h.lighting, cues = (h.stations.lights || {}).cues || [];
-    const sec = el('sec-lights');
     const n = lt && lt.next;
-    // The card when the runsheet has lighting steps; the Lights clock's cues
-    // when it has none. Nothing at all when there's nothing to say.
-    sec.hidden = !h.stations.lights || (lt ? !(n || lt.done) : !cues.length);
     fillList(el('lights-cues'), lt ? [] : cues.map(text => ({text})));
     el('undo').hidden = !(lt && lt.done);
     el('next').hidden = !n;
@@ -240,6 +246,7 @@
     const then = lt && lt.then;
     el('then-row').hidden = !then;
     el('then').textContent = then ? [then.level, moment(then)].filter(Boolean).join(' · ') : '';
+    return lt ? !!(n || lt.done) : cues.length > 0;
   }
 
   async function refresh() {
