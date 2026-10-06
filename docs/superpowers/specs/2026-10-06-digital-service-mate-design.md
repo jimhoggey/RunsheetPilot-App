@@ -81,8 +81,12 @@ Where it differs from the clock, it differs only to stay uncluttered:
   Screens is ticked, otherwise from the Lights payload. Both are built from
   the plain state, so this is always the next item, never the next lighting
   change. One line.
-- **Labels:** a station label in its clock's accent colour appears only when
-  two stations are ticked, so a single-station window has no labels at all.
+- **Each station is a block.** Its name heads it in the clock's accent
+  colour, with a bar of that colour down its left edge, so Screens and
+  Lights are told apart at a glance. What's coming sits below a rule.
+- **Readable in a dark booth.** The segment is the one bright anchor, with
+  its countdown. Secondary text is dim but never faint: the operator reads
+  this at a glance, mid-service, from a seated distance.
 - **Small windows:** a short window drops THEN first, then UP NEXT.
 
 ### Optional sections: try them, keep what earns its place
@@ -191,7 +195,7 @@ drift from the clocks.
 | Route | Change |
 |---|---|
 | `GET /mate` | new page, `templates/mate.html`, replacing `lighting.html` |
-| `GET /api/mate` | new: `{state: "live"\|"off"\|"standby"\|"empty", stations: {screen: <payload>, lights: <payload>}, lighting: {next, then, done} \| null, extras: {timing, notes, next_cues, later}, pp_ok}`, with only the ticked stations and ticked extras present |
+| `GET /api/mate` | new: `{state: "live"\|"off"\|"standby"\|"empty", order: ["screen", "lights"], stations: {screen: <payload>, lights: <payload>}, lighting: {next, then, done} \| null, extras: {timing, notes, next_cues, later}, pp_ok}`, with only the ticked stations and ticked extras present. `order` carries the operator's order, since Flask sorts a JSON object's keys and the page would otherwise lead with Lights whenever both are ticked |
 | `POST /api/mate/window` | replaces `/api/lighting/window`: `{on, stations}` |
 | `GET /lighting` | redirects to `/mate` |
 | `GET /api/lighting` | removed; nothing else reads it |
