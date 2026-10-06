@@ -134,6 +134,10 @@ def mate_view(state: dict, stations: list[str], show: list[str],
     # The cleaned position: build_state_payload int()s whatever it's given.
     plain = {**state, "current_index": idx}
     return {"state": "live",
+            # `order` leads with Screens where it's ticked: `stations` is a
+            # JSON object and Flask sorts its keys, so the page can't read
+            # the operator's order off it ("lights" would always lead).
+            "order": list(stations),
             "stations": {role: build_state_payload(role, "detailed", plain, ends_at, now)
                          for role in stations},
             "lighting": lighting, "extras": extras}

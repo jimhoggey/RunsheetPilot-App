@@ -11,35 +11,41 @@
      isn't drawn. Clicking NEXT ticks a lighting change off; undo puts it
      back. -->
 <style>
-  :root { --bg: #111118; --text: #ececf3; --muted: #8b8b9c; --line: #2a2a36;
-          --screen: rgb(59, 130, 246); --lights: rgb(245, 158, 11); --over: #f87171; }
+  /* Read at a glance, in a dark booth: one bright anchor (the segment and
+     its countdown), each station a colour-barred block, and secondary text
+     dim but never faint. */
+  :root { --bg: #111118; --text: #f2f2f8; --dim: #b9b9cc; --faint: #9494a8; --line: #2e2e3c;
+          --screen: rgb(96, 158, 255); --lights: rgb(250, 176, 46); --over: #fb8686; }
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
          font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          padding: 8px 14px 10px; border-top: 3px solid var(--accent, var(--screen));
          overflow-y: auto; }
   [hidden] { display: none !important; }
-  main { display: flex; flex-direction: column; gap: 6px; }
-  ul { margin: 0; padding-left: 18px; }
+  main { display: flex; flex-direction: column; gap: 7px; }
+  ul { margin: 0; padding-left: 17px; }
   li { margin: 1px 0; }
-  .muted { color: var(--muted); }
-  .label { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-  .station-label { display: none; }
-  .two .station-label { display: inline; }
+  .muted { color: var(--dim); }
+  .label { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  /* Each station is its own block, marked down the side in its clock's colour. */
+  section[data-role] { border-left: 3px solid var(--line); padding-left: 9px; }
+  section[data-role="screen"] { border-left-color: var(--screen); }
+  section[data-role="lights"] { border-left-color: var(--lights); }
   [data-role="screen"] .station-label { color: var(--screen); }
   [data-role="lights"] .station-label { color: var(--lights); }
-  #msg { margin: 0; padding-top: 18px; text-align: center; color: var(--muted); font-size: 1rem; }
+  .station-label { font-weight: 700; }
+  #msg { margin: 0; padding-top: 18px; text-align: center; color: var(--dim); font-size: 1rem; }
   .seg { display: flex; align-items: baseline; gap: 10px; }
   #seg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-               color: var(--muted); }
-  #countdown { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.1rem; }
+               font-size: 1.05rem; font-weight: 600; }
+  #countdown { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.15rem; }
   #countdown.over { color: var(--over); }
-  #timing { font-size: .8rem; }
+  #timing { font-size: .8rem; margin-top: -3px; }
   #notes { all: unset; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
-           overflow: hidden; font-size: .82rem; color: var(--muted); cursor: pointer; white-space: pre-line; }
+           overflow: hidden; font-size: .82rem; color: var(--dim); cursor: pointer; white-space: pre-line; }
   #notes[aria-expanded="true"] { display: block; }
   .head { display: flex; align-items: center; gap: 8px; min-height: 22px; }
-  #undo { margin-left: auto; background: none; color: var(--muted); font: inherit; font-size: .78rem;
+  #undo { margin-left: auto; background: none; color: var(--dim); font: inherit; font-size: .78rem;
           border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; min-height: 26px; cursor: pointer; }
   #next { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
           width: 100%; text-align: left; background: none; color: inherit; font: inherit;
@@ -49,13 +55,16 @@
   #next-label { color: var(--lights); font-weight: 700; }
   #next-level { font-size: clamp(1.3rem, 7vw, 2rem); font-weight: 700; line-height: 1.1; }
   #next-when { font-size: .88rem; }
-  #tick { font-size: .72rem; color: var(--muted); border: 1px solid var(--muted); border-radius: 999px; padding: 2px 8px; }
+  #tick { font-size: .72rem; color: var(--dim); border: 1px solid var(--faint); border-radius: 999px; padding: 2px 8px; }
   #next:disabled #tick { display: none; }
   .row { display: flex; gap: 8px; align-items: baseline; }
+  /* What's coming sits below a rule, so the live segment reads as one block. */
+  #upnext { border-top: 1px solid var(--line); padding-top: 6px; }
+  #upnext-text { color: var(--text); }
   #upnext-cues li .station-label { margin-right: 4px; }
   #later-list { list-style: none; padding: 0; font-size: .82rem; }
-  #later-list time { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
-  #pp { font-size: .75rem; margin: 6px 0 0; }
+  #later-list time { color: var(--faint); margin-right: 6px; font-variant-numeric: tabular-nums; }
+  #pp { font-size: .75rem; margin: 6px 0 0; color: var(--dim); }
   /* A window too short for everything keeps the essentials (fit() below):
      THEN and Later go first, then Up next and Timing. */
   .tight #then-row, .tight #later, .tighter #upnext, .tighter #timing { display: none !important; }
@@ -167,9 +176,11 @@
     el('pp').hidden = h.pp_ok !== false || !live;
     if (!live) { el('msg').textContent = PLAIN[h.state] || ''; return; }
 
-    const roles = Object.keys(h.stations);
+    // h.order, not Object.keys: `stations` is a JSON object whose keys the
+    // server sorts, so reading the operator's order off it would lead with
+    // Lights whenever both are ticked.
+    const roles = h.order;
     const lead = h.stations[roles[0]];
-    document.body.classList.toggle('two', roles.length > 1);
     document.body.style.setProperty('--accent', `var(--${roles[0]})`);
     el('seg-title').textContent = lead.title;
 
@@ -184,7 +195,7 @@
     el('notes').hidden = !x.notes;
     el('notes').textContent = x.notes || '';
 
-    drawLights(h, roles.length > 1);
+    drawLights(h);
 
     // Up next: the lead clock's next title and cue — or, ticked, every cue.
     el('upnext').hidden = !lead.next_title;
@@ -210,7 +221,7 @@
     el('later-list').hidden = !(x.later || []).length;
   }
 
-  function drawLights(h, two) {
+  function drawLights(h) {
     const lt = h.lighting, cues = (h.stations.lights || {}).cues || [];
     const sec = el('sec-lights');
     const n = lt && lt.next;
@@ -219,7 +230,6 @@
     sec.hidden = !h.stations.lights || (lt ? !(n || lt.done) : !cues.length);
     fillList(el('lights-cues'), lt ? [] : cues.map(text => ({text})));
     el('undo').hidden = !(lt && lt.done);
-    el('lights-head').hidden = !two && el('undo').hidden;
     el('next').hidden = !n;
     el('lights-over').hidden = !(lt && !n && lt.done);
     if (n) {

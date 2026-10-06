@@ -95,6 +95,13 @@ def test_only_the_ticked_stations_are_built():
     assert list(mate_view(_state(), ["screen"], [], ENDS, NOW)["stations"]) == ["screen"]
 
 
+def test_the_view_names_the_order_to_draw_the_stations_in():
+    """`stations` is a JSON object, and Flask sorts its keys — so "lights"
+    would lead over "screen". The order is carried as a list instead."""
+    assert mate_view(_state(), ["screen", "lights"], [], ENDS, NOW)["order"] == ["screen", "lights"]
+    assert mate_view(_state(), ["lights"], [], ENDS, NOW)["order"] == ["lights"]
+
+
 def test_lights_ticked_shows_the_next_two_changes():
     view = mate_view(_state(), ["lights"], [], ENDS, NOW)
     lt = view["lighting"]
@@ -194,6 +201,7 @@ def test_the_window_is_off_with_service_mate(client):
 def test_the_api_serves_the_ticked_stations(desk):
     view = desk.get("/api/mate").get_json()
     assert (view["state"], sorted(view["stations"])) == ("live", ["lights", "screen"])
+    assert view["order"] == ["screen", "lights"]        # the page draws Screens first
     assert view["lighting"]["next"]["level"] == "12%"
     assert view["extras"]["timing"]["start"] == "6:10 PM"
     _set_desk(stations=["sound", "screen"])
