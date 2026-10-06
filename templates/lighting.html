@@ -4,67 +4,107 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Lighting — coming up</title>
-<!-- The floating lighting heads-up (service_mate/lighting.py). Reads top to
-     bottom in time order: where the lights are NOW, greyed, then the NEXT
-     change, large. It never says "change now": the moment is the room's
-     call. When the section moves on, the next setting slides up into now. -->
+<!-- The floating lighting heads-up (service_mate/lighting.py). One step at
+     a time, top to bottom: where the lights are NOW (greyed), the NEXT
+     change (large) with its moment, then the one after (greyed). It never
+     says "change now": the operator knows the moment, the card says what.
+     Clicking NEXT ticks it off; "undo" puts it back. -->
 <style>
-  :root { --bg: #111118; --text: #ececf3; --muted: #8b8b9c; --amber: #f59e0b; }
+  :root { --bg: #111118; --text: #ececf3; --muted: #8b8b9c; --amber: #f59e0b; --line: #2a2a36; }
   * { box-sizing: border-box; }
   body { margin: 0; height: 100vh; background: var(--bg); color: var(--text);
          font: 15px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-         display: flex; flex-direction: column; justify-content: center;
-         padding: 10px 16px; border-top: 3px solid var(--amber); overflow: hidden; }
-  .label { font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; }
-  #now-row { color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
-  #now { font-size: 1rem; }
-  #arrow { color: var(--muted); font-size: .9rem; line-height: 1; margin: 2px 0 2px 2px; }
+         display: flex; flex-direction: column; justify-content: center; gap: 4px;
+         padding: 10px 14px; border-top: 3px solid var(--amber); overflow: hidden; }
+  .label { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
+  .row { display: flex; gap: 8px; align-items: baseline; color: var(--muted); }
+  #undo { margin-left: auto; background: none; color: var(--muted); font: inherit; font-size: .78rem;
+          border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; min-height: 26px; cursor: pointer; }
+  #next { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
+          width: 100%; text-align: left; background: none; color: inherit; font: inherit;
+          border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  #next:disabled { cursor: default; border-color: transparent; padding-left: 0; }
+  #next:focus-visible, #undo:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   #next-label { color: var(--amber); font-weight: 700; }
-  #next-label span { color: var(--muted); font-weight: 400; }
-  #next { font-size: clamp(1.25rem, 7.5vw, 2.1rem); font-weight: 700; }
-  .quiet #next { font-size: 1rem; font-weight: 600; color: var(--muted); }
+  #next-level { font-size: clamp(1.3rem, 8vw, 2.2rem); font-weight: 700; line-height: 1.1; }
+  #next-when { font-size: .9rem; }
+  #tick { font-size: .72rem; color: var(--muted); border: 1px solid var(--muted); border-radius: 999px; padding: 2px 8px; }
+  #next:disabled #tick { display: none; }
+  .quiet #next-level { font-size: 1rem; font-weight: 600; color: var(--muted); }
   [hidden] { display: none !important; }
-  /* The next setting moving up into "now" when the section changes. */
-  .moved #now-row, .moved #next-block { animation: up .45s ease-out; }
-  @keyframes up { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
-  @media (prefers-reduced-motion: reduce) { .moved #now-row, .moved #next-block { animation: none; } }
+  /* A short window has room for NOW and NEXT only. */
+  @media (max-height: 175px) { #then-row { display: none; } body { gap: 2px; padding-top: 6px; } }
+  /* A short nudge as the next setting moves up; it never hides the instruction. */
+  .moved #now-row, .moved #next, .moved #then-row { animation: up .2s ease-out; }
+  @keyframes up { from { transform: translateY(8px); } to { transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .moved #now-row, .moved #next, .moved #then-row { animation: none; } }
 </style>
 </head>
 <body>
-  <div id="now-row"><span class="label">Now</span><span id="now"></span></div>
-  <div id="arrow" aria-hidden="true">↓</div>
-  <div id="next-block" aria-live="polite">
-    <div class="label" id="next-label"></div>
-    <div id="next">—</div>
-  </div>
+  <div class="row" id="now-row"><span class="label">Now</span><span id="now"></span>
+    <button id="undo" type="button" hidden>undo</button></div>
+  <button id="next" type="button" aria-live="polite">
+    <span>
+      <span class="label" id="next-label"></span>
+      <div id="next-level">—</div>
+      <div id="next-when"></div>
+    </span>
+    <span id="tick">done ✓</span>
+  </button>
+  <div class="row" id="then-row"><span class="label">Then</span><span id="then"></span></div>
 <script>
   const el = id => document.getElementById(id);
-  let shown = null;
+  let shown = null, last = null, busy = false;
+  const moment = s => s.here ? s.when : [s.section && 'at ' + s.section, s.when].filter(Boolean).join(' · ');
+
   async function refresh() {
     let h;
     try { h = await fetch('/api/lighting', {cache: 'no-store'}).then(r => r.json()); }
     catch (_) { return; }   // the app is restarting or closed: keep the last card
-    // Only touch the page when something changed, so the screen reader
-    // isn't re-told the same thing every second and the slide plays once.
-    const key = [h.now, h.off, h.has_lighting, h.next, h.next_section].join('\u0000');
+    if (busy) return;       // a tick is saving: its own refresh draws the result
+    last = h;
+    // Redraw only on a change: the slide plays once, and a screen reader
+    // isn't re-told the card every second.
+    const key = JSON.stringify([h.now, h.off, h.has_lighting, h.next, h.then, h.done]);
     if (key === shown) return;
-    const moved = shown !== null && h.now !== shown.split('\u0000')[0];
+    const moved = shown !== null && h.now !== JSON.parse(shown)[0];
     shown = key;
-    const quiet = !h.has_lighting || !h.next;
-    document.body.classList.toggle('quiet', quiet);
-    el('now-row').hidden = el('arrow').hidden = !h.now;
+    const n = h.next;
+    document.body.classList.toggle('quiet', !n);
+    el('now-row').hidden = !h.now;
     el('now').textContent = h.now || '';
-    el('next-label').innerHTML = h.next
-      ? 'Next <span>· at ' + escape(h.next_section) + '</span>' : '';
-    el('next').textContent = h.off ? 'Service Mate is off.'
-      : !h.has_lighting ? 'This runsheet doesn’t mention lighting.'
-      : h.next || 'No more lighting changes.';
+    el('undo').hidden = !h.done;
+    el('next-label').textContent = n ? 'Next' : '';
+    el('next-level').textContent = h.off ? 'Service Mate is off.'
+      : !h.has_lighting ? 'No lighting cues for this runsheet.'
+      : n ? n.level : 'No more lighting changes.';
+    el('next-when').textContent = n ? moment(n) : '';
+    el('next').disabled = !(n && n.here);
+    el('then-row').hidden = !h.then;
+    el('then').textContent = h.then ? [h.then.level, moment(h.then)].filter(Boolean).join(' · ') : '';
     document.body.classList.remove('moved');
     if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
   }
-  function escape(s) {
-    return String(s || '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+
+  // Each click names what the card showed, so the server refuses it if
+  // that has changed (a double-click, a card a second old) rather than
+  // ticking off a step nobody saw. One request at a time.
+  async function tick(body) {
+    if (busy || !last) return;
+    busy = true;
+    el('next').disabled = el('undo').disabled = true;
+    try {
+      await fetch('/api/lighting/done', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify(body)});
+    } catch (_) { /* the poll shows whatever is true */ }
+    busy = false;
+    el('undo').disabled = false;
+    shown = null;           // redraw from the server's answer
+    refresh();
   }
+  el('next').addEventListener('click', () => last && last.next &&
+    tick({index: last.next.index, step: last.next.step}));
+  el('undo').addEventListener('click', () => last && tick({undo: true, done: last.done}));
   refresh();
   setInterval(refresh, 1000);
 </script>

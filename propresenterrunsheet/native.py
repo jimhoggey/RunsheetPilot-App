@@ -38,7 +38,7 @@ def open_lighting_window(url: str) -> bool:
     if _lighting is None:
         _lighting = webview.create_window(
             "Lighting — coming up", url, width=380, height=180,
-            min_size=(260, 140), on_top=True,
+            min_size=(280, 150), on_top=True,
             background_color="#111118")   # the card's own, so it doesn't flash white
         _lighting.events.closed += _forget_lighting
     return True

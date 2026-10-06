@@ -182,6 +182,7 @@ def _write_sm_state(name, matched, timer_result, keep_position=False) -> None:
             _ensure_item_cues(p)
             sm_items.append(p)
         current_index, started_at = 0, _dt.datetime.now().isoformat()
+        lighting_done = None
         if keep_position:
             prev = _read_runsheet_state() or {}
             prev_titles = [(it or {}).get("title")
@@ -189,12 +190,15 @@ def _write_sm_state(name, matched, timer_result, keep_position=False) -> None:
             if prev_titles == [it.get("title") for it in sm_items]:
                 current_index = prev.get("current_index", 0) or 0
                 started_at = prev.get("current_started_at") or started_at
+                # Lighting steps ticked off in the live section stay ticked.
+                lighting_done = prev.get("lighting_done")
         _write_runsheet_state({
             "service_name":       name,
             "items":              sm_items,
             "current_index":      current_index,
             "current_started_at": started_at,
             "auto_track":         {"enabled": True},
+            **({"lighting_done": lighting_done} if lighting_done else {}),
         })
         log.info(f"Service Mate state written: {len(sm_items)} items")
     except Exception:

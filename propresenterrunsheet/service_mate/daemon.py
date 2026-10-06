@@ -66,6 +66,11 @@ def _state_fingerprint(payload: dict) -> str:
         json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+# What pp_track._maybe_advance_from_pp sets or clears on the runsheet state.
+_PP_TRACKED_KEYS = ("current_index", "current_started_at", "pp_source",
+                    "pp_remaining_seconds", "manual_override_until")
+
+
 def _clocks_loop_tick(tick: int) -> None:
     """One pass of the background loop. `tick` increments each call; PP is
     asked what's live every SM_PP_POLL_EVERY_N_TICKS ticks, or every
@@ -93,12 +98,20 @@ def _clocks_loop_tick(tick: int) -> None:
     if not standby and tick % every == 0:
         before = json.dumps(state, sort_keys=True, default=str)
         state = _maybe_advance_from_pp(state)
-        # Only when PP moved something: polling every tick would otherwise
-        # rewrite the file twice a second, each time risking overwriting a
-        # cue the operator clicked in between.
+        # Only when PP moved something, and only the fields tracking owns,
+        # onto a fresh read: the state was read before PP's 2 s requests,
+        # and writing that whole copy back erased whatever was saved
+        # meanwhile — a cue clicked, a lighting step ticked off.
         if json.dumps(state, sort_keys=True, default=str) != before:
             try:
-                _write_runsheet_state(state)
+                fresh = _read_runsheet_state() or state
+                for key in _PP_TRACKED_KEYS:
+                    if key in state:
+                        fresh[key] = state[key]
+                    else:
+                        fresh.pop(key, None)
+                _write_runsheet_state(fresh)
+                state = fresh
             except Exception:
                 log.exception("Failed to persist runsheet state mid-loop")
     # Resolved ONCE per tick, before the per-clock loop, so every clock in this
