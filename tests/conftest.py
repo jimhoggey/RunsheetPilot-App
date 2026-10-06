@@ -35,6 +35,7 @@ def _no_native_window(monkeypatch):
     from propresenterrunsheet import native
     monkeypatch.setattr(native, "webview", None)
     monkeypatch.setattr(native, "_mate", None)
+    monkeypatch.setattr(native, "_fitted", {"height": None})
 
 
 @pytest.fixture

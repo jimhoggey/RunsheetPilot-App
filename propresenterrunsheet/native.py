@@ -13,7 +13,12 @@ log = logging.getLogger("pp_runsheet")
 
 webview = None            # the pywebview module, set by server.py
 _mate = None              # the open digital Service Mate window, if any
-_mate_height = None       # the height it was last fitted to
+# The height the window was last FITTED to — deliberately not its current
+# height, which the operator may have dragged. Only a change in the fitted
+# height resizes it, so ticking a Show box never undoes their resizing.
+# Held in a dict, as the other module state here is (pp_track.PP_REACHABLE),
+# so no function needs a `global` to record it.
+_fitted = {"height": None}
 
 
 def _forget_mate():
@@ -36,7 +41,7 @@ def _forget_mate():
 def open_mate_window(url: str, width: int, height: int, min_height: int) -> bool:
     """Open (or keep) the always-on-top digital Service Mate, fitted to the
     stations it shows. False when there is no native window toolkit."""
-    global _mate, _mate_height
+    global _mate
     if webview is None:
         return False
     if _mate is None:
@@ -45,11 +50,10 @@ def open_mate_window(url: str, width: int, height: int, min_height: int) -> bool
             min_size=(width, min_height), on_top=True,
             background_color="#111118")   # the card's own, so it doesn't flash white
         _mate.events.closed += _forget_mate
-        _mate_height = height
-    elif height != _mate_height:
+        _fitted["height"] = height
+    elif height != _fitted["height"]:
         # A station ticked or unticked while open: refit, keeping the width
-        # the operator chose. A Show box doesn't change the height, so it
-        # never undoes their resizing.
+        # the operator chose.
         _resize(_mate.width, height)
     return True
 
@@ -58,10 +62,9 @@ def _resize(width: int, height: int) -> None:
     """Resize the open window, and remember the height it's fitted to — only
     once it really resized, so a failure is retried rather than recorded as
     done. Cosmetic either way: a failure is logged, never raised."""
-    global _mate_height
     try:
         _mate.resize(width, height)
-        _mate_height = height
+        _fitted["height"] = height
     except Exception:
         log.exception("Couldn't resize the Service Mate window")
 
