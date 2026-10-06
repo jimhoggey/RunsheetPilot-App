@@ -45,16 +45,19 @@ def open_mate_window(url: str, width: int, height: int, min_height: int) -> bool
             min_size=(width, min_height), on_top=True,
             background_color="#111118")   # the card's own, so it doesn't flash white
         _mate.events.closed += _forget_mate
+        _mate_height = height
     elif height != _mate_height:
         # A station ticked or unticked while open: refit, keeping the width
         # the operator chose. A Show box doesn't change the height, so it
-        # never undoes their resizing. Cosmetic: a failure is only logged.
+        # never undoes their resizing.
         _resize(_mate.width, height)
-    _mate_height = height
     return True
 
 
 def _resize(width: int, height: int) -> None:
+    """Resize the open window, and remember the height it's fitted to — only
+    once it really resized, so a failure is retried rather than recorded as
+    done. Cosmetic either way: a failure is logged, never raised."""
     global _mate_height
     try:
         _mate.resize(width, height)
