@@ -132,7 +132,9 @@
       <ul id="later-list"></ul>
     </div>
   </main>
-  <p id="pp" class="muted" hidden>ProPresenter isn’t answering — the segment may be out of date.</p>
+  <!-- One line on purpose: wrapped, it pushed the next lighting change off
+       a short card, and a warning must not crowd out what it warns about. -->
+  <p id="pp" class="muted" hidden>ProPresenter isn’t answering</p>
 <script>
   const el = id => document.getElementById(id);
   const NAMES = {screen: 'Screens', lights: 'Lights'};
@@ -264,7 +266,9 @@
         t.textContent = it.start_time;
         li.append(t);
       }
-      li.append(it.title);
+      // The gap before the title is a margin, which a screen reader doesn't
+      // see — without this it reads "6:35 PMNotices".
+      li.append((it.start_time ? ' ' : '') + it.title);
       el('later-list').append(li);
     }
     el('later-list').hidden = !(x.later || []).length;
@@ -304,15 +308,20 @@
     // Redraw only on a change (`now` moves every poll): the next change
     // slides in once, and a screen reader isn't re-told the window each second.
     const key = JSON.stringify(h, (k, v) => k === 'now' ? undefined : v);
-    if (key === shown) return;
-    const before = shown && JSON.parse(shown);
-    shown = key;
-    draw(h);
+    if (key !== shown) {
+      const before = shown && JSON.parse(shown);
+      shown = key;
+      draw(h);
+      const moved = before && h.lighting && before.lighting
+        && JSON.stringify(h.lighting.next) !== JSON.stringify(before.lighting.next);
+      document.body.classList.remove('moved');
+      if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
+    }
+    // Every poll, not only on a change: a card measured mid-layout — before
+    // the font lands, or while a warning still wrapped — would otherwise
+    // keep a section hidden for the rest of the service. fit() re-tests from
+    // scratch inside one call, so nothing flickers between the two states.
     fit();
-    const moved = before && h.lighting && before.lighting
-      && JSON.stringify(h.lighting.next) !== JSON.stringify(before.lighting.next);
-    document.body.classList.remove('moved');
-    if (moved) { void document.body.offsetWidth; document.body.classList.add('moved'); }
   }
 
   // Each click names what the card showed, so the server refuses it if

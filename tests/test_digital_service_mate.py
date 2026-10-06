@@ -190,6 +190,33 @@ def test_a_junk_position_shows_the_first_segment_rather_than_failing():
     assert view["stations"]["screen"]["title"] == "Worship"
 
 
+def test_a_half_written_state_file_reads_as_no_runsheet():
+    """Mid-service the window must say something plain, not go blank on a
+    500 — the clock loop survives the same data by logging and skipping."""
+    assert mate_view({"items": ["not an item"]}, ["screen"], [], None, NOW) == {"state": "empty"}
+
+
+# ── Tech notes: the runsheet's own, without its time repeated ───────────────
+
+@pytest.mark.parametrize("note, start, want", [
+    # Their 11 Oct runsheet: 10 of 18 items carried only the time.
+    ("9:55 AM", "9:55 AM", ""),
+    ("9:58 AM Tech Team:Screens: Welcome, Ways to Give", "9:58 AM",
+     "Tech Team:Screens: Welcome, Ways to Give"),
+    ("10:01 AM  Tech Team:Screen: Communion", "10:01 AM", "Tech Team:Screen: Communion"),
+    # A DIFFERENT time is part of what the note says, so it stays.
+    ("9:27 AM countdown ends", "9:25 AM", "9:27 AM countdown ends"),
+    ("Start streaming before the huddle", "9:24 AM", "Start streaming before the huddle"),
+    ("9:55 AM", "", "9:55 AM"),                 # nothing to compare it against
+    ("", "9:55 AM", ""),
+    (None, "9:55 AM", ""),
+    (12, "9:55 AM", "12"),
+])
+def test_a_note_that_only_repeats_the_start_time_says_nothing(note, start, want):
+    from propresenterrunsheet.routes.parse import _clean_notes
+    assert _clean_notes(note, start) == want
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 def _set_desk(**mate):

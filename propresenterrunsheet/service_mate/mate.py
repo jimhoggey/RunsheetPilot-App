@@ -7,12 +7,15 @@ optional sections the operator ticks to find out what earns its place
 (docs/superpowers/specs/2026-10-06-digital-service-mate-design.md).
 """
 import datetime as _dt
+import logging
 
 from ..parsing.duration import _extract_duration_min
 from ..parsing.timed_rows import _minutes, _norm_time
 from .lighting import current_index, done_for, has_lighting, heads_up
 from .protocol import build_state_payload
 from .state import _cues_for, _next_visible_item
+
+log = logging.getLogger("pp_runsheet")
 
 # Sound runs at the sound desk, not the ProPresenter computer: not offered
 # here yet, though build_state_payload already serves it.
@@ -146,11 +149,18 @@ def mate_view(state: dict, stations: list[str], show: list[str],
 
     # The cleaned position: build_state_payload int()s whatever it's given.
     plain = {**state, "current_index": idx}
+    try:
+        built = {role: build_state_payload(role, "detailed", plain, ends_at, now)
+                 for role in stations}
+    except Exception:
+        # A hand-edited or half-written state file: the window says there's
+        # no runsheet rather than going blank on a 500 mid-service, which is
+        # what the clock loop does with the same data.
+        log.exception("Couldn't build the Service Mate view")
+        return {"state": "empty"}
     return {"state": "live",
             # `order` leads with Screens where it's ticked: `stations` is a
             # JSON object and Flask sorts its keys, so the page can't read
             # the operator's order off it ("lights" would always lead).
-            "order": list(stations),
-            "stations": {role: build_state_payload(role, "detailed", plain, ends_at, now)
-                         for role in stations},
+            "order": list(stations), "stations": built,
             "lighting": lighting, "extras": extras}
