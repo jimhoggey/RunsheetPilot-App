@@ -492,7 +492,11 @@
             Cue control
           </div>
           <div id="sm-current" style="font-size:0.92rem;font-weight:600;margin-bottom:4px;min-height:1.3em">—</div>
-          <div id="sm-next" style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;min-height:1.2em">—</div>
+          <div id="sm-next" style="font-size:0.78rem;color:var(--muted);margin-bottom:6px;min-height:1.2em">—</div>
+          <!-- Whether it is following ProPresenter right now. The buttons
+               below are the ones this is meant to stop you reaching for,
+               so the answer belongs beside them. -->
+          <div id="sm-follow" style="font-size:0.78rem;margin-bottom:10px;min-height:1.2em"></div>
           <div class="row" style="gap:6px;flex-wrap:wrap">
             <button class="btn btn-dim btn-sm" onclick="smCue(-1)">◀ Prev</button>
             <button class="btn btn-acc btn-sm" onclick="smCue(+1)">Next ▶</button>

@@ -40,6 +40,7 @@ from ..logging_setup import log_safe
 from ..propresenter.media_bin import (
     fetch_media_bin, relink_media, unresolvable_media,
 )
+from ..propresenter.anchors import anchor_labels, read_anchors
 from ..propresenter.discovery import resolve_port
 from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_playlist_dir, find_pp_root
@@ -160,11 +161,16 @@ def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
         return 0
 
 
-def _write_sm_state(name, matched, timer_result, keep_position=False) -> None:
+def _write_sm_state(name, matched, timer_result, keep_position=False,
+                    anchors=None) -> None:
     """Persist the Service Mate runsheet state — what the GeekMagic clocks
     display on the LAN. We strip the "match" wrappers and keep only the
     parsed items, plus stamp each item with the exact PP timer name we
     created for it (so auto-track can match by name later).
+
+    `anchors` is the uuid map from `propresenter/anchors.py`: which
+    playlist item stands for which runsheet item, so auto-track resolves
+    by identity instead of re-guessing a header name every half-second.
 
     Shared by create and update mode. `keep_position` is update mode's
     concession to being run mid-service: when the item list is unchanged
@@ -192,6 +198,10 @@ def _write_sm_state(name, matched, timer_result, keep_position=False) -> None:
                 started_at = prev.get("current_started_at") or started_at
                 # Lighting steps ticked off in the live section stay ticked.
                 lighting_done = prev.get("lighting_done")
+                # Same runsheet, and reading the playlist back just failed:
+                # the anchors from last time still point at these items, so
+                # keep them rather than drop to name matching mid-service.
+                anchors = anchors or prev.get("pp_anchors")
         _write_runsheet_state({
             "service_name":       name,
             "items":              sm_items,
@@ -199,6 +209,7 @@ def _write_sm_state(name, matched, timer_result, keep_position=False) -> None:
             "current_started_at": started_at,
             "auto_track":         {"enabled": True},
             **({"lighting_done": lighting_done} if lighting_done else {}),
+            **({"pp_anchors": anchors} if anchors else {}),
         })
         log.info(f"Service Mate state written: {len(sm_items)} items")
     except Exception:
@@ -418,8 +429,14 @@ def api_create_playlist():
         lap("timers")
 
         # 6. Persist Service Mate runsheet state — what the GeekMagic clocks
-        # display on the LAN.
-        _write_sm_state(name, matched, timer_result)
+        # display on the LAN. Read the playlist back first: the names in it
+        # are the ones we just wrote, so this is the one moment they can be
+        # paired with ProPresenter's own uuids, and auto-track tracks by
+        # identity from then on instead of re-matching a header name on
+        # every poll.
+        _write_sm_state(name, matched, timer_result,
+                        anchors=read_anchors(base, playlist_id,
+                                             anchor_labels(matched)))
         log.info("Create took %.1fs — %s", time.time() - before,
                  ", ".join(f"{k} {v}s" for k, v in steps.items()))
 
@@ -1066,8 +1083,13 @@ def api_update_playlist():
             timer_result = _create_pp_timers(
                 base, service_name, matched,
                 key_only=bool(body.get("timers_key_only")))
+        # Update mode needs the anchors just as much: the headers it weaves
+        # in are the ones the operator will click, and marked ones ("↕")
+        # are exactly the names the old matching could not read back.
         _write_sm_state(service_name, matched, timer_result,
-                        keep_position=True)
+                        keep_position=True,
+                        anchors=read_anchors(base, playlist_uuid,
+                                             anchor_labels(matched)))
 
         rep = plan["report"]
         log.info("Playlist updated: %r → +%d headers (%d placed, %d marked), "

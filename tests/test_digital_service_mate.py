@@ -257,13 +257,41 @@ def test_the_countdown_is_the_clocks_own_deadline(desk):
     assert desk.get("/api/mate").get_json()["stations"]["screen"]["ends_at"] == _iso(held)
 
 
-@pytest.mark.parametrize("reachable, tracking, ok", [
-    (False, True, False), (False, False, True), (True, True, True)])
-def test_it_says_when_propresenter_is_not_answering(desk, monkeypatch, reachable, tracking, ok):
+@pytest.mark.parametrize("reachable, tracking, following, note", [
+    # Not answering at all — the operator is on their own and should know.
+    (False, True,  False, "ProPresenter isn’t answering"),
+    # Cueing by hand on purpose: nothing to warn about.
+    (False, False, False, ""),
+    # The case that sent operators back to clicking Next: PP is answering,
+    # but nothing it says can be resolved to a segment, and the only sign
+    # used to be a display that didn't move.
+    (True,  True,  False, "Not following ProPresenter — cue by hand"),
+    # Following: silent, because the card is short and this is the norm.
+    (True,  True,  True,  ""),
+])
+def test_the_card_says_whether_it_is_following_propresenter(
+        desk, monkeypatch, reachable, tracking, following, note):
+    import time
+
     from propresenterrunsheet.service_mate import pp_track, state as sm_state
     monkeypatch.setitem(pp_track.PP_REACHABLE, "ok", reachable)
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "anchor", "at": time.time() if following else 0.0})
     sm_state._write_runsheet_state(_state(auto_track={"enabled": tracking}))
-    assert desk.get("/api/mate").get_json()["pp_ok"] is ok
+    assert desk.get("/api/mate").get_json()["pp_note"] == note
+
+
+def test_a_poll_that_stopped_landing_stops_counting_as_following(monkeypatch):
+    """Liveness, not a latch: the last word from ProPresenter goes stale so
+    a daemon that has quietly stopped polling can't keep claiming it."""
+    import time
+
+    from propresenterrunsheet.service_mate import pp_track
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "anchor",
+                         "at": time.time() - pp_track.FOLLOW_STALE_S - 1})
+    assert pp_track.follow_status() == {"reachable": True, "following": False,
+                                        "source": ""}
 
 
 def test_the_card_sizes_its_own_text_up_and_down(desk):

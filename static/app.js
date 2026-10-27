@@ -3285,7 +3285,28 @@ async function smRefreshState() {
     const autoBox = document.getElementById('sm-autotrack');
     const autoEnabled = (state.auto_track || {}).enabled !== false;
     if (autoBox && autoBox.checked !== autoEnabled) autoBox.checked = autoEnabled;
+    _renderFollow(state.pp_follow || {}, autoEnabled, items.length > 0);
   } catch (e) { /* ignore */ }
+}
+
+// Whether Runsheet Pilot is following ProPresenter right now. Tracking only
+// ever showed itself by the cue moving, so a poll that quietly stopped
+// resolving looked exactly like a stale display — and the honest response
+// was to click Next, which then paused tracking for another ten seconds.
+function _renderFollow(follow, autoEnabled, loaded) {
+  const el = document.getElementById('sm-follow');
+  if (!el) return;
+  const [text, colour] =
+    !loaded            ? ['', 'var(--dim)'] :
+    !autoEnabled       ? ['Auto-track off — cueing by hand', 'var(--dim)'] :
+    !follow.reachable  ? ['⚠ ProPresenter isn’t answering', 'var(--org)'] :
+    !follow.following  ? ['⚠ Not following — ProPresenter is somewhere this runsheet doesn’t cover',
+                          'var(--org)'] :
+    follow.source === 'anchor'
+                       ? ['⚡ Following ProPresenter', 'var(--grn)']
+                       : ['⚡ Following ProPresenter — by header name', 'var(--grn)'];
+  el.textContent = text;
+  el.style.color = colour;
 }
 
 async function smCue(delta) {

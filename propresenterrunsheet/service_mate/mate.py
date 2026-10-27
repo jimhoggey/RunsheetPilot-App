@@ -112,6 +112,29 @@ def segment_timing(item: dict, started_at: str | None, now: _dt.datetime) -> dic
             "drift_min": _drift_min(start, planned, started_at, now) if start else None}
 
 
+def tracking_note(follow: dict, tracking: bool) -> str:
+    """The one line the card says about auto-tracking, or "" for silence.
+
+    Three states the operator could not previously tell apart, because
+    tracking only ever showed itself by the cue moving: ProPresenter not
+    answering at all, answering but not resolvable to a segment, and
+    following. The middle one is the one that mattered — it looked exactly
+    like a stale display, so the operator reached for Next, which paused
+    tracking for another ten seconds.
+
+    Silent while it is following, and silent while the operator has
+    tracking switched off: on a card this short a line must not crowd out
+    what it is there to show. The main window's card has the room to say
+    the positive, and does."""
+    if not tracking:
+        return ""
+    if not follow.get("reachable"):
+        return "ProPresenter isn’t answering"
+    if not follow.get("following"):
+        return "Not following ProPresenter — cue by hand"
+    return ""
+
+
 def mate_view(state: dict, stations: list[str], show: list[str],
               ends_at: _dt.datetime | None, now: _dt.datetime) -> dict:
     """Everything the window draws. Each station's entry is its clock's own
