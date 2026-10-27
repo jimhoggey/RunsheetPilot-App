@@ -277,7 +277,7 @@ def api_mate():
     auto = state.get("auto_track")
     tracking = isinstance(auto, dict) and bool(auto.get("enabled"))
     return jsonify({**view, "scale": desk["scale"],
-                    "pp_note": tracking_note(follow_status(), tracking)})
+                    "pp_note": tracking_note(follow_status(state), tracking)})
 
 
 @bp.route("/api/mate/scale", methods=["POST"])

@@ -115,28 +115,27 @@ def segment_timing(item: dict, started_at: str | None, now: _dt.datetime) -> dic
 def tracking_note(follow: dict, tracking: bool) -> str:
     """The one line the card says about auto-tracking, or "" for silence.
 
-    Four states the operator could not previously tell apart, because
-    tracking only ever showed itself by the cue moving: not answering,
-    answering with nothing running, running something that can't be
-    placed, and following. The third is the one that mattered — it looked
-    exactly like a stale display, so the operator reached for Next, which
-    paused tracking for another ten seconds. The second is the ordinary
-    state before a service starts, and calling it a miss would send
-    someone hunting for a fault that isn't there.
+    This card speaks ONLY for the two states the operator can act on:
+    ProPresenter not answering, and ProPresenter running something this
+    runsheet cannot place. Following, paused by a hand on Prev/Next,
+    tracking switched off, and nothing running yet are all silence.
 
-    Silent while it is following, and silent while the operator has
-    tracking switched off: on a card this short a line must not crowd out
-    what it is there to show. The main window's card has the room to say
-    the positive, and does."""
-    if not tracking:
+    That restraint is measured, not stylistic. The line costs about 22px,
+    and mate.html drops whole sections to fit: on the Lights desk at the
+    minimum window, one line here is the difference between seeing the
+    change after next and not. Spending it on "nothing is running yet",
+    which is simply true before every service, would take that away every
+    Sunday morning in exchange for news nobody needs.
+
+    The main window's Cue control has the room to say all of it, and
+    does."""
+    if not tracking or follow.get("following") or follow.get("paused"):
         return ""
     if not follow.get("reachable"):
-        return "ProPresenter isn’t answering"
-    if follow.get("following"):
-        return ""
+        return "⚠ ProPresenter isn’t answering"
     if not follow.get("live"):
-        return "Nothing running in ProPresenter yet"
-    return "Not following ProPresenter — cue by hand"
+        return ""
+    return "⚠ Not following ProPresenter — cue by hand"
 
 
 def mate_view(state: dict, stations: list[str], show: list[str],

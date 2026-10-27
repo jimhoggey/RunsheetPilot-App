@@ -136,7 +136,8 @@
        a short card, and a warning must not crowd out what it warns about.
        The words come from the server (mate.tracking_note) — not answering
        and answering-but-lost are different problems. -->
-  <p id="pp" class="muted" hidden></p>
+  <p id="pp" class="muted" hidden
+     style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></p>
 <script>
   const el = id => document.getElementById(id);
   const NAMES = {screen: 'Screens', lights: 'Lights'};

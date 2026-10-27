@@ -210,7 +210,71 @@ def test_following_is_reported_while_it_lasts(monkeypatch):
     monkeypatch.setattr(pp_track, "PP_FOLLOWING",
                         {"source": "anchor", "at": time.time(), "live": True})
     assert pp_track.follow_status() == {"reachable": True, "following": True,
-                                        "source": "anchor", "live": True}
+                                        "source": "anchor", "live": True,
+                                        "paused": False}
+
+
+def test_a_hand_on_the_cue_buttons_is_not_following(monkeypatch):
+    """The ten-second manual override outlives the eight-second staleness
+    window, so the last poll before the click would otherwise read as
+    "Following" for eight seconds and "nothing running" for the next two.
+    Both are false, and that is the moment someone is watching."""
+    import datetime as dt
+
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "anchor", "at": time.time(), "live": True})
+    state = {"manual_override_until":
+             (dt.datetime.now() + dt.timedelta(seconds=10)).isoformat()}
+    got = pp_track.follow_status(state)
+    assert got["paused"] is True
+    assert (got["following"], got["source"], got["live"]) == (False, "", False)
+
+
+@pytest.mark.parametrize("until", [
+    None, "", "not a timestamp",
+    "2020-01-01T00:00:00",            # long spent
+])
+def test_an_override_that_is_over_or_unreadable_does_not_pause(until, monkeypatch):
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "anchor", "at": time.time(), "live": True})
+    assert pp_track.follow_status({"manual_override_until": until})["following"]
+
+
+def test_a_presentation_keeps_reading_as_following_between_moves(monkeypatch):
+    """Without a playlist, PP is tracked by the active presentation's name.
+    Marking that only on the poll that MOVES the cue left the flag true for
+    half a second per segment and false the rest of the time — so a card
+    polling every two seconds said nothing was running while ProPresenter
+    sat on the right slide. Two polls, PP unchanged: both must follow."""
+    import requests
+
+    class _R:
+        def __init__(self, payload):
+            self._p, self.ok = payload, True
+
+        def json(self):
+            return self._p
+
+    def _fake(url, **kw):
+        if "playlist/active" in url:
+            return _R({"presentation": {}})          # no playlist at all
+        if "timers/current" in url:
+            return _R([])
+        return _R({"presentation": {"id": {"name": "King Jesus"}}})
+
+    monkeypatch.setattr(requests, "get", _fake)
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "", "at": 0.0, "live": False})
+    state = {"items": ITEMS, "current_index": 0, "auto_track": {"enabled": True}}
+
+    state = pp_track._maybe_advance_from_pp(state)
+    assert state["current_index"] == 2, "the move itself still happens"
+    assert pp_track.follow_status()["following"] is True
+
+    # Same again, with ProPresenter showing exactly what it showed before.
+    state = pp_track._maybe_advance_from_pp(state)
+    got = pp_track.follow_status()
+    assert (got["following"], got["source"], got["live"]) == (True, "presentation", True)
 
 
 def test_propresenter_answering_with_nothing_running_is_not_a_miss(monkeypatch):

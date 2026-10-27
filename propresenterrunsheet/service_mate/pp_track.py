@@ -74,7 +74,23 @@ PP_FOLLOWING = {"source": "", "at": 0.0, "live": False}
 FOLLOW_STALE_S = 8.0
 
 
-def follow_status() -> dict:
+def paused_by_hand(state: dict) -> bool:
+    """Whether a manual cue click is still holding tracking off.
+
+    Prev/Next set a ten-second window so the operator's input isn't fought.
+    The window matters to the card as much as to the daemon: for those ten
+    seconds "following" is not what is happening, and the stamp from the
+    last poll before the click is stale news, not news."""
+    until = (state or {}).get("manual_override_until")
+    if not until:
+        return False
+    try:
+        return _dt.datetime.fromisoformat(until) > _dt.datetime.now()
+    except Exception:
+        return False
+
+
+def follow_status(state: dict | None = None) -> dict:
     """Whether tracking is following ProPresenter right now, and on what.
 
     The operator could only ever see the *result* of tracking — the cue
@@ -90,10 +106,17 @@ def follow_status() -> dict:
     hunting for a fault that isn't there."""
     at = PP_FOLLOWING["at"] or 0.0
     fresh = bool(at) and (time.time() - at) < FOLLOW_STALE_S
+    # A manual click holds tracking off for ten seconds while this stamp
+    # goes stale after eight, so without this the card would claim to be
+    # following for eight seconds after Next was pressed and then report
+    # nothing running for the remaining two. Both are untrue, and the
+    # moment after that click is exactly when the card is being read.
+    paused = paused_by_hand(state)
     return {"reachable": bool(PP_REACHABLE["ok"]),
-            "following": fresh and bool(PP_FOLLOWING["source"]),
-            "source": PP_FOLLOWING["source"] if fresh else "",
-            "live": fresh and bool(PP_FOLLOWING["live"])}
+            "paused": paused,
+            "following": not paused and fresh and bool(PP_FOLLOWING["source"]),
+            "source": "" if paused or not fresh else PP_FOLLOWING["source"],
+            "live": not paused and fresh and bool(PP_FOLLOWING["live"])}
 
 # Strip header decorations the create-playlist code adds, so we can match the
 # header name back to the original runsheet item title.
@@ -307,13 +330,11 @@ def _maybe_advance_from_pp(state: dict) -> dict:
     auto = (state.get("auto_track") or {})
     if not auto.get("enabled", True):
         return state
-    until = state.get("manual_override_until")
-    if until:
-        try:
-            if _dt.datetime.fromisoformat(until) > _dt.datetime.now():
-                return state
-        except Exception:
-            state.pop("manual_override_until", None)
+    if paused_by_hand(state):
+        return state
+    if state.get("manual_override_until"):
+        # Present but unreadable, or simply spent: either way it is over.
+        state.pop("manual_override_until", None)
     settings = load_settings()
     host = settings.get("pp_host") or "localhost"
     port = settings.get("pp_port") or "50001"
@@ -427,13 +448,20 @@ def _maybe_advance_from_pp(state: dict) -> dict:
                     ).ratio()
                     if score > best_score:
                         best_score, best_i = score, i
+                if best_i >= 0 and best_score >= 0.78:
+                    # Marked on every poll that recognises the presentation,
+                    # not only the one that moves the cue. Guarding this the
+                    # way the write below is guarded left the flag true for
+                    # half a second per segment and false the rest of the
+                    # time, so a card polling every two seconds would report
+                    # nothing running while PP showed the right slide.
+                    PP_FOLLOWING["live"] = True
+                    PP_FOLLOWING["source"] = "presentation"
                 if best_i >= 0 and best_score >= 0.78 and best_i != cur_idx:
                     state["current_index"] = best_i
                     state["current_started_at"] = _dt.datetime.now().isoformat()
                     state["pp_source"] = "presentation"
                     state.pop("pp_remaining_seconds", None)
-                    PP_FOLLOWING["live"] = True
-                    PP_FOLLOWING["source"] = "presentation"
     except Exception:
         log.debug("PP /v1/presentation/active poll failed", exc_info=True)
 

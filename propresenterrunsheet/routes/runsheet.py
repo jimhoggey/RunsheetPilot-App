@@ -31,7 +31,9 @@ def api_runsheet_state_get():
     state = _read_runsheet_state()
     # Whether tracking is following ProPresenter right now — liveness the
     # card shows next to Now/Next, not state, so it is never written back.
-    return jsonify({**(state or {}), "pp_follow": follow_status()})
+    # The state goes in because a manual cue click pauses tracking, and a
+    # card that says "Following" straight after Next is worse than silent.
+    return jsonify({**(state or {}), "pp_follow": follow_status(state or {})})
 
 
 @bp.route("/api/runsheet/state", methods=["POST"])
