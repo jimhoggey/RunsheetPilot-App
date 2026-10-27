@@ -272,7 +272,8 @@ def test_a_presentation_keeps_reading_as_following_between_moves(monkeypatch):
     assert pp_track.follow_status()["following"] is True
 
     # Same again, with ProPresenter showing exactly what it showed before.
-    state = pp_track._maybe_advance_from_pp(state)
+    settled = pp_track._maybe_advance_from_pp(state)
+    assert settled["current_index"] == 2, "nothing moved, so nothing should move"
     got = pp_track.follow_status()
     assert (got["following"], got["source"], got["live"]) == (True, "presentation", True)
 
