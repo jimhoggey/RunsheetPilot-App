@@ -105,6 +105,13 @@ def read_anchors(base: str, playlist_id: str, labels: dict,
         if uuid and isinstance(idx, int) and not isinstance(idx, bool):
             by_uuid[uuid] = idx
     if not by_uuid:
+        # Worth a line of its own: the fallback is silent by design, so
+        # without this the only symptom of ProPresenter handing back names
+        # it has altered — a decoration dropped, a dash normalised — is
+        # tracking that quietly stays on header matching for good.
+        log.info("Auto-track recognised none of the %d names it had just "
+                 "written in the playlist ProPresenter read back; following "
+                 "by header name instead", len(set(labels.values())))
         return {}
     log.info("Auto-track anchored %d playlist item(s) by uuid, covering %d "
              "runsheet item(s)", len(by_uuid), len(set(by_uuid.values())))
