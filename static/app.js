@@ -26,6 +26,9 @@ let uploadedFile = null;
 function _noTemplate() {
   return {uuid: '', name: '', declined: false, service_label: '', pinned: false};
 }
+// What the Media bin supplied when there was no template (a one-off event
+// whose media lives in a smart folder named for it).
+let mediaFromBin = {count: 0, folder: ''};
 let parsedTemplate = _noTemplate();
 // The runsheet's text as read on upload, for Auto's first guess.
 let _uploadText = '';
@@ -742,6 +745,7 @@ function _clearRunsheetState() {
   // Before anything below can ask for a guess: the last runsheet's
   // service label would otherwise be the hint for this one.
   parsedTemplate = _noTemplate();
+  mediaFromBin = {count: 0, folder: ''};
   _cancelParse();
   matchedItems = [];
   _clearUpdatePlan();
@@ -1007,11 +1011,17 @@ function _renderTemplateVerdict() {
     msg = `📌 Using <strong>${escapeHtml(name)}</strong> — you picked it for this runsheet`;
   } else if (t.uuid && !t.pinned) {
     msg = `⚡ Auto-matched to <strong>${escapeHtml(t.name || 'a template')}</strong>`;
-  } else if (t.declined) {
+  } else if (t.declined || mediaFromBin.count) {
     const label = (t.service_label || '').trim();
+    const where = mediaFromBin.folder ? ` from <strong>${escapeHtml(mediaFromBin.folder)}</strong>` : '';
+    // A one-off event has no template but does have media — the bin found
+    // it, so say so rather than leaving the operator to spot it.
     msg = `<strong>No template for ${label ? escapeHtml(label) : 'this service'}.</strong> ` +
-          `Building coloured headers, timers and songs — just no template media.`;
-    action = 'Pick one';
+          (mediaFromBin.count
+            ? `Took media for ${mediaFromBin.count} item${mediaFromBin.count === 1 ? '' : 's'}` +
+              `${where} out of your Media bin.`
+            : `Building coloured headers, timers and songs — just no template media.`);
+    action = mediaFromBin.count ? 'Change' : 'Pick one';
   }
   el.hidden = !msg;
   el.innerHTML = msg
@@ -1030,6 +1040,7 @@ function _templateBackToAuto() {
     autoSaveDebounced();
   }
   parsedTemplate = _noTemplate();
+  mediaFromBin = {count: 0, folder: ''};
   _renderTemplateOptions();          // also redraws the banner and the this/next wording
 }
 
@@ -1986,6 +1997,7 @@ async function parseRunsheet() {
     // service label with it.
     _guessSeq++;                       // an older guess must not redraw over this
     parsedTemplate = {..._noTemplate(), ...(res.template || {})};
+    mediaFromBin = {count: 0, folder: '', ...(res.media_from_bin || {})};
     _renderTemplateVerdict();
 
     setLoading(matchingOn()

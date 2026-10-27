@@ -160,6 +160,24 @@ def test_media_playlists_inside_folders_are_read():
     assert not any("/G1" in c for c in calls), "a folder has no items to ask for"
 
 
+def test_each_asset_remembers_the_playlist_it_came_from():
+    """The operator's smart folders are named for the event ("Summit
+    2026"), so the folder is the strongest signal of what media belongs to
+    which service — worth keeping rather than flattening away."""
+    tree = [{"id": {"uuid": "MP1", "name": "Summit 2026"}, "type": "playlist"},
+            {"id": {"uuid": "MP2", "name": "Sunday Loops"}, "type": "playlist"}]
+    get, _ = _paged_pp(tree, {"MP1": ["Summit Opener"], "MP2": ["Welcome"]})
+    assert [(m["name"], m["folder"]) for m in fetch_media_bin("http://pp", http_get=get)] == [
+        ("Summit Opener", "Summit 2026"), ("Welcome", "Sunday Loops")]
+
+
+def test_a_playlist_with_no_name_still_yields_its_media():
+    tree = [{"id": {"uuid": "MP1"}, "type": "playlist"}]
+    get, _ = _paged_pp(tree, {"MP1": ["Loose Slide"]})
+    assert [(m["name"], m["folder"]) for m in fetch_media_bin("http://pp", http_get=get)] == [
+        ("Loose Slide", "")]
+
+
 def test_a_playlist_id_from_pp_stays_one_path_segment():
     """The id comes from ProPresenter's reply; a malformed one must not be
     able to walk the request to another endpoint."""

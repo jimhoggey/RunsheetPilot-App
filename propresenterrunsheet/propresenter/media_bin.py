@@ -40,19 +40,25 @@ _MAX_ITEMS = 10_000
 
 
 def _media_playlists(nodes):
-    """Every playlist in the Media sidebar, folders ("group") opened at
-    any depth — a playlist inside a folder holds bin media like any other."""
+    """Every playlist in the Media sidebar as (uuid, name), folders
+    ("group") opened at any depth — a playlist inside a folder holds bin
+    media like any other.
+
+    The name comes back because the operator's smart folders are named
+    for the event they hold ("Summit 2026"), which is the strongest
+    signal of what media belongs to which service."""
     for node in nodes or []:
         if not isinstance(node, dict):
             continue
         if node.get("type") == "group":
             yield from _media_playlists(node.get("children"))
         elif (node.get("id") or {}).get("uuid"):
-            yield node["id"]["uuid"]
+            yield node["id"]["uuid"], (node["id"].get("name") or "").strip()
 
 
 def fetch_media_bin(base: str, http_get=None) -> list:
-    """Every media asset in every Media-bin playlist: [{"uuid","name"},…].
+    """Every media asset in every Media-bin playlist, each one carrying the
+    playlist it sits in: [{"uuid","name","folder"},…].
 
     Reads every page of every playlist, inside folders too. Reading only
     the first page of the top level left anything past item 100, or in a
@@ -69,7 +75,7 @@ def fetch_media_bin(base: str, http_get=None) -> list:
     try:
         r = http_get(f"{base}/v1/media/playlists", timeout=6)
         r.raise_for_status()
-        for uuid in _media_playlists(r.json()):
+        for uuid, folder in _media_playlists(r.json()):
             # ProPresenter's own id, but still one path segment and no more.
             segment, seen = quote(str(uuid), safe=""), set()
             for start in range(0, _MAX_ITEMS, _PAGE):
@@ -86,7 +92,8 @@ def fetch_media_bin(base: str, http_get=None) -> list:
                     # name, so stripping here silently 404s any media the
                     # operator named with stray whitespace ("Countdown ").
                     if mid.get("uuid") and (mid.get("name") or "").strip():
-                        out.append({"uuid": mid["uuid"], "name": mid["name"]})
+                        out.append({"uuid": mid["uuid"], "name": mid["name"],
+                                    "folder": folder})
                 # A short page is the last one; a page with nothing new
                 # means `start` was ignored — stop rather than spin.
                 if len(page) < _PAGE or not fresh:

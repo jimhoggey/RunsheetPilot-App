@@ -30,7 +30,12 @@ from ..parsing.models import (
     resolve_model,
 )
 from ..parsing.lighting_plan import plan_lighting
+from ..parsing.media_plan import plan_media
 from ..parsing.openrouter import Stopped, chat
+from ..propresenter.media_bin import fetch_media_bin
+from ..propresenter.media_match import (
+    candidates as media_candidates, sections as media_sections,
+)
 from .flags import matching_enabled
 from ..parsing.ocr import (
     OCR_UNAVAILABLE_MESSAGE, OCRUnavailable, image_to_text, images_to_text,
@@ -1087,6 +1092,31 @@ def _upload_and_parse(stop: threading.Event):
                          f"unlit items")
             except Exception:
                 log.exception("Lighting guide pass failed; the runsheet's own lighting stands")
+        # No template — so the operator's own Media bin is the source. Their
+        # smart folders are named for the event, which is what makes this
+        # safe to do unasked (propresenter/media_match.py). Never overrides
+        # a template: `sections` skips any item a template already filled.
+        media_placed = {"count": 0, "folder": ""}
+        if do_matching and not tmpl_uuid and base:
+            try:
+                offered = media_candidates(fetch_media_bin(base),
+                                           service_name or upload_name or "")
+                picks = plan_media(items, offered, or_key,
+                                   str(settings.get("or_model") or ""))
+                placed = media_sections(items, picks, offered)
+                for i, section in placed.items():
+                    items[i]["library_match"] = section
+                folders = {b.get("folder") for b in offered if b.get("folder")}
+                media_placed = {"count": len(placed),
+                                "folder": folders.pop() if len(folders) == 1 else ""}
+                if placed:
+                    log.info("Media bin: %d of %d items got media%s",
+                             len(placed), len(items),
+                             f" from {log_safe(media_placed['folder'], 60)!r}"
+                             if media_placed["folder"] else "")
+            except Exception:
+                log.exception("Media-bin matching failed; the playlist keeps "
+                              "its headers and nothing else changes")
         repeats = share_repeated_links(items)
         if sections or objects:
             log.info(f"Template-context parse: "
@@ -1180,6 +1210,9 @@ def _upload_and_parse(stop: threading.Event):
                 # The banner says "you picked it" rather than "Auto-matched".
                 "pinned":        tmpl_pinned,
             },
+            # What the Media bin supplied in the template's place, so the
+            # page can say so instead of leaving it a surprise.
+            "media_from_bin": media_placed,
         })
 
     except json.JSONDecodeError:
