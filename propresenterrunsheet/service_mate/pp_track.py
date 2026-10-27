@@ -66,7 +66,10 @@ PP_REACHABLE = {"ok": True}
 # What the last poll could tell about where ProPresenter is. In memory on
 # purpose: this is liveness, not state — after a restart we genuinely do
 # not know yet, and saying so beats restoring a stale "following".
-PP_FOLLOWING = {"source": "", "at": 0.0}
+#   at     — when ProPresenter last answered at all
+#   live   — whether it had anything running when it did
+#   source — what resolved the segment, "" when nothing could
+PP_FOLLOWING = {"source": "", "at": 0.0, "live": False}
 # A poll older than this is not news any more.
 FOLLOW_STALE_S = 8.0
 
@@ -78,12 +81,19 @@ def follow_status() -> dict:
     moving — and never tracking itself, so a poll that quietly failed to
     match looked exactly like a stale display, and the only sensible
     response was to reach for Next. That click then suppressed tracking
-    for another ten seconds. This is what the card says instead."""
+    for another ten seconds. This is what the card says instead.
+
+    `live` tells the common pre-service case apart from a real miss:
+    ProPresenter answering with nothing running yet is not the same
+    problem as ProPresenter running something this runsheet can't place,
+    and telling an operator the second when it is the first sends them
+    hunting for a fault that isn't there."""
     at = PP_FOLLOWING["at"] or 0.0
-    live = bool(at) and (time.time() - at) < FOLLOW_STALE_S
+    fresh = bool(at) and (time.time() - at) < FOLLOW_STALE_S
     return {"reachable": bool(PP_REACHABLE["ok"]),
-            "following": live,
-            "source": PP_FOLLOWING["source"] if live else ""}
+            "following": fresh and bool(PP_FOLLOWING["source"]),
+            "source": PP_FOLLOWING["source"] if fresh else "",
+            "live": fresh and bool(PP_FOLLOWING["live"])}
 
 # Strip header decorations the create-playlist code adds, so we can match the
 # header name back to the original runsheet item title.
@@ -327,12 +337,15 @@ def _maybe_advance_from_pp(state: dict) -> dict:
     section_idx = probe["section_idx"]
     has_active_playlist = probe["has_active_playlist"]
 
-    if section_idx is not None:
-        # Stamped on every resolved poll, not only the ones that move the
-        # cue: through a ten-minute segment nothing moves, and that is
-        # exactly when the operator starts doubting it is working.
-        PP_FOLLOWING["source"] = probe["source"]
+    # Stamped on every poll ProPresenter answers, not only the ones that
+    # move the cue: through a ten-minute segment nothing moves, and that is
+    # exactly when the operator starts doubting it is working.
+    if PP_REACHABLE["ok"]:
         PP_FOLLOWING["at"] = time.time()
+        PP_FOLLOWING["live"] = has_active_playlist
+        PP_FOLLOWING["source"] = probe["source"] if section_idx is not None else ""
+
+    if section_idx is not None:
         if section_idx == state.get("current_index"):
             # Already there — clear any pending target.
             _PENDING_SECTION_TARGET["index"] = None
@@ -373,6 +386,10 @@ def _maybe_advance_from_pp(state: dict) -> dict:
                         if rem is not None:
                             state["pp_remaining_seconds"] = rem
                         timer_running = True
+                        # One of our own timers counting down is as live as
+                        # ProPresenter gets, whatever the playlist says.
+                        PP_FOLLOWING["live"] = True
+                        PP_FOLLOWING["source"] = PP_FOLLOWING["source"] or "timer"
                         break
                 if timer_running:
                     break
@@ -415,6 +432,8 @@ def _maybe_advance_from_pp(state: dict) -> dict:
                     state["current_started_at"] = _dt.datetime.now().isoformat()
                     state["pp_source"] = "presentation"
                     state.pop("pp_remaining_seconds", None)
+                    PP_FOLLOWING["live"] = True
+                    PP_FOLLOWING["source"] = "presentation"
     except Exception:
         log.debug("PP /v1/presentation/active poll failed", exc_info=True)
 

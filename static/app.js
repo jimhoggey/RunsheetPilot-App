@@ -3300,7 +3300,10 @@ function _renderFollow(follow, autoEnabled, loaded) {
     !loaded            ? ['', 'var(--dim)'] :
     !autoEnabled       ? ['Auto-track off — cueing by hand', 'var(--dim)'] :
     !follow.reachable  ? ['⚠ ProPresenter isn’t answering', 'var(--org)'] :
-    !follow.following  ? ['⚠ Not following — ProPresenter is somewhere this runsheet doesn’t cover',
+    // Before the service starts this is simply the truth, not a fault.
+    !follow.following && !follow.live
+                       ? ['Nothing running in ProPresenter yet', 'var(--dim)'] :
+    !follow.following  ? ['⚠ Not following — ProPresenter is on something this runsheet doesn’t cover',
                           'var(--org)'] :
     follow.source === 'anchor'
                        ? ['⚡ Following ProPresenter', 'var(--grn)']

@@ -115,12 +115,14 @@ def segment_timing(item: dict, started_at: str | None, now: _dt.datetime) -> dic
 def tracking_note(follow: dict, tracking: bool) -> str:
     """The one line the card says about auto-tracking, or "" for silence.
 
-    Three states the operator could not previously tell apart, because
-    tracking only ever showed itself by the cue moving: ProPresenter not
-    answering at all, answering but not resolvable to a segment, and
-    following. The middle one is the one that mattered — it looked exactly
-    like a stale display, so the operator reached for Next, which paused
-    tracking for another ten seconds.
+    Four states the operator could not previously tell apart, because
+    tracking only ever showed itself by the cue moving: not answering,
+    answering with nothing running, running something that can't be
+    placed, and following. The third is the one that mattered — it looked
+    exactly like a stale display, so the operator reached for Next, which
+    paused tracking for another ten seconds. The second is the ordinary
+    state before a service starts, and calling it a miss would send
+    someone hunting for a fault that isn't there.
 
     Silent while it is following, and silent while the operator has
     tracking switched off: on a card this short a line must not crowd out
@@ -130,9 +132,11 @@ def tracking_note(follow: dict, tracking: bool) -> str:
         return ""
     if not follow.get("reachable"):
         return "ProPresenter isn’t answering"
-    if not follow.get("following"):
-        return "Not following ProPresenter — cue by hand"
-    return ""
+    if follow.get("following"):
+        return ""
+    if not follow.get("live"):
+        return "Nothing running in ProPresenter yet"
+    return "Not following ProPresenter — cue by hand"
 
 
 def mate_view(state: dict, stations: list[str], show: list[str],

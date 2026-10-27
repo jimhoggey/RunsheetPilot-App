@@ -208,6 +208,15 @@ def test_the_probe_prefers_the_anchor_over_the_name_match(monkeypatch):
 
 def test_following_is_reported_while_it_lasts(monkeypatch):
     monkeypatch.setattr(pp_track, "PP_FOLLOWING",
-                        {"source": "anchor", "at": time.time()})
+                        {"source": "anchor", "at": time.time(), "live": True})
     assert pp_track.follow_status() == {"reachable": True, "following": True,
-                                        "source": "anchor"}
+                                        "source": "anchor", "live": True}
+
+
+def test_propresenter_answering_with_nothing_running_is_not_a_miss(monkeypatch):
+    """The ordinary state before a service starts. It must read differently
+    from "running something I can't place", which is a real problem."""
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "", "at": time.time(), "live": False})
+    got = pp_track.follow_status()
+    assert (got["reachable"], got["following"], got["live"]) == (True, False, False)
