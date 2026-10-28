@@ -103,6 +103,17 @@ def test_with_a_template_the_whole_bin_fallback_is_off():
     assert candidates(stray, "Sunday Service", [{"title": "Welcome"}]) == stray
 
 
+def test_the_services_own_folder_leads_a_folder_one_line_mentioned():
+    """A one-word folder scores a perfect 1.0 against any line using that
+    word, so without an explicit order "Promo" would take the cap's rows
+    off the Sunday folder purely by sitting earlier in the bin."""
+    mixed = [{"uuid": "P", "name": "Anything", "folder": "Promo"},
+             {"uuid": "S", "name": "Hold", "folder": "Sunday Service Media"}]
+    got = relevant_folders(mixed, "Sunday Service — 2 Nov",
+                           [{"title": "Announcements", "notes": "promo reel"}])
+    assert got == ["Sunday Service Media", "Promo"]
+
+
 def test_the_strongest_folder_keeps_its_rows_when_the_cap_bites():
     """When 150 rows won't fit, the weakest association loses them."""
     big = ([{"uuid": f"L{i}", "name": f"Loop {i}", "folder": "Pre-service loops"}

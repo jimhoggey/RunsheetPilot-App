@@ -71,17 +71,29 @@ def relevant_folders(bin_items: list, event: str, items=None) -> list:
     So every line of the runsheet gets a say, not only the service name:
     a folder is in play when the service, or any single item, echoes at
     least half of its name.
+
+    Order matters as much as membership, because the 150-row cap has to
+    take its rows from somewhere. The service's own folder leads — it is
+    the base for the week, where a folder named by one line is an extra
+    on top — then the strongest score, then the longest folder name,
+    since a folder with more words that still matched said more. Without
+    that last pair a one-word folder like "Promo" scores a perfect 1.0
+    against any line mentioning a promo, and would take the cap's rows
+    off the Sunday folder purely by sitting earlier in the bin.
     """
-    best: dict = {}
-    texts = [event] + [_item_text(it) for it in (items or [])]
+    ranked: dict = {}
+    lines = [_item_text(it) for it in (items or [])]
     for b in bin_items or []:
         folder = (b.get("folder") or "").strip() if isinstance(b, dict) else ""
-        if not folder or folder in best:
+        if not folder or folder in ranked:
             continue
-        score = max((_folder_score(folder, t) for t in texts), default=0.0)
-        if score >= MIN_FOLDER_SCORE:
-            best[folder] = score
-    return sorted(best, key=lambda f: -best[f])
+        from_service = _folder_score(folder, event)
+        from_line = max((_folder_score(folder, t) for t in lines), default=0.0)
+        if max(from_service, from_line) >= MIN_FOLDER_SCORE:
+            ranked[folder] = (from_service >= MIN_FOLDER_SCORE,
+                              max(from_service, from_line),
+                              len(_words(folder)))
+    return sorted(ranked, key=lambda f: ranked[f], reverse=True)
 
 
 def candidates(bin_items: list, event: str, items=None,
