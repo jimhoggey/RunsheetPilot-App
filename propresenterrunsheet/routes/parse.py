@@ -1097,10 +1097,17 @@ def _upload_and_parse(stop: threading.Event):
         # safe to do unasked (propresenter/media_match.py). Never overrides
         # a template: `sections` skips any item a template already filled.
         media_placed = {"count": 0, "folder": ""}
-        if do_matching and not tmpl_uuid and base:
+        if do_matching and base:
             try:
+                # With a template, the bin fills the gaps AROUND it rather
+                # than replacing it: a template is the screens that are
+                # there every week, and a runsheet that says "promo
+                # Summit" wants a slide the Sunday template has no reason
+                # to carry. Scoped to folders the runsheet actually names,
+                # and `sections` never touches an item the template filled.
                 offered = media_candidates(fetch_media_bin(base),
-                                           service_name or upload_name or "")
+                                           service_name or upload_name or "",
+                                           items, folder_only=bool(tmpl_uuid))
                 picks = plan_media(items, offered, or_key,
                                    str(settings.get("or_model") or ""))
                 placed = media_sections(items, picks, offered)
