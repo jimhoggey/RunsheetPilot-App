@@ -133,8 +133,11 @@
     </div>
   </main>
   <!-- One line on purpose: wrapped, it pushed the next lighting change off
-       a short card, and a warning must not crowd out what it warns about. -->
-  <p id="pp" class="muted" hidden>ProPresenter isn’t answering</p>
+       a short card, and a warning must not crowd out what it warns about.
+       The words come from the server (mate.tracking_note) — not answering
+       and answering-but-lost are different problems. -->
+  <p id="pp" class="muted" hidden
+     style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></p>
 <script>
   const el = id => document.getElementById(id);
   const NAMES = {screen: 'Screens', lights: 'Lights'};
@@ -217,7 +220,8 @@
     if (!sizing) applyScale(h.scale);
     el('msg').hidden = live;
     el('live').hidden = !live;
-    el('pp').hidden = h.pp_ok !== false || !live;
+    el('pp').textContent = h.pp_note || '';
+    el('pp').hidden = !h.pp_note || !live;
     if (!live) { el('msg').textContent = PLAIN[h.state] || ''; return; }
 
     // h.order, not Object.keys: `stations` is a JSON object whose keys the

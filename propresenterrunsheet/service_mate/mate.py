@@ -112,6 +112,32 @@ def segment_timing(item: dict, started_at: str | None, now: _dt.datetime) -> dic
             "drift_min": _drift_min(start, planned, started_at, now) if start else None}
 
 
+def tracking_note(follow: dict, tracking: bool) -> str:
+    """The one line the card says about auto-tracking, or "" for silence.
+
+    This card speaks ONLY for the two states the operator can act on:
+    ProPresenter not answering, and ProPresenter running something this
+    runsheet cannot place. Following, paused by a hand on Prev/Next,
+    tracking switched off, and nothing running yet are all silence.
+
+    That restraint is measured, not stylistic. The line costs about 22px,
+    and mate.html drops whole sections to fit: on the Lights desk at the
+    minimum window, one line here is the difference between seeing the
+    change after next and not. Spending it on "nothing is running yet",
+    which is simply true before every service, would take that away every
+    Sunday morning in exchange for news nobody needs.
+
+    The main window's Cue control has the room to say all of it, and
+    does."""
+    if not tracking or follow.get("following") or follow.get("paused"):
+        return ""
+    if not follow.get("reachable"):
+        return "⚠ ProPresenter isn’t answering"
+    if not follow.get("live"):
+        return ""
+    return "⚠ Not following ProPresenter — cue by hand"
+
+
 def mate_view(state: dict, stations: list[str], show: list[str],
               ends_at: _dt.datetime | None, now: _dt.datetime) -> dict:
     """Everything the window draws. Each station's entry is its clock's own

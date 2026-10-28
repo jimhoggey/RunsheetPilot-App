@@ -66,8 +66,18 @@ def pp(monkeypatch):
                                       len(state["put_codes"]) - 1)]
         return _Resp(code, text="")
 
+    def fake_get(url, timeout=0, **kw):
+        # Reading the playlist back: PP echoes what was written, each item
+        # now carrying a uuid of its own. That pairing is what auto-track
+        # follows afterwards.
+        written = state["puts"][-1] if state["puts"] else []
+        return _Resp(200, {"items": [
+            {**e, "id": {**e["id"], "uuid": f"PP-{i}"}}
+            for i, e in enumerate(written)]})
+
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setattr(requests, "put", fake_put)
+    monkeypatch.setattr(requests, "get", fake_get)
     monkeypatch.setattr(playlist_mod, "fetch_media_bin",
                         lambda _base: state["bin"])
     return state
@@ -90,6 +100,34 @@ def test_media_is_resolved_to_bin_identity_before_the_put(client, pp):
     assert media[0]["id"]["uuid"] == "BIN-WELCOME"
     assert media[0]["target_uuid"] == "BIN-WELCOME"
     assert body["unlinked"] == []
+
+
+def test_creating_a_playlist_records_what_auto_track_follows(client, pp):
+    """The one moment the names in ProPresenter are known to be the ones
+    Runsheet Pilot wrote: pair them with PP's uuids now, and tracking never
+    has to guess at a header name again."""
+    from propresenterrunsheet.service_mate import state as sm_state
+    assert _create(client, [_matched("Welcome and Cards", "Welcome"),
+                            _matched("Go Live")])["ok"]
+    anchors = (sm_state._read_runsheet_state() or {})["pp_anchors"]
+    assert anchors["playlist"] == "NEW-PL"
+    # The header of each item, not the media slide sitting under the first.
+    assert anchors["by_uuid"] == {"PP-0": 0, "PP-2": 1}
+
+
+def test_a_playlist_that_cannot_be_read_back_still_creates(client, pp, monkeypatch):
+    """Anchoring is a bonus. If the read-back fails the playlist is built
+    exactly as before and tracking falls back to matching header names."""
+    import requests
+
+    def _boom(url, timeout=0, **kw):
+        raise OSError("ProPresenter went away")
+    monkeypatch.setattr(requests, "get", _boom)
+    from propresenterrunsheet.service_mate import state as sm_state
+    assert _create(client, [_matched("Go Live")])["ok"] is True
+    saved = sm_state._read_runsheet_state() or {}
+    assert "pp_anchors" not in saved
+    assert len(saved["items"]) == 1
 
 
 def test_a_create_logs_how_long_each_step_took(client, pp, caplog):

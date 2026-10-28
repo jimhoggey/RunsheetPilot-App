@@ -3285,7 +3285,51 @@ async function smRefreshState() {
     const autoBox = document.getElementById('sm-autotrack');
     const autoEnabled = (state.auto_track || {}).enabled !== false;
     if (autoBox && autoBox.checked !== autoEnabled) autoBox.checked = autoEnabled;
-  } catch (e) { /* ignore */ }
+    _renderFollow(state.pp_follow || {}, autoEnabled, items.length > 0);
+  } catch (e) {
+    // Clear it rather than leave a green "Following" frozen on screen —
+    // whatever is wrong, we no longer know that it is true.
+    _renderFollow({}, true, false);
+  }
+}
+
+// Whether Runsheet Pilot is following ProPresenter right now. Tracking only
+// ever showed itself by the cue moving, so a poll that quietly stopped
+// resolving looked exactly like a stale display — and the honest response
+// was to click Next, which then paused tracking for another ten seconds.
+// Every message is kept short enough to stay on one line in the narrowest
+// Cue column, because this sits directly above Next: a second line moves
+// that button about 19px under a hand already travelling towards it.
+function _renderFollow(follow, autoEnabled, loaded) {
+  const el = document.getElementById('sm-follow');
+  if (!el) return;
+  const [glyph, text, colour] =
+    !loaded           ? ['',  '', 'var(--dim)'] :
+    !autoEnabled      ? ['',  'Auto-track off — cueing by hand', 'var(--dim)'] :
+    // The ten seconds after Prev/Next, when tracking is deliberately
+    // standing back. Checked first: the last poll's news predates the
+    // click and would otherwise read as "Following".
+    follow.paused     ? ['',  'Paused — you cued by hand', 'var(--dim)'] :
+    !follow.reachable ? ['⚠', 'ProPresenter isn’t answering', 'var(--org)'] :
+    follow.following  ? ['⚡', 'Following ProPresenter', 'var(--grn)'] :
+    // Before the service starts this is simply the truth, not a fault.
+    !follow.live      ? ['',  'Nothing running in ProPresenter yet', 'var(--dim)']
+                      : ['⚠', 'Not following ProPresenter — cue by hand', 'var(--org)'];
+  // Only on a real change: this runs every two seconds, and rewriting the
+  // text node makes a screen reader announce it again each time.
+  const whole = glyph + text;
+  if (el.dataset.msg === whole) return;
+  el.dataset.msg = whole;
+  el.textContent = '';
+  if (glyph) {
+    // Decoration, not content: read aloud it becomes "high voltage sign".
+    const mark = document.createElement('span');
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = glyph + ' ';
+    el.appendChild(mark);
+  }
+  el.appendChild(document.createTextNode(text));
+  el.style.color = colour;
 }
 
 async function smCue(delta) {

@@ -17,10 +17,23 @@ from ..service_mate import state as _sm_state
 bp = Blueprint("runsheet", __name__)
 
 
+# State the app owns and the browser never sends: a POST from the Service
+# Mate card rebuilds the state from its own four fields, which silently
+# dropped these. Toggling the auto-track checkbox mid-service therefore
+# erased the lighting steps already ticked off and the uuid anchors
+# auto-track follows by. Carried over whenever the runsheet is the same one.
+_CARRIED_KEYS = ("lighting_done", "pp_anchors")
+
+
 @bp.route("/api/runsheet/state", methods=["GET"])
 def api_runsheet_state_get():
+    from ..service_mate.pp_track import follow_status
     state = _read_runsheet_state()
-    return jsonify(state or {})
+    # Whether tracking is following ProPresenter right now — liveness the
+    # card shows next to Now/Next, not state, so it is never written back.
+    # The state goes in because a manual cue click pauses tracking, and a
+    # card that says "Following" straight after Next is worse than silent.
+    return jsonify({**(state or {}), "pp_follow": follow_status(state or {})})
 
 
 @bp.route("/api/runsheet/state", methods=["POST"])
@@ -45,6 +58,15 @@ def api_runsheet_state_post():
         "auto_track":        body.get("auto_track")
                              or {"enabled": True},
     }
+    # Same runsheet, so what the app knows about it still holds. A different
+    # one means the ticks and anchors belong to a service that is over.
+    prev = _read_runsheet_state() or {}
+    same = ([(it or {}).get("title") for it in (prev.get("items") or [])]
+            == [(it or {}).get("title") for it in items])
+    if same:
+        for key in _CARRIED_KEYS:
+            if prev.get(key):
+                state[key] = prev[key]
     _write_runsheet_state(state)
     return jsonify({"ok": True, "state": state})
 

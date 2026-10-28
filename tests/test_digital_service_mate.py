@@ -257,13 +257,61 @@ def test_the_countdown_is_the_clocks_own_deadline(desk):
     assert desk.get("/api/mate").get_json()["stations"]["screen"]["ends_at"] == _iso(held)
 
 
-@pytest.mark.parametrize("reachable, tracking, ok", [
-    (False, True, False), (False, False, True), (True, True, True)])
-def test_it_says_when_propresenter_is_not_answering(desk, monkeypatch, reachable, tracking, ok):
+@pytest.mark.parametrize("reachable, tracking, source, live, note", [
+    # Not answering at all — the operator is on their own and should know.
+    (False, True,  "",       False, "⚠ ProPresenter isn’t answering"),
+    # Cueing by hand on purpose: nothing to warn about.
+    (False, False, "",       False, ""),
+    # The case that sent operators back to clicking Next: something IS
+    # running, and nothing about it can be resolved to a segment. The only
+    # previous sign was a display that didn't move.
+    (True,  True,  "",       True,  "⚠ Not following ProPresenter — cue by hand"),
+    # Following: silent. So is "nothing running yet" below — this card
+    # drops whole sections to fit, so it speaks only for what can be acted
+    # on. The main window has the room for the rest.
+    (True,  True,  "anchor", True,  ""),
+    (True,  True,  "",       False, ""),
+])
+def test_the_card_speaks_only_for_what_can_be_acted_on(
+        desk, monkeypatch, reachable, tracking, source, live, note):
+    import time
+
     from propresenterrunsheet.service_mate import pp_track, state as sm_state
     monkeypatch.setitem(pp_track.PP_REACHABLE, "ok", reachable)
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": source, "at": time.time(), "live": live})
     sm_state._write_runsheet_state(_state(auto_track={"enabled": tracking}))
-    assert desk.get("/api/mate").get_json()["pp_ok"] is ok
+    assert desk.get("/api/mate").get_json()["pp_note"] == note
+
+
+def test_the_card_is_silent_in_the_seconds_after_a_manual_cue(desk, monkeypatch):
+    """Prev/Next holds tracking off for ten seconds. Saying anything about
+    following then is answering a question the operator just settled."""
+    import datetime as dt
+    import time
+
+    from propresenterrunsheet.service_mate import pp_track, state as sm_state
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "anchor", "at": time.time(), "live": True})
+    st = _state()
+    st["manual_override_until"] = (dt.datetime.now()
+                                   + dt.timedelta(seconds=10)).isoformat()
+    sm_state._write_runsheet_state(st)
+    assert desk.get("/api/mate").get_json()["pp_note"] == ""
+
+
+def test_a_poll_that_stopped_landing_stops_counting_as_following(monkeypatch):
+    """Liveness, not a latch: the last word from ProPresenter goes stale so
+    a daemon that has quietly stopped polling can't keep claiming it."""
+    import time
+
+    from propresenterrunsheet.service_mate import pp_track
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING",
+                        {"source": "anchor", "live": True,
+                         "at": time.time() - pp_track.FOLLOW_STALE_S - 1})
+    assert pp_track.follow_status() == {"reachable": True, "following": False,
+                                        "source": "", "live": False,
+                                        "paused": False}
 
 
 def test_the_card_sizes_its_own_text_up_and_down(desk):

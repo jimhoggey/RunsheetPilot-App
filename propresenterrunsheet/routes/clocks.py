@@ -10,8 +10,10 @@ from flask import Blueprint, Response, jsonify, redirect, render_template, reque
 from ..native import close_mate_window, open_mate_window, size_mate_window
 from ..parsing.ai import LIGHTING_GUIDE_MAX_CHARS
 from ..service_mate.lighting import current_index, done_for, heads_up, lights_view
-from ..service_mate.mate import mate_config, mate_view, window_size
-from ..service_mate.pp_track import PP_REACHABLE
+from ..service_mate.mate import (
+    mate_config, mate_view, tracking_note, window_size,
+)
+from ..service_mate.pp_track import follow_status
 from ..settings import load_settings, save_settings
 
 from ..service_mate.constants import (
@@ -275,7 +277,7 @@ def api_mate():
     auto = state.get("auto_track")
     tracking = isinstance(auto, dict) and bool(auto.get("enabled"))
     return jsonify({**view, "scale": desk["scale"],
-                    "pp_ok": PP_REACHABLE["ok"] or not tracking})
+                    "pp_note": tracking_note(follow_status(state), tracking)})
 
 
 @bp.route("/api/mate/scale", methods=["POST"])

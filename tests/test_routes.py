@@ -30,7 +30,11 @@ def test_settings_include_sm_hide_default(client):
 def test_runsheet_state_starts_empty(client):
     r = client.get("/api/runsheet/state")
     assert r.status_code == 200
-    assert r.get_json() == {}
+    body = r.get_json()
+    # No runsheet: nothing but the tracking liveness the card reads, which
+    # is reported fresh on every GET rather than stored.
+    assert not {k: v for k, v in body.items() if k != "pp_follow"}
+    assert body["pp_follow"]["following"] is False
 
 
 def test_runsheet_state_post_then_get_roundtrips(client):
@@ -53,6 +57,43 @@ def test_runsheet_state_post_then_get_roundtrips(client):
     assert g["items"][0]["cues"]["screen"]
     assert g["items"][0]["cues"]["sound"]
     assert g["items"][0]["cues"]["lights"]
+
+
+def _with_app_state(client, items):
+    """A loaded runsheet plus the two things only the app writes: lighting
+    steps ticked off, and the uuid anchors auto-track follows."""
+    from propresenterrunsheet.service_mate import state as sm_state
+    client.post("/api/runsheet/state", json={"items": items})
+    saved = sm_state._read_runsheet_state()
+    saved["lighting_done"] = {"index": 0, "count": 2}
+    saved["pp_anchors"] = {"playlist": "PL1", "by_uuid": {"U-ONE": 0}}
+    sm_state._write_runsheet_state(saved)
+
+
+def test_toggling_auto_track_keeps_what_the_app_knows(client):
+    """The card POSTs the whole state back to flip one checkbox, and this
+    route rebuilds it from its own four fields — silently dropping the
+    lighting steps already ticked off mid-service and the anchors tracking
+    follows by."""
+    items = [{"type": "song", "title": "Build My Life"}]
+    _with_app_state(client, items)
+    client.post("/api/runsheet/state",
+                json={"items": items, "auto_track": {"enabled": False}})
+    after = client.get("/api/runsheet/state").get_json()
+    assert after["lighting_done"] == {"index": 0, "count": 2}
+    assert after["pp_anchors"]["by_uuid"] == {"U-ONE": 0}
+    assert after["auto_track"] == {"enabled": False}
+
+
+def test_a_new_runsheet_does_not_inherit_the_last_one(client):
+    """Carried over only while it is the same service: ticks and anchors
+    from a finished one would point at segments that no longer exist."""
+    _with_app_state(client, [{"type": "song", "title": "Build My Life"}])
+    client.post("/api/runsheet/state",
+                json={"items": [{"type": "song", "title": "Something else"}]})
+    after = client.get("/api/runsheet/state").get_json()
+    assert "lighting_done" not in after
+    assert "pp_anchors" not in after
 
 
 def test_runsheet_cue_advances_index(client):
@@ -96,7 +137,8 @@ def test_runsheet_state_delete(client):
     client.post("/api/runsheet/state", json={"items": [{"title": "a"}]})
     d = client.delete("/api/runsheet/state")
     assert d.status_code == 200
-    assert client.get("/api/runsheet/state").get_json() == {}
+    left = client.get("/api/runsheet/state").get_json()
+    assert not {k: v for k, v in left.items() if k != "pp_follow"}
 
 
 # ── Clocks config ────────────────────────────────────────────────────────────

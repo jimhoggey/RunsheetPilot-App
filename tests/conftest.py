@@ -29,6 +29,15 @@ import propresenter_app as ppa  # noqa: E402  — path tweak above is intentiona
 
 
 @pytest.fixture(autouse=True)
+def _no_pp_follow_leak(monkeypatch):
+    """pp_track records "we heard from ProPresenter just now" in a module
+    dict — liveness, deliberately not on disk. One test advancing the cue
+    would otherwise leave the next one reporting that tracking is live."""
+    from propresenterrunsheet.service_mate import pp_track
+    monkeypatch.setattr(pp_track, "PP_FOLLOWING", {"source": "", "at": 0.0})
+
+
+@pytest.fixture(autouse=True)
 def _no_native_window(monkeypatch):
     """server._run_native_window hands its webview module to native.py; a
     test's fake must not leak into the next test."""

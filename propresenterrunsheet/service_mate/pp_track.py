@@ -63,6 +63,61 @@ _PENDING_SECTION_TARGET: dict = {"index": None, "count": 0}
 # daemon polls every tick while it does and backs off while it doesn't.
 PP_REACHABLE = {"ok": True}
 
+# What the last poll could tell about where ProPresenter is. In memory on
+# purpose: this is liveness, not state — after a restart we genuinely do
+# not know yet, and saying so beats restoring a stale "following".
+#   at     — when ProPresenter last answered at all
+#   live   — whether it had anything running when it did
+#   source — what resolved the segment, "" when nothing could
+PP_FOLLOWING = {"source": "", "at": 0.0, "live": False}
+# A poll older than this is not news any more.
+FOLLOW_STALE_S = 8.0
+
+
+def paused_by_hand(state: dict) -> bool:
+    """Whether a manual cue click is still holding tracking off.
+
+    Prev/Next set a ten-second window so the operator's input isn't fought.
+    The window matters to the card as much as to the daemon: for those ten
+    seconds "following" is not what is happening, and the stamp from the
+    last poll before the click is stale news, not news."""
+    until = (state or {}).get("manual_override_until")
+    if not until:
+        return False
+    try:
+        return _dt.datetime.fromisoformat(until) > _dt.datetime.now()
+    except Exception:
+        return False
+
+
+def follow_status(state: dict | None = None) -> dict:
+    """Whether tracking is following ProPresenter right now, and on what.
+
+    The operator could only ever see the *result* of tracking — the cue
+    moving — and never tracking itself, so a poll that quietly failed to
+    match looked exactly like a stale display, and the only sensible
+    response was to reach for Next. That click then suppressed tracking
+    for another ten seconds. This is what the card says instead.
+
+    `live` tells the common pre-service case apart from a real miss:
+    ProPresenter answering with nothing running yet is not the same
+    problem as ProPresenter running something this runsheet can't place,
+    and telling an operator the second when it is the first sends them
+    hunting for a fault that isn't there."""
+    at = PP_FOLLOWING["at"] or 0.0
+    fresh = bool(at) and (time.time() - at) < FOLLOW_STALE_S
+    # A manual click holds tracking off for ten seconds while this stamp
+    # goes stale after eight, so without this the card would claim to be
+    # following for eight seconds after Next was pressed and then report
+    # nothing running for the remaining two. Both are untrue, and the
+    # moment after that click is exactly when the card is being read.
+    paused = paused_by_hand(state)
+    return {"reachable": bool(PP_REACHABLE["ok"]),
+            "paused": paused,
+            "following": not paused and fresh and bool(PP_FOLLOWING["source"]),
+            "source": "" if paused or not fresh else PP_FOLLOWING["source"],
+            "live": not paused and fresh and bool(PP_FOLLOWING["live"])}
+
 # Strip header decorations the create-playlist code adds, so we can match the
 # header name back to the original runsheet item title.
 _HDR_ACTION_RE   = re.compile(r"^\s*⚠\s*ACTION NEEDED\s*—\s*", re.IGNORECASE)
@@ -135,6 +190,32 @@ def _resolve_active_position(plist: list, active_uuid: str, active_index) -> int
     return -1
 
 
+def _anchored_index(state: dict, plist: list, pos: int, playlist_uuid: str):
+    """The runsheet item the active playlist position belongs to, by uuid.
+
+    Reads the anchors `propresenter/anchors.py` recorded when Runsheet
+    Pilot wrote this playlist, so nothing has to be matched by name.
+    Walks back from the active item to the nearest anchored entry: an
+    operator clicking a media slide under a header is still in that
+    header's segment.
+
+    None when this isn't the playlist the anchors were recorded for, or
+    when nothing at or above `pos` is anchored — the caller then falls
+    back to the name matching that has always carried playlists Runsheet
+    Pilot did not build."""
+    anchors = state.get("pp_anchors") or {}
+    by_uuid = anchors.get("by_uuid") or {}
+    if not by_uuid or anchors.get("playlist") != playlist_uuid:
+        return None
+    count = len(state.get("items") or [])
+    for i in range(min(pos, len(plist) - 1), -1, -1):
+        item = plist[i] if isinstance(plist[i], dict) else {}
+        idx = by_uuid.get(((item.get("id") or {}).get("uuid") or "").strip())
+        if isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < count:
+            return idx
+    return None
+
+
 def _pp_active_section_probe(state: dict, base: str) -> dict:
     """Probe PP for the currently-active playlist item and resolve it back to
     a runsheet section index. Returns a dict with:
@@ -145,9 +226,14 @@ def _pp_active_section_probe(state: dict, base: str) -> dict:
             Whether PP currently has an active playlist at all. The caller
             uses this to suppress signal 3 (the name-fuzzy fallback) — if
             a playlist is active, signal 1 owns that case and we should
-            not fall through, even when section_idx itself is None."""
+            not fall through, even when section_idx itself is None.
+        source: "anchor" | "section"
+            Which resolution found it: the uuid anchors recorded when the
+            playlist was written, or the header-name match. Surfaced to the
+            operator so a quiet fallback is visible rather than guessed at."""
     import requests as req
-    result = {"section_idx": None, "has_active_playlist": False}
+    result = {"section_idx": None, "has_active_playlist": False,
+              "source": "section"}
     try:
         r = req.get(f"{base}/v1/playlist/active", timeout=2)
     except Exception:
@@ -185,6 +271,15 @@ def _pp_active_section_probe(state: dict, base: str) -> dict:
             pos = _resolve_active_position(plist, active_uuid, active_index)
             if pos < 0:
                 return result
+        # The uuids recorded when Runsheet Pilot wrote this playlist. Exact
+        # identity, so a renamed or recoloured header still tracks — and a
+        # song gets its own segment instead of the header above it.
+        anchored = _anchored_index(state, plist, pos, playlist_uuid)
+        if anchored is not None:
+            result["section_idx"] = anchored
+            result["source"] = "anchor"
+            return result
+
         # Find the section header for the active item: itself if it's a
         # header, else walk backward.
         header_name = ""
@@ -235,13 +330,11 @@ def _maybe_advance_from_pp(state: dict) -> dict:
     auto = (state.get("auto_track") or {})
     if not auto.get("enabled", True):
         return state
-    until = state.get("manual_override_until")
-    if until:
-        try:
-            if _dt.datetime.fromisoformat(until) > _dt.datetime.now():
-                return state
-        except Exception:
-            state.pop("manual_override_until", None)
+    if paused_by_hand(state):
+        return state
+    if state.get("manual_override_until"):
+        # Present but unreadable, or simply spent: either way it is over.
+        state.pop("manual_override_until", None)
     settings = load_settings()
     host = settings.get("pp_host") or "localhost"
     port = settings.get("pp_port") or "50001"
@@ -265,6 +358,14 @@ def _maybe_advance_from_pp(state: dict) -> dict:
     section_idx = probe["section_idx"]
     has_active_playlist = probe["has_active_playlist"]
 
+    # Stamped on every poll ProPresenter answers, not only the ones that
+    # move the cue: through a ten-minute segment nothing moves, and that is
+    # exactly when the operator starts doubting it is working.
+    if PP_REACHABLE["ok"]:
+        PP_FOLLOWING["at"] = time.time()
+        PP_FOLLOWING["live"] = has_active_playlist
+        PP_FOLLOWING["source"] = probe["source"] if section_idx is not None else ""
+
     if section_idx is not None:
         if section_idx == state.get("current_index"):
             # Already there — clear any pending target.
@@ -275,7 +376,7 @@ def _maybe_advance_from_pp(state: dict) -> dict:
             if _PENDING_SECTION_TARGET["count"] >= SECTION_ADVANCE_MIN_POLLS:
                 state["current_index"] = section_idx
                 state["current_started_at"] = _dt.datetime.now().isoformat()
-                state["pp_source"] = "section"
+                state["pp_source"] = probe["source"]
                 _PENDING_SECTION_TARGET["index"] = None
                 _PENDING_SECTION_TARGET["count"] = 0
         else:
@@ -306,6 +407,10 @@ def _maybe_advance_from_pp(state: dict) -> dict:
                         if rem is not None:
                             state["pp_remaining_seconds"] = rem
                         timer_running = True
+                        # One of our own timers counting down is as live as
+                        # ProPresenter gets, whatever the playlist says.
+                        PP_FOLLOWING["live"] = True
+                        PP_FOLLOWING["source"] = PP_FOLLOWING["source"] or "timer"
                         break
                 if timer_running:
                     break
@@ -343,6 +448,15 @@ def _maybe_advance_from_pp(state: dict) -> dict:
                     ).ratio()
                     if score > best_score:
                         best_score, best_i = score, i
+                if best_i >= 0 and best_score >= 0.78:
+                    # Marked on every poll that recognises the presentation,
+                    # not only the one that moves the cue. Guarding this the
+                    # way the write below is guarded left the flag true for
+                    # half a second per segment and false the rest of the
+                    # time, so a card polling every two seconds would report
+                    # nothing running while PP showed the right slide.
+                    PP_FOLLOWING["live"] = True
+                    PP_FOLLOWING["source"] = "presentation"
                 if best_i >= 0 and best_score >= 0.78 and best_i != cur_idx:
                     state["current_index"] = best_i
                     state["current_started_at"] = _dt.datetime.now().isoformat()
