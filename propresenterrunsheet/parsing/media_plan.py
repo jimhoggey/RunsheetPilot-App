@@ -36,12 +36,34 @@ PROMPT = (
     "wrong file on screen is worse than none. Leave an item out if nothing "
     "fits it; give an item two or three files only when they really all "
     "belong to that one segment.\n"
+    "A file may be used in more than one item when it genuinely belongs in "
+    "each — a hold screen, a loop, a lower third or a QR slide can recur "
+    "through a service. A film, a sermon bumper or anything made for one "
+    "moment belongs to one item only; repeating it is a mistake.\n"
     "Answer with JSON only: {\"media\": [{\"media\": 0, \"item\": 2}, ...]}"
 )
 
 
 def _rows(label_of, rows: list) -> str:
     return "\n".join(f"{i}. {label_of(r)}" for i, r in enumerate(rows[:_MAX_ROWS]))
+
+
+def _item_row(it: dict) -> str:
+    """The title, and the tech note when there is one. The note is where
+    a line says what it actually wants on screen — "promo Summit" lives
+    there far more often than in the title."""
+    title = (it.get("title") or "").strip()
+    note = " ".join((it.get("notes") or "").split())[:120]
+    return f"{title} — {note}" if note else title
+
+
+def _media_row(a: dict) -> str:
+    """The file, under the folder it sits in. The folder is the operator's
+    own filing — "Summit 2026", "Pre-service loops" — and is often the
+    only thing that says what a file like WTSSF_B2_v3 is for."""
+    name = a.get("name") or ""
+    folder = (a.get("folder") or "").strip()
+    return f"{folder} / {name}" if folder else name
 
 
 def plan_media(items: list, offered: list, or_key: str, configured_model: str,
@@ -58,8 +80,8 @@ def plan_media(items: list, offered: list, or_key: str, configured_model: str,
     if not model:
         return []
     asked = (f"{PROMPT}\n\nRUNSHEET:\n"
-             f"{_rows(lambda it: (it.get('title') or '').strip(), items)}\n\n"
-             f"MEDIA:\n{_rows(lambda a: a.get('name') or '', offered)}")
+             f"{_rows(_item_row, items)}\n\n"
+             f"MEDIA:\n{_rows(_media_row, offered)}")
     body = {"model": model, "temperature": 0,
             "messages": [{"role": "user", "content": asked}],
             # Only providers that neither store nor train on requests.

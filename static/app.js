@@ -1004,13 +1004,22 @@ function _renderTemplateVerdict() {
   const t = parsedTemplate;
   const pick = _createTemplateUuid;
   let msg = '', action = 'Change';
+  // A template covers the week; the Media bin covers what this runsheet
+  // asks for on top of it. Say both, or the bin's work is invisible.
+  const n = mediaFromBin.count;
+  const binBit = n
+    ? ` · plus media for ${n} item${n === 1 ? '' : 's'}` +
+      (mediaFromBin.folder
+        ? ` from <strong>${escapeHtml(mediaFromBin.folder)}</strong>`
+        : ' from your Media bin')
+    : '';
   if (!uploadedFile || !matchingOn() || playlistModeIsUpdate()) {
     msg = '';
   } else if (pick) {
     const name = _ppPlaylists.find(p => p.uuid === pick)?.name || 'your template';
-    msg = `📌 Using <strong>${escapeHtml(name)}</strong> — you picked it for this runsheet`;
+    msg = `📌 Using <strong>${escapeHtml(name)}</strong> — you picked it for this runsheet${binBit}`;
   } else if (t.uuid && !t.pinned) {
-    msg = `⚡ Auto-matched to <strong>${escapeHtml(t.name || 'a template')}</strong>`;
+    msg = `⚡ Auto-matched to <strong>${escapeHtml(t.name || 'a template')}</strong>${binBit}`;
   } else if (t.declined || mediaFromBin.count) {
     const label = (t.service_label || '').trim();
     const where = mediaFromBin.folder ? ` from <strong>${escapeHtml(mediaFromBin.folder)}</strong>` : '';
