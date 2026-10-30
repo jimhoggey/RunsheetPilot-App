@@ -54,6 +54,57 @@ def app_module():
 
 
 @pytest.fixture
+def openrouter(monkeypatch):
+    """OpenRouter, stood in for behind parsing/ask.py — every *_plan call
+    goes through ask_json, so one stand-in serves all their tests.
+
+        .say(content, status=200)  reply with `content` (a str, or anything
+                                   json.dumps writes); returns the call's
+                                   kwargs, filled in when it is made
+        .fail(exc)                 the request raises `exc`
+        .no_model()                no model resolves, and nothing is asked
+        .forbid()                  any request fails the test
+    """
+    import json
+    from propresenterrunsheet.parsing import ask
+
+    monkeypatch.setattr(ask, "fetch_catalogue", lambda: None)
+    monkeypatch.setattr(ask, "resolve_model", lambda *a, **k: "openai/gpt-4.1-mini")
+    monkeypatch.setattr(ask, "reasoning_for", lambda *a, **k: None)
+
+    class _OpenRouter:
+        @staticmethod
+        def say(content, status=200):
+            sent = {}
+            text = content if isinstance(content, str) else json.dumps(content)
+
+            class _R:
+                status_code = status
+
+                @staticmethod
+                def json():
+                    return {"choices": [{"message": {"content": text}}]}
+            monkeypatch.setattr(ask, "chat", lambda *a, **k: (sent.update(k), _R())[1])
+            return sent
+
+        @staticmethod
+        def fail(exc):
+            def _raise(*a, **k):
+                raise exc
+            monkeypatch.setattr(ask, "chat", _raise)
+
+        @staticmethod
+        def forbid():
+            monkeypatch.setattr(ask, "chat",
+                                lambda *a, **k: pytest.fail("nothing should be asked"))
+
+        def no_model(self):
+            monkeypatch.setattr(ask, "resolve_model", lambda *a, **k: "")
+            self.forbid()
+    return _OpenRouter()
+
+
+@pytest.fixture
 def isolated_state(tmp_path, monkeypatch):
     """Redirect the module-level state-file paths into a tmpdir for tests
     that hit routes which read or write `runsheet_state.json` / `clocks.json`.

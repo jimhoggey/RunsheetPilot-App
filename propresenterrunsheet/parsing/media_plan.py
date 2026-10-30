@@ -11,18 +11,7 @@ The model only pairs numbers. Names and uuids are read from the bin
 (media_match.sections), so it cannot invent an asset ProPresenter would
 404 on, and what it answers is held to what the code allows.
 """
-import json
-import logging
-
-import requests
-
-from ..config import APP_NAME
-from ..logging_setup import log_safe
-from .align import OPENROUTER_URL
-from .models import fetch_catalogue, reasoning_for, resolve_model
-from .openrouter import Stopped, chat
-
-log = logging.getLogger("pp_runsheet")
+from .ask import ask_json
 
 _MAX_ROWS = 150
 
@@ -76,32 +65,8 @@ def plan_media(items: list, offered: list, or_key: str, configured_model: str,
     """
     if not (items and offered and or_key):
         return []
-    model = resolve_model(configured_model or "", fetch_catalogue(), api_key=or_key)
-    if not model:
-        return []
-    asked = (f"{PROMPT}\n\nRUNSHEET:\n"
-             f"{_rows(_item_row, items)}\n\n"
-             f"MEDIA:\n{_rows(_media_row, offered)}")
-    body = {"model": model, "temperature": 0,
-            "messages": [{"role": "user", "content": asked}],
-            # Only providers that neither store nor train on requests.
-            "provider": {"data_collection": "deny"}}
-    effort = reasoning_for(model, fetch_catalogue())
-    if effort:
-        body["reasoning"] = effort
-    try:
-        r = chat(post or requests.post, OPENROUTER_URL, timeout_s=60,
-                 headers={"Authorization": f"Bearer {or_key}",
-                          "HTTP-Referer": "runsheet-pilot", "X-Title": APP_NAME},
-                 body=body)
-        if r.status_code != 200:
-            log.warning("Media plan: HTTP %s from %s", r.status_code, log_safe(model))
-            return []
-        reply = (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-        data = json.loads(reply[reply.index("{"):reply.rindex("}") + 1])
-    except (Stopped, ValueError, requests.RequestException):
-        log.warning("Media plan failed (%s); the playlist keeps its headers only",
-                    log_safe(model))
-        return []
-    picks = data.get("media")
+    data = ask_json(f"{PROMPT}\n\nRUNSHEET:\n{_rows(_item_row, items)}\n\n"
+                    f"MEDIA:\n{_rows(_media_row, offered)}",
+                    or_key, configured_model, label="Media plan", post=post)
+    picks = (data or {}).get("media")
     return picks if isinstance(picks, list) else []

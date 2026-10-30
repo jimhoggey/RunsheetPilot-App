@@ -20,23 +20,8 @@ ITEMS = [{"title": "Opener film"},
 
 
 @pytest.fixture
-def model(monkeypatch):
-    monkeypatch.setattr(fp, "fetch_catalogue", lambda: None)
-    monkeypatch.setattr(fp, "resolve_model", lambda *a, **k: "openai/gpt-4.1-mini")
-    monkeypatch.setattr(fp, "reasoning_for", lambda *a, **k: None)
-
-    def _say(payload, status=200):
-        sent = {}
-
-        class _R:
-            status_code = status
-
-            @staticmethod
-            def json():
-                return {"choices": [{"message": {"content": payload}}]}
-        monkeypatch.setattr(fp, "chat", lambda *a, **k: (sent.update(k), _R())[1])
-        return sent
-    return _say
+def model(openrouter):
+    return openrouter.say
 
 
 def test_the_chosen_folders_come_back_by_name_in_the_models_order(model):
@@ -93,8 +78,8 @@ def test_a_failed_call_chooses_nothing(model):
     ("Summit", ITEMS, FOLDERS, ""),          # no key
     ("", [], FOLDERS, "sk-or-x"),            # nothing to choose FOR
 ])
-def test_no_call_is_made_with_nothing_to_ask(monkeypatch, service, items, folders, key):
-    monkeypatch.setattr(fp, "chat", lambda *a, **k: pytest.fail("no call expected"))
+def test_no_call_is_made_with_nothing_to_ask(openrouter, service, items, folders, key):
+    openrouter.forbid()
     assert fp.plan_folders(service, items, folders, key, "") == []
 
 

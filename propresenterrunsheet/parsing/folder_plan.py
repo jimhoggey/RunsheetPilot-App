@@ -17,19 +17,8 @@ numbers, and every number is checked against that list.
 An operator's saved folders for a service are final, so the caller
 skips this call entirely when there are some (owner, 30 Oct 2026).
 """
-import json
-import logging
-
-import requests
-
-from ..config import APP_NAME
-from ..logging_setup import log_safe
-from .align import OPENROUTER_URL
+from .ask import ask_json
 from .media_plan import _item_row
-from .models import fetch_catalogue, reasoning_for, resolve_model
-from .openrouter import Stopped, chat
-
-log = logging.getLogger("pp_runsheet")
 
 _MAX_FOLDERS = 200
 _MAX_ITEMS = 60
@@ -79,38 +68,16 @@ def plan_folders(service: str, items: list, folders: list, or_key: str,
     shown = (folders or [])[:_MAX_FOLDERS]
     if not (shown and or_key and ((service or "").strip() or items)):
         return []
-    model = resolve_model(configured_model or "", fetch_catalogue(), api_key=or_key)
-    if not model:
-        return []
     listing = "\n".join(f"{i}. {f['name']} ({f['count']} files)"
                         for i, f in enumerate(shown))
     lines = "\n".join(f"- {_item_row(it)}" for it in (items or [])[:_MAX_ITEMS]
                       if isinstance(it, dict) and _item_row(it))
-    asked = (f"{PROMPT}\n\nKIND OF SERVICE: {(service or '').strip()[:200]}\n"
-             f"TITLE: {(title or service or '').strip()[:200]}\n\n"
-             f"RUNSHEET:\n{lines}\n\nFOLDERS:\n{listing}")
-    body = {"model": model, "temperature": 0,
-            "messages": [{"role": "user", "content": asked}],
-            # Only providers that neither store nor train on requests.
-            "provider": {"data_collection": "deny"}}
-    effort = reasoning_for(model, fetch_catalogue())
-    if effort:
-        body["reasoning"] = effort
-    try:
-        r = chat(post or requests.post, OPENROUTER_URL, timeout_s=45,
-                 headers={"Authorization": f"Bearer {or_key}",
-                          "HTTP-Referer": "runsheet-pilot", "X-Title": APP_NAME},
-                 body=body)
-        if r.status_code != 200:
-            log.warning("Folder plan: HTTP %s from %s", r.status_code, log_safe(model))
-            return []
-        reply = (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-        data = json.loads(reply[reply.index("{"):reply.rindex("}") + 1])
-    except (Stopped, ValueError, requests.RequestException):
-        log.warning("Folder plan failed (%s); matching folder names instead",
-                    log_safe(model))
-        return []
-    picks = data.get("folders") if isinstance(data, dict) else None
+    data = ask_json(f"{PROMPT}\n\nKIND OF SERVICE: {(service or '').strip()[:200]}\n"
+                    f"TITLE: {(title or service or '').strip()[:200]}\n\n"
+                    f"RUNSHEET:\n{lines}\n\nFOLDERS:\n{listing}",
+                    or_key, configured_model, label="Folder plan",
+                    timeout_s=45, post=post)
+    picks = (data or {}).get("folders")
     out = []
     for n in picks if isinstance(picks, list) else []:
         if isinstance(n, int) and not isinstance(n, bool) and 0 <= n < len(shown):

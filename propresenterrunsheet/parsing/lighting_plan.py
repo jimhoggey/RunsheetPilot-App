@@ -15,19 +15,9 @@ cue wording come from the guide itself, read here — so a level can never be
 invented, and `when` is always the church's own wording. That is the
 consistency the guide exists to give.
 """
-import json
-import logging
 import re
 
-import requests
-
-from ..config import APP_NAME
-from ..logging_setup import log_safe
-from .align import OPENROUTER_URL
-from .models import fetch_catalogue, reasoning_for, resolve_model
-from .openrouter import Stopped, chat
-
-log = logging.getLogger("pp_runsheet")
+from .ask import ask_json
 
 # A tidied guide line: "3. First praise song — when: halfway through — 12%"
 # (parsing/guide.py writes this shape; an untidied line rarely matches, and
@@ -91,13 +81,9 @@ def _item_lines(items: list) -> str:
     return "\n".join(rows)
 
 
-def _chosen(reply: str, moments: dict, items: list) -> dict:
+def _chosen(data: dict, moments: dict, items: list) -> dict:
     """{item index: [step]} from the model's answer, keeping only choices
     that are real and in service order."""
-    try:
-        data = json.loads(reply[reply.index("{"):reply.rindex("}") + 1])
-    except (ValueError, TypeError):
-        return {}
     out, last, used = {}, -1, set()
     for pick in (data.get("steps") or [])[:_MAX_ITEMS]:
         if not isinstance(pick, dict):
@@ -128,30 +114,9 @@ def plan_lighting(items: list, guide: str, or_key: str, configured_model: str,
     blank = [i for i, it in enumerate(items[:_MAX_ITEMS]) if not it.get("lighting_steps")]
     if not (moments and blank and or_key and items):
         return {}
-    model = resolve_model(configured_model or "", fetch_catalogue(), api_key=or_key)
-    if not model:
-        return {}
     guide_lines = "\n".join(
         f"{m['n']}. {m['name']}" + (f" — {m['when']}" if m["when"] else "")
         for m in moments)
-    body = {"model": model, "temperature": 0,
-            "messages": [{"role": "user", "content":
-                          f"{PROMPT}\n\nMOMENTS:\n{guide_lines}\n\nRUNSHEET:\n{_item_lines(items)}"}],
-            # Only providers that neither store nor train on requests.
-            "provider": {"data_collection": "deny"}}
-    effort = reasoning_for(model, fetch_catalogue())
-    if effort:
-        body["reasoning"] = effort
-    try:
-        r = chat(post or requests.post, OPENROUTER_URL, timeout_s=60,
-                 headers={"Authorization": f"Bearer {or_key}",
-                          "HTTP-Referer": "runsheet-pilot", "X-Title": APP_NAME},
-                 body=body)
-        if r.status_code != 200:
-            log.warning("Lighting plan: HTTP %s from %s", r.status_code, log_safe(model))
-            return {}
-        reply = (((r.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
-    except (Stopped, ValueError, requests.RequestException):
-        log.warning("Lighting plan failed (%s); the runsheet's own lighting stands", log_safe(model))
-        return {}
-    return _chosen(reply, {m["n"]: m for m in moments}, items)
+    data = ask_json(f"{PROMPT}\n\nMOMENTS:\n{guide_lines}\n\nRUNSHEET:\n{_item_lines(items)}",
+                    or_key, configured_model, label="Lighting plan", post=post)
+    return _chosen(data, {m["n"]: m for m in moments}, items) if data else {}
