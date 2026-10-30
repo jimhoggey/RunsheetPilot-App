@@ -875,19 +875,24 @@
      under Step 1 and saved per service, so the next runsheet for it needs
      no clicks. Listed recommendation-first: what this runsheet used, then
      folders whose names look like the service, then everything else. -->
+<!-- Closes on a click that both STARTS and ends on the backdrop: drag-selecting
+     the service name and letting go outside the card closed it and threw the
+     ticks away. -->
 <div id="folders-backdrop" class="modal-backdrop" role="dialog" aria-modal="true"
-     aria-labelledby="folders-title" onclick="if(event.target===this)closeFolderPicker()">
+     aria-labelledby="folders-title" onmousedown="this._down=event.target===this"
+     onclick="if(event.target===this&&this._down)closeFolderPicker()">
   <div class="modal modal-folders">
     <h2 id="folders-title">Media folders</h2>
     <label class="modal-hint" for="folders-service">Use the ticked folders for every runsheet of</label>
-    <input id="folders-service" type="text" maxlength="120" autocomplete="off" spellcheck="false">
+    <input id="folders-service" type="text" maxlength="120" autocomplete="off" spellcheck="false"
+           aria-describedby="folders-hint" onkeydown="if(event.key==='Enter')saveFolderPicker(false)">
     <p class="modal-hint" id="folders-hint">A shorter name covers more: “Summit” matches every Summit.</p>
     <input id="folders-filter" type="search" placeholder="Filter folders" aria-label="Filter folders"
            oninput="_renderFolderList()">
     <div class="folder-list" id="folders-list" role="group" aria-label="Media folders"></div>
+    <div class="notice notice-err" id="folders-error" role="alert" hidden></div>
     <div class="modal-actions">
-      <button class="btn btn-dim btn-sm" id="folders-auto" onclick="saveFolderPicker(true)"
-              title="Forget the saved folders for this service">Let AI choose</button>
+      <button class="btn btn-dim btn-sm" id="folders-forget" onclick="saveFolderPicker(true)">Forget saved folders</button>
       <span class="folder-actions-right">
         <button class="btn btn-dim btn-sm" onclick="closeFolderPicker()">Cancel</button>
         <button class="btn btn-grn" id="folders-save" onclick="saveFolderPicker(false)">Save</button>

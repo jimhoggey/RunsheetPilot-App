@@ -36,6 +36,15 @@ function _noBinMedia() {
           saved_as: '', bin_folders: [], matched: []};
 }
 let mediaFromBin = _noBinMedia();
+// True while the folder picker's Save is placing media again. Create waits
+// for it (_syncCreateButton): building the playlist mid-placement would
+// send the old media picks with the new ones landing straight after.
+let _placing = false;
+// What was last SAVED in the folder picker while placing media from it
+// hasn't succeeded — so reopening shows the saved choice rather than the
+// old one, and a second Save can't quietly put the old folders back.
+// {service, folders}; cleared with the runsheet.
+let _savedFolders = null;
 let parsedTemplate = _noTemplate();
 // The runsheet's text as read on upload, for Auto's first guess.
 let _uploadText = '';
@@ -753,6 +762,7 @@ function _clearRunsheetState() {
   // service label would otherwise be the hint for this one.
   parsedTemplate = _noTemplate();
   mediaFromBin = _noBinMedia();
+  _savedFolders = null;
   _cancelParse();
   matchedItems = [];
   _clearUpdatePlan();
@@ -1029,13 +1039,26 @@ function _renderTemplateVerdict() {
             : 'Building coloured headers, timers and songs — just no template media.');
     action = 'Pick one';
   }
-  el.hidden = !msg;
-  el.innerHTML = msg
+  _setBanner(el, msg
     ? `<button type="button" class="notice notice-info template-banner" ` +
       `onclick="openTemplatePicker()"><span>${msg}</span>` +
       `<span class="template-banner-action">${action} ›</span></button>`
-    : '';
+    : '');
   _renderFolderVerdict();
+}
+
+// Writes a banner only when it changed. Banners are redrawn on every pick,
+// toggle and parse, and an identical rewrite replayed the slide-in, made
+// screen readers announce the line again, and dropped keyboard focus from
+// the button inside it. When the text does change, focus follows to the
+// new button.
+function _setBanner(el, html) {
+  if (el._html === html) return;
+  const hadFocus = el.contains(document.activeElement);
+  el._html = html;
+  el.hidden = !html;
+  el.innerHTML = html;
+  if (hadFocus) el.querySelector('button')?.focus();
 }
 
 // ─── The folder line, under the template banner ───────────────────────────
@@ -1061,15 +1084,16 @@ function _renderFolderVerdict() {
     matched:   ['📁', `Matched ${_folderNames(m.folders)} by name for <strong>${service}</strong>${items}`],
     none:      ['📁', `None of your Media folders look like <strong>${service}</strong>`],
   };
+  // matchedItems too: the line used to appear while the match call was
+  // still running, and a Save then had nothing to place media into.
   const show = uploadedFile && matchingOn() && !playlistModeIsUpdate()
-    && (m.bin_folders || []).length && lines[m.source];
-  el.hidden = !show;
-  if (!show) { el.innerHTML = ''; return; }
+    && matchedItems.length && (m.bin_folders || []).length && lines[m.source];
+  if (!show) { _setBanner(el, ''); return; }
   const [glyph, msg] = lines[m.source];
-  el.innerHTML =
+  _setBanner(el,
     `<button type="button" class="notice notice-info template-banner" ` +
     `onclick="openFolderPicker()"><span><span aria-hidden="true">${glyph}</span> ${msg}</span>` +
-    `<span class="template-banner-action">${m.source === 'none' ? 'Pick folders' : 'Change'} ›</span></button>`;
+    `<span class="template-banner-action">${m.source === 'none' ? 'Pick folders' : 'Change'} ›</span></button>`);
 }
 
 // ─── The folder picker ────────────────────────────────────────────────────
@@ -1081,15 +1105,34 @@ let _folderPicks = new Set();
 
 function openFolderPicker() {
   const m = mediaFromBin;
-  _folderPicks = new Set(m.folders || []);
-  document.getElementById('folders-service').value = m.saved_as || m.service || '';
+  const seed = _savedFolders
+    || {service: m.saved_as || m.service || '', folders: m.folders || []};
+  _folderPicks = new Set(seed.folders);
+  document.getElementById('folders-service').value = seed.service;
   document.getElementById('folders-filter').value = '';
-  document.getElementById('folders-hint').textContent =
-    'A shorter name covers more: “Summit” matches every Summit.';
-  document.getElementById('folders-auto').hidden = m.source !== 'chosen';
+  _folderError('');
+  document.getElementById('folders-forget').hidden =
+    !(_savedFolders ? _savedFolders.folders.length : m.source === 'chosen');
+  _syncFolderButtons();
   _renderFolderList();
   document.getElementById('folders-backdrop').classList.add('active');
   document.getElementById('folders-filter').focus();
+}
+
+// Right beside the buttons, in alert colours: a failed Save used to change
+// one grey line 300px above them, which looked like nothing had happened.
+function _folderError(msg) {
+  const el = document.getElementById('folders-error');
+  el.textContent = msg;
+  el.hidden = !msg;
+}
+
+// Save and Forget wait while media is being placed: a second save mid-way
+// raced the first, and whichever answer landed last won on screen.
+function _syncFolderButtons() {
+  for (const id of ['folders-save', 'folders-forget']) {
+    document.getElementById(id).disabled = _placing;
+  }
 }
 
 function closeFolderPicker() {
@@ -1117,13 +1160,18 @@ function _renderFolderList() {
   ];
   const list = document.getElementById('folders-list');
   list.replaceChildren();
-  for (const [title, names] of groups) {
+  groups.forEach(([title, names], g) => {
     const shown = names.filter(n => !q || n.toLowerCase().includes(q));
-    if (!shown.length) continue;
+    if (!shown.length) return;
+    // A group per heading, so a screen reader says which list a folder is in.
+    const group = document.createElement('div');
+    group.setAttribute('role', 'group');
     const head = document.createElement('div');
     head.className = 'folder-group-head';
+    head.id = `folders-group-${g}`;
     head.textContent = title;
-    list.append(head);
+    group.setAttribute('aria-labelledby', head.id);
+    group.append(head);
     for (const name of shown) {
       const row = document.createElement('label');
       row.className = 'folder-row';
@@ -1135,11 +1183,13 @@ function _renderFolderList() {
       label.textContent = name;
       const count = document.createElement('span');
       count.className = 'folder-count';
-      count.textContent = counts.has(name) ? String(counts.get(name)) : '';
+      const n = counts.get(name);
+      count.textContent = n == null ? '' : `${n} file${n === 1 ? '' : 's'}`;
       row.append(box, label, count);
-      list.append(row);
+      group.append(row);
     }
-  }
+    list.append(group);
+  });
   if (!list.children.length) {
     const none = document.createElement('p');
     none.className = 'modal-hint';
@@ -1148,42 +1198,52 @@ function _renderFolderList() {
   }
 }
 
-// `letAi` forgets this service's saved folders, handing the choice back to
-// the AI; otherwise the ticks are saved for the service named in the box.
-async function saveFolderPicker(letAi) {
-  const hint = document.getElementById('folders-hint');
-  const service = document.getElementById('folders-service').value.trim();
-  const folders = letAi ? [] : [..._folderPicks];
-  if (!letAi && !folders.length) {
-    hint.textContent = 'Tick at least one folder — or choose “Let AI choose”.';
+// `forget` drops the saved folders, handing the choice back to the AI;
+// otherwise the ticks are saved for the service named in the box.
+async function saveFolderPicker(forget) {
+  if (_placing) return;
+  const typed = document.getElementById('folders-service').value.trim();
+  // Forget acts on the row that actually applied, not whatever the box says.
+  const service = forget
+    ? (_savedFolders?.service || mediaFromBin.saved_as || typed) : typed;
+  const folders = forget ? [] : [..._folderPicks];
+  if (!forget && !folders.length) {
+    _folderError('Tick at least one folder — or choose “Forget saved folders”.');
     return;
   }
-  const btn = document.getElementById(letAi ? 'folders-auto' : 'folders-save');
+  _folderError('');
+  const btn = document.getElementById(forget ? 'folders-forget' : 'folders-save');
   btn.disabled = true;
   try {
     const r = await fetch('/api/media_folders', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({service, folders}),
     });
-    const saved = await r.json();
+    const saved = await r.json().catch(() => ({}));
     if (!r.ok || !saved.ok) {
-      hint.textContent = saved.error || 'Couldn’t save those folders.';
+      _folderError(saved.error || 'Couldn’t save those folders. Try again.');
       return;
     }
-    closeFolderPicker();
-    await _placeBinMediaAgain(service, letAi);
-  } catch (e) {
-    hint.textContent = 'Couldn’t save those folders: ' + String(e);
+  } catch (_) {
+    _folderError('Couldn’t reach the app to save those folders. Try again.');
+    return;
   } finally {
     btn.disabled = false;
   }
+  _savedFolders = {service, folders};
+  closeFolderPicker();
+  await _placeBinMediaAgain(service, forget);
 }
 
-async function _placeBinMediaAgain(savedFor, letAi) {
+async function _placeBinMediaAgain(savedFor, forgot) {
   if (!matchedItems.length) return;
+  const seq = _parseSeq;               // a new runsheet or Start over drops the answer
+  _placing = true;
+  _syncCreateButton();
+  _syncFolderButtons();
   setStatus('Placing media from your folders…', 'var(--acc)');
   try {
-    const res = await fetch('/api/media/place', {
+    const r = await fetch('/api/media/place', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         parsed: matchedItems.map(mi => mi.parsed),
@@ -1191,25 +1251,38 @@ async function _placeBinMediaAgain(savedFor, letAi) {
         host: document.getElementById('pp-host2').value,
         port: document.getElementById('pp-port2').value,
       }),
-    }).then(r => r.json());
-    if (!res.ok || !Array.isArray(res.items) || res.items.length !== matchedItems.length) {
-      setStatus('❌ ' + escapeHtml(res.error || 'Couldn’t place the media again.'), 'var(--red)');
+    });
+    const res = await r.json().catch(() => ({}));
+    if (seq !== _parseSeq) return;
+    if (!r.ok || !res.ok || !Array.isArray(res.items)
+        || res.items.length !== matchedItems.length) {
+      setStatus('❌ ' + escapeHtml(res.error ||
+        'Couldn’t place the media again. Your folders are saved for next time.'),
+        'var(--red)');
       return;
     }
     res.items.forEach((p, i) => { matchedItems[i].parsed = p; });
     mediaFromBin = {..._noBinMedia(), ...(res.media_from_bin || {})};
+    _savedFolders = null;              // placed: the folder line says what's saved now
     renderResults();
     _renderTemplateVerdict();
     const n = mediaFromBin.count, items = `${n} item${n === 1 ? '' : 's'}`;
     const used = mediaFromBin.source === 'chosen';
-    setStatus(letAi ? `AI chose the folders again — media for ${items}.`
+    setStatus(forgot ? `AI chose the folders again — media for ${items}.`
       : used ? `Saved — media for ${items} from your ${escapeHtml(savedFor)} folders.`
       : `Saved for “${escapeHtml(savedFor)}”. This runsheet is ` +
         `${escapeHtml(mediaFromBin.service || 'a different service')}, so they’ll ` +
         `be used for the next ${escapeHtml(savedFor)} runsheet.`,
-      used || letAi ? 'var(--grn)' : 'var(--acc)');
-  } catch (e) {
-    setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
+      used || forgot ? 'var(--grn)' : 'var(--acc)');
+  } catch (_) {
+    if (seq === _parseSeq) {
+      setStatus('❌ Couldn’t reach the app to place the media. Your folders are ' +
+                'saved for next time.', 'var(--red)');
+    }
+  } finally {
+    _placing = false;
+    _syncCreateButton();
+    _syncFolderButtons();
   }
 }
 
@@ -1445,7 +1518,7 @@ function _syncCreateButton() {
   if (!btn) return;
   const blocked = playlistModeIsUpdate()
     && !document.getElementById('template-playlist').value;
-  btn.disabled = blocked;
+  btn.disabled = blocked || _placing;
   // The one choice update mode can't go on without, marked as the thing
   // to do: a grey button alone left people wondering why.
   document.getElementById('template-playlist').classList.toggle('needs-pick', blocked);
@@ -1454,7 +1527,7 @@ function _syncCreateButton() {
   // main flow with its only explanation hidden.
   btn.title = blocked
     ? 'Choose the playlist to add headers to, in the settings panel on the left.'
-    : '';
+    : _placing ? 'Placing media from your folders — one moment.' : '';
 }
 
 // ─── Downloaded-media assist ──────────────────────────────────────────────
@@ -2202,6 +2275,7 @@ async function parseRunsheet() {
 
     matchedItems = matchRes.items;
     renderResults();
+    _renderFolderVerdict();            // its Save needs matchedItems to place into
     _showNextStepHint(matchedItems.length);
     loadMediaAssist();
     parseSucceeded = true;
