@@ -42,18 +42,31 @@ def test_prose_around_the_json_is_tolerated(model):
 ])
 def test_an_unusable_answer_leaves_the_playlist_plain(model, payload):
     model(payload)
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+    assert not mp.plan_media(ITEMS, OFFERED, "sk-or-x", "")
 
 
 def test_a_refused_call_leaves_the_playlist_plain(model):
     model('{"media": [{"media": 0, "item": 0}]}', status=429)
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+    assert not mp.plan_media(ITEMS, OFFERED, "sk-or-x", "")
 
 
 def test_a_dead_connection_leaves_the_playlist_plain(openrouter):
     import requests
     openrouter.fail(requests.RequestException("no route to host"))
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+    assert not mp.plan_media(ITEMS, OFFERED, "sk-or-x", "")
+
+
+@pytest.mark.parametrize("payload, status, want", [
+    ('{"media": []}', 200, []),               # answered: nothing fits
+    ('{}', 200, []),                          # answered, said nothing usable
+    ('{"media": []}', 500, None),             # never answered
+    ("I can't help with that.", 200, None),   # no JSON: not an answer
+])
+def test_no_answer_is_told_apart_from_nothing_fits(model, payload, status, want):
+    """Placing media again only replaces what is placed on a real answer —
+    a dropped call must not read as "remove every slide"."""
+    model(payload, status=status)
+    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == want
 
 
 @pytest.mark.parametrize("items, offered, key", [
@@ -68,4 +81,4 @@ def test_nothing_to_match_means_no_call(openrouter, items, offered, key):
 
 def test_no_usable_model_means_no_call(openrouter):
     openrouter.no_model()
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") is None

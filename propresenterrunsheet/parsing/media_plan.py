@@ -56,17 +56,22 @@ def _media_row(a: dict) -> str:
 
 
 def plan_media(items: list, offered: list, or_key: str, configured_model: str,
-               post=None) -> list:
+               post=None):
     """[{"media": n, "item": i}, …] — the model's pairings, unvalidated.
 
-    Empty when there is nothing to match, no key, no model, or the call
-    fails: the playlist is then built exactly as it is today, with each
-    runsheet item's own coloured header and no media.
+    [] when there is nothing to match or no key, or the model answered and
+    nothing fits; None when the model DIDN'T answer (no model, the call
+    failed, no JSON). The playlist is then built with each item's own
+    coloured header and no media either way — but placing media again
+    keeps what is already placed on None, and only replaces it on a real
+    answer (routes/parse.place_bin_media).
     """
     if not (items and offered and or_key):
         return []
     data = ask_json(f"{PROMPT}\n\nRUNSHEET:\n{_rows(_item_row, items)}\n\n"
                     f"MEDIA:\n{_rows(_media_row, offered)}",
                     or_key, configured_model, label="Media plan", post=post)
-    picks = (data or {}).get("media")
+    if data is None:
+        return None
+    picks = data.get("media")
     return picks if isinstance(picks, list) else []

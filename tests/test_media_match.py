@@ -400,6 +400,47 @@ def test_placing_again_while_propresenter_is_away_removes_nothing(client, monkey
     assert "unchanged" in r.get_json()["error"]
 
 
+def test_placing_again_when_the_ai_doesnt_answer_removes_nothing(client, monkeypatch):
+    """The second door to the same loss: picks were cleared before the
+    model was asked, so a dropped call on Save wiped them too."""
+    import propresenterrunsheet.routes.parse as parse_mod
+    monkeypatch.setattr(parse_mod, "pp_base", lambda *a, **k: "http://pp")
+    monkeypatch.setattr(parse_mod, "fetch_media_bin", lambda base: BIN)
+    monkeypatch.setattr(parse_mod, "fetch_pp_playlists", lambda base: [])
+    monkeypatch.setattr(parse_mod, "plan_folders", lambda *a, **k: [])
+    monkeypatch.setattr(parse_mod, "plan_media", lambda *a, **k: None)
+    placed = {"header": {"name": "Opener"}, "items": [{"name": "F1"}], "from_bin": True}
+    r = client.post("/api/media/place", json={
+        "parsed": [{"title": "Opener", "library_match": placed}], "service": "Summit"})
+    assert r.status_code == 503
+
+
+def test_but_a_real_answer_that_nothing_fits_does_clear_them(client, monkeypatch):
+    """The operator un-ticked those folders; their slides must go."""
+    import propresenterrunsheet.routes.parse as parse_mod
+    monkeypatch.setattr(parse_mod, "pp_base", lambda *a, **k: "http://pp")
+    monkeypatch.setattr(parse_mod, "fetch_media_bin", lambda base: BIN)
+    monkeypatch.setattr(parse_mod, "fetch_pp_playlists", lambda base: [])
+    monkeypatch.setattr(parse_mod, "plan_folders", lambda *a, **k: [])
+    monkeypatch.setattr(parse_mod, "plan_media", lambda *a, **k: [])
+    placed = {"header": {"name": "Opener"}, "items": [{"name": "F1"}], "from_bin": True}
+    r = client.post("/api/media/place", json={
+        "parsed": [{"title": "Opener", "library_match": placed}], "service": "Summit"})
+    assert r.status_code == 200
+    assert r.get_json()["items"][0]["library_match"] is None
+
+
+def test_a_parse_whose_media_call_fails_still_reports_its_folders(parse_client, monkeypatch):
+    import propresenterrunsheet.routes.parse as parse_mod
+    _route(monkeypatch, [{"title": "Opener Film", "type": "video"}],
+           service_type="Summit", folders=["Summit 2026 Friday"])
+    monkeypatch.setattr(parse_mod, "plan_media", lambda *a, **k: None)
+    r = _upload(parse_client, "Summit 2026.pdf")
+    got = r["media_from_bin"]
+    assert (got["count"], got["folders"]) == (0, ["Summit 2026 Friday"])
+    assert r["items"][0]["library_match"] is None
+
+
 @pytest.mark.parametrize("body", [{}, {"parsed": "x"}, {"parsed": None}, ["parsed"]])
 def test_placing_media_needs_a_runsheet(client, body):
     assert client.post("/api/media/place", json=body).status_code == 400

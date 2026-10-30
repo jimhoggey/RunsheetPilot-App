@@ -457,6 +457,12 @@ def _rate_limit_message(resp) -> str:
             "(rate limited). Wait a little and try again.")
 
 
+def _bin_pick(item) -> bool:
+    """True when this item's media was placed from the bin, not a template."""
+    lm = item.get("library_match") if isinstance(item, dict) else None
+    return isinstance(lm, dict) and bool(lm.get("from_bin"))
+
+
 def _no_bin_media(service, title="") -> dict:
     """What the folder line under Step 1 gets when the bin wasn't consulted.
 
@@ -492,10 +498,12 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
     service's folders — because it replaces only the bin's own earlier
     picks (marked `from_bin`), never a template's.
 
-    Returns None, touching nothing, when the bin can't be read: an empty
-    read is ProPresenter not answering far more often than an empty bin,
-    and clearing the earlier picks first would have wiped every slide the
-    parse placed if PP restarted before the operator pressed Save.
+    Never removes those earlier picks without a real answer to replace them
+    with. Returns None, touching nothing, when the bin can't be read (far
+    more often ProPresenter not answering than an empty bin), or when the
+    runsheet already has bin media and the model doesn't answer. Clearing
+    first and asking second wiped every slide the parse had placed whenever
+    either hiccupped between the parse and the operator pressing Save.
     """
     service, title = str(service or "").strip(), str(title or "").strip()
     try:
@@ -505,10 +513,10 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
         bin_items = []
     if not bin_items:
         return None
-    for it in items:
-        lm = it.get("library_match") if isinstance(it, dict) else None
-        if isinstance(lm, dict) and lm.get("from_bin"):
-            it["library_match"] = None
+    had = any(_bin_pick(it) for it in items)
+    # The steps see the runsheet as though the bin had placed nothing yet;
+    # `items` itself is only changed once there is an answer.
+    work = [{**it, "library_match": None} if _bin_pick(it) else it for it in items]
     try:
         rows = settings.get("media_folders_by_service") or []
         if playlists is None:
@@ -525,17 +533,22 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
         suggested = None                                          # 1–2
         if not row_for_service(rows, service, title):
             suggested = plan_folders(
-                service, items,
-                eligible_folders(bin_items, service, items, rows, known),
+                service, work,
+                eligible_folders(bin_items, service, work, rows, known),
                 or_key, model, title=title)
-        sc = media_scope(bin_items, service, items, rows, known,  # 3
+        sc = media_scope(bin_items, service, work, rows, known,   # 3
                          suggested=suggested, title=title)
-        picks = plan_media(items, sc["assets"], or_key, model)    # 4
-        placed = media_sections(items, picks, sc["assets"])       # 5
+        picks = plan_media(work, sc["assets"], or_key, model)     # 4
+        if picks is None and had:
+            log.warning("Media plan unanswered; the bin's earlier picks stay")
+            return None
+        placed = media_sections(work, picks, sc["assets"])        # 5
     except Exception:
-        log.exception("Media-bin matching failed; the playlist keeps its "
-                      "headers and nothing else changes")
-        return _no_bin_media(service, title)
+        log.exception("Media-bin matching failed; nothing placed or removed")
+        return None if had else _no_bin_media(service, title)
+    for it in items:
+        if _bin_pick(it):
+            it["library_match"] = None
     for i, section in placed.items():
         items[i]["library_match"] = section
     log.info("Media bin: %d of %d items got media from %d folder(s), %s: %s",
@@ -579,8 +592,9 @@ def api_place_media():
         title=title[:200] if isinstance(title, str) else "")
     if summary is None:
         return jsonify({"ok": False, "error":
-                        "ProPresenter didn't answer, so this runsheet's media "
-                        "is unchanged. Your folders are saved for next time."}), 503
+                        "ProPresenter or the AI didn't answer, so this "
+                        "runsheet's media is unchanged. Your folders are "
+                        "saved for next time."}), 503
     return jsonify({"ok": True, "items": items, "media_from_bin": summary})
 
 
