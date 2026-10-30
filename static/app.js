@@ -26,9 +26,16 @@ let uploadedFile = null;
 function _noTemplate() {
   return {uuid: '', name: '', declined: false, service_label: '', pinned: false};
 }
-// What the Media bin supplied when there was no template (a one-off event
-// whose media lives in a smart folder named for it).
-let mediaFromBin = {count: 0, folder: ''};
+// What the Media bin supplied, and from which folders — the parse's
+// `media_from_bin` (routes/parse.place_bin_media). `source` says who chose
+// the folders: 'chosen' (saved for this service), 'suggested' (the AI),
+// 'matched' (folder names), 'none'. `service` and `title` go back to the
+// server unchanged when the folder picker places media again.
+function _noBinMedia() {
+  return {count: 0, folders: [], source: 'none', service: '', title: '',
+          saved_as: '', bin_folders: [], matched: []};
+}
+let mediaFromBin = _noBinMedia();
 let parsedTemplate = _noTemplate();
 // The runsheet's text as read on upload, for Auto's first guess.
 let _uploadText = '';
@@ -745,7 +752,7 @@ function _clearRunsheetState() {
   // Before anything below can ask for a guess: the last runsheet's
   // service label would otherwise be the hint for this one.
   parsedTemplate = _noTemplate();
-  mediaFromBin = {count: 0, folder: ''};
+  mediaFromBin = _noBinMedia();
   _cancelParse();
   matchedItems = [];
   _clearUpdatePlan();
@@ -1004,33 +1011,23 @@ function _renderTemplateVerdict() {
   const t = parsedTemplate;
   const pick = _createTemplateUuid;
   let msg = '', action = 'Change';
-  // A template covers the week; the Media bin covers what this runsheet
-  // asks for on top of it. Say both, or the bin's work is invisible.
-  const n = mediaFromBin.count;
-  const binBit = n
-    ? ` · plus media for ${n} item${n === 1 ? '' : 's'}` +
-      (mediaFromBin.folder
-        ? ` from <strong>${escapeHtml(mediaFromBin.folder)}</strong>`
-        : ' from your Media bin')
-    : '';
+  // Templates only: what the Media bin added, and from where, is the
+  // folder line underneath (_renderFolderVerdict) — one line per decision,
+  // each one clickable to change that decision.
   if (!uploadedFile || !matchingOn() || playlistModeIsUpdate()) {
     msg = '';
   } else if (pick) {
     const name = _ppPlaylists.find(p => p.uuid === pick)?.name || 'your template';
-    msg = `📌 Using <strong>${escapeHtml(name)}</strong> — you picked it for this runsheet${binBit}`;
+    msg = `📌 Using <strong>${escapeHtml(name)}</strong> — you picked it for this runsheet`;
   } else if (t.uuid && !t.pinned) {
-    msg = `⚡ Auto-matched to <strong>${escapeHtml(t.name || 'a template')}</strong>${binBit}`;
+    msg = `⚡ Auto-matched to <strong>${escapeHtml(t.name || 'a template')}</strong>`;
   } else if (t.declined || mediaFromBin.count) {
     const label = (t.service_label || '').trim();
-    const where = mediaFromBin.folder ? ` from <strong>${escapeHtml(mediaFromBin.folder)}</strong>` : '';
-    // A one-off event has no template but does have media — the bin found
-    // it, so say so rather than leaving the operator to spot it.
     msg = `<strong>No template for ${label ? escapeHtml(label) : 'this service'}.</strong> ` +
           (mediaFromBin.count
-            ? `Took media for ${mediaFromBin.count} item${mediaFromBin.count === 1 ? '' : 's'}` +
-              `${where} out of your Media bin.`
-            : `Building coloured headers, timers and songs — just no template media.`);
-    action = mediaFromBin.count ? 'Change' : 'Pick one';
+            ? 'Your Media folders cover it — see below.'
+            : 'Building coloured headers, timers and songs — just no template media.');
+    action = 'Pick one';
   }
   el.hidden = !msg;
   el.innerHTML = msg
@@ -1038,6 +1035,182 @@ function _renderTemplateVerdict() {
       `onclick="openTemplatePicker()"><span>${msg}</span>` +
       `<span class="template-banner-action">${action} ›</span></button>`
     : '';
+  _renderFolderVerdict();
+}
+
+// ─── The folder line, under the template banner ───────────────────────────
+// Which Media-bin folders this runsheet's media came from and who chose
+// them — the answer to "why did it pick THAT slide?". Shown once a parse
+// has read the bin and found folders in it; nothing to pick otherwise.
+function _folderNames(names) {
+  const shown = names.slice(0, 2).map(n => `<strong>${escapeHtml(n)}</strong>`);
+  return shown.join(', ') + (names.length > 2 ? ` +${names.length - 2} more` : '');
+}
+
+function _renderFolderVerdict() {
+  const el = document.getElementById('folder-verdict');
+  if (!el) return;
+  const m = mediaFromBin;
+  const service = escapeHtml(m.saved_as || m.service || 'this service');
+  const items = m.count
+    ? ` — media for ${m.count} item${m.count === 1 ? '' : 's'}`
+    : ' — nothing in them fit this runsheet';
+  const lines = {
+    chosen:    ['📁', `From your <strong>${service}</strong> folders: ${_folderNames(m.folders)}${items}`],
+    suggested: ['✨', `AI picked ${_folderNames(m.folders)} for <strong>${service}</strong>${items}`],
+    matched:   ['📁', `Matched ${_folderNames(m.folders)} by name for <strong>${service}</strong>${items}`],
+    none:      ['📁', `None of your Media folders look like <strong>${service}</strong>`],
+  };
+  const show = uploadedFile && matchingOn() && !playlistModeIsUpdate()
+    && (m.bin_folders || []).length && lines[m.source];
+  el.hidden = !show;
+  if (!show) { el.innerHTML = ''; return; }
+  const [glyph, msg] = lines[m.source];
+  el.innerHTML =
+    `<button type="button" class="notice notice-info template-banner" ` +
+    `onclick="openFolderPicker()"><span><span aria-hidden="true">${glyph}</span> ${msg}</span>` +
+    `<span class="template-banner-action">${m.source === 'none' ? 'Pick folders' : 'Change'} ›</span></button>`;
+}
+
+// ─── The folder picker ────────────────────────────────────────────────────
+// Recommendation-first: what this runsheet used, then folders whose names
+// look like the service, then everything else. Saving stores the ticks for
+// the service (POST /api/media_folders) and places this runsheet's media
+// again from them (POST /api/media/place) — no second parse.
+let _folderPicks = new Set();
+
+function openFolderPicker() {
+  const m = mediaFromBin;
+  _folderPicks = new Set(m.folders || []);
+  document.getElementById('folders-service').value = m.saved_as || m.service || '';
+  document.getElementById('folders-filter').value = '';
+  document.getElementById('folders-hint').textContent =
+    'A shorter name covers more: “Summit” matches every Summit.';
+  document.getElementById('folders-auto').hidden = m.source !== 'chosen';
+  _renderFolderList();
+  document.getElementById('folders-backdrop').classList.add('active');
+  document.getElementById('folders-filter').focus();
+}
+
+function closeFolderPicker() {
+  const bd = document.getElementById('folders-backdrop');
+  if (!bd || !bd.classList.contains('active')) return false;
+  bd.classList.remove('active');
+  // Back to the line that opened it.
+  document.querySelector('#folder-verdict button')?.focus();
+  return true;
+}
+
+// Built with DOM calls, not innerHTML: folder names are whatever the
+// operator typed into ProPresenter, and they land in attributes here.
+function _renderFolderList() {
+  const m = mediaFromBin;
+  const q = document.getElementById('folders-filter').value.trim().toLowerCase();
+  const used = new Set(m.folders || []);
+  const looks = new Set((m.matched || []).filter(f => !used.has(f)));
+  const counts = new Map((m.bin_folders || []).map(f => [f.name, f.count]));
+  const groups = [
+    ['Used for this runsheet', [...used]],
+    [`Look like ${m.service || 'this service'}`, [...looks]],
+    ['Everything else', (m.bin_folders || []).map(f => f.name)
+                          .filter(f => !used.has(f) && !looks.has(f))],
+  ];
+  const list = document.getElementById('folders-list');
+  list.replaceChildren();
+  for (const [title, names] of groups) {
+    const shown = names.filter(n => !q || n.toLowerCase().includes(q));
+    if (!shown.length) continue;
+    const head = document.createElement('div');
+    head.className = 'folder-group-head';
+    head.textContent = title;
+    list.append(head);
+    for (const name of shown) {
+      const row = document.createElement('label');
+      row.className = 'folder-row';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = _folderPicks.has(name);
+      box.onchange = () => { box.checked ? _folderPicks.add(name) : _folderPicks.delete(name); };
+      const label = document.createElement('span');
+      label.textContent = name;
+      const count = document.createElement('span');
+      count.className = 'folder-count';
+      count.textContent = counts.has(name) ? String(counts.get(name)) : '';
+      row.append(box, label, count);
+      list.append(row);
+    }
+  }
+  if (!list.children.length) {
+    const none = document.createElement('p');
+    none.className = 'modal-hint';
+    none.textContent = 'No folder matches that filter.';
+    list.append(none);
+  }
+}
+
+// `letAi` forgets this service's saved folders, handing the choice back to
+// the AI; otherwise the ticks are saved for the service named in the box.
+async function saveFolderPicker(letAi) {
+  const hint = document.getElementById('folders-hint');
+  const service = document.getElementById('folders-service').value.trim();
+  const folders = letAi ? [] : [..._folderPicks];
+  if (!letAi && !folders.length) {
+    hint.textContent = 'Tick at least one folder — or choose “Let AI choose”.';
+    return;
+  }
+  const btn = document.getElementById(letAi ? 'folders-auto' : 'folders-save');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/media_folders', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({service, folders}),
+    });
+    const saved = await r.json();
+    if (!r.ok || !saved.ok) {
+      hint.textContent = saved.error || 'Couldn’t save those folders.';
+      return;
+    }
+    closeFolderPicker();
+    await _placeBinMediaAgain(service, letAi);
+  } catch (e) {
+    hint.textContent = 'Couldn’t save those folders: ' + String(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function _placeBinMediaAgain(savedFor, letAi) {
+  if (!matchedItems.length) return;
+  setStatus('Placing media from your folders…', 'var(--acc)');
+  try {
+    const res = await fetch('/api/media/place', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        parsed: matchedItems.map(mi => mi.parsed),
+        service: mediaFromBin.service, title: mediaFromBin.title,
+        host: document.getElementById('pp-host2').value,
+        port: document.getElementById('pp-port2').value,
+      }),
+    }).then(r => r.json());
+    if (!res.ok || !Array.isArray(res.items) || res.items.length !== matchedItems.length) {
+      setStatus('❌ ' + escapeHtml(res.error || 'Couldn’t place the media again.'), 'var(--red)');
+      return;
+    }
+    res.items.forEach((p, i) => { matchedItems[i].parsed = p; });
+    mediaFromBin = {..._noBinMedia(), ...(res.media_from_bin || {})};
+    renderResults();
+    _renderTemplateVerdict();
+    const n = mediaFromBin.count, items = `${n} item${n === 1 ? '' : 's'}`;
+    const used = mediaFromBin.source === 'chosen';
+    setStatus(letAi ? `AI chose the folders again — media for ${items}.`
+      : used ? `Saved — media for ${items} from your ${escapeHtml(savedFor)} folders.`
+      : `Saved for “${escapeHtml(savedFor)}”. This runsheet is ` +
+        `${escapeHtml(mediaFromBin.service || 'a different service')}, so they’ll ` +
+        `be used for the next ${escapeHtml(savedFor)} runsheet.`,
+      used || letAi ? 'var(--grn)' : 'var(--acc)');
+  } catch (e) {
+    setStatus('❌ ' + escapeHtml(String(e)), 'var(--red)');
+  }
 }
 
 // A template pick lasts one runsheet: a new upload or Start over puts
@@ -1049,7 +1222,7 @@ function _templateBackToAuto() {
     autoSaveDebounced();
   }
   parsedTemplate = _noTemplate();
-  mediaFromBin = {count: 0, folder: ''};
+  mediaFromBin = _noBinMedia();
   _renderTemplateOptions();          // also redraws the banner and the this/next wording
 }
 
@@ -2006,7 +2179,7 @@ async function parseRunsheet() {
     // service label with it.
     _guessSeq++;                       // an older guess must not redraw over this
     parsedTemplate = {..._noTemplate(), ...(res.template || {})};
-    mediaFromBin = {count: 0, folder: '', ...(res.media_from_bin || {})};
+    mediaFromBin = {..._noBinMedia(), ...(res.media_from_bin || {})};
     _renderTemplateVerdict();
 
     setLoading(matchingOn()
@@ -3417,7 +3590,7 @@ smInit();
 document.getElementById('prompt-textarea')
         .addEventListener('input', autoSavePromptDebounced);
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closePromptModal(); closeHelp(); dismissReorder(); }
+  if (e.key === 'Escape') { closePromptModal(); closeHelp(); dismissReorder(); closeFolderPicker(); }
 });
 
 // ─── 11. Self-update ───────────────────────────────────────────────────────

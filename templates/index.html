@@ -192,6 +192,12 @@
        Step 1 card so it isn't dimmed with the card once Step 1 is done. -->
   <div id="template-verdict" aria-live="polite" hidden></div>
 
+  <!-- Which Media-bin folders this runsheet's media came from, and who
+       chose them: the operator's saved folders, the AI, or a match on
+       folder names. Clicking it opens the folder picker. Rendered by
+       _renderFolderVerdict(); shown only once a parse has read the bin. -->
+  <div id="folder-verdict" aria-live="polite" hidden></div>
+
   <!-- Status bar — the app's running commentary: the idle greeter, live
        "uploading…" messages, and the post-parse summary. Sits directly
        under Step 1 so guidance appears where the operator is already
@@ -861,6 +867,31 @@
       <button class="btn btn-dim btn-sm" onclick="answerReorder(false)">Keep my order</button>
       <button class="btn btn-grn" id="reorder-yes" onclick="answerReorder(true)">
         Put in runsheet order</button>
+    </div>
+  </div>
+</div>
+
+<!-- Which Media-bin folders a service draws on. Opened from the folder line
+     under Step 1 and saved per service, so the next runsheet for it needs
+     no clicks. Listed recommendation-first: what this runsheet used, then
+     folders whose names look like the service, then everything else. -->
+<div id="folders-backdrop" class="modal-backdrop" role="dialog" aria-modal="true"
+     aria-labelledby="folders-title" onclick="if(event.target===this)closeFolderPicker()">
+  <div class="modal modal-folders">
+    <h2 id="folders-title">Media folders</h2>
+    <label class="modal-hint" for="folders-service">Use the ticked folders for every runsheet of</label>
+    <input id="folders-service" type="text" maxlength="120" autocomplete="off" spellcheck="false">
+    <p class="modal-hint" id="folders-hint">A shorter name covers more: “Summit” matches every Summit.</p>
+    <input id="folders-filter" type="search" placeholder="Filter folders" aria-label="Filter folders"
+           oninput="_renderFolderList()">
+    <div class="folder-list" id="folders-list" role="group" aria-label="Media folders"></div>
+    <div class="modal-actions">
+      <button class="btn btn-dim btn-sm" id="folders-auto" onclick="saveFolderPicker(true)"
+              title="Forget the saved folders for this service">Let AI choose</button>
+      <span class="folder-actions-right">
+        <button class="btn btn-dim btn-sm" onclick="closeFolderPicker()">Cancel</button>
+        <button class="btn btn-grn" id="folders-save" onclick="saveFolderPicker(false)">Save</button>
+      </span>
     </div>
   </div>
 </div>
