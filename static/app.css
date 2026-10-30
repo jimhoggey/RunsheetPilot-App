@@ -630,6 +630,8 @@ tr:hover td { background: rgba(255,255,255,0.025); }
 .template-banner:hover { border-color: rgba(59,130,246,0.60); }
 .template-banner:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 .template-banner-action { margin-left: auto; white-space: nowrap; font-weight: 600; text-decoration: underline; }
+/* The folder line reuses the banner; a gap only when both are showing. */
+#template-verdict:not([hidden]) + #folder-verdict { margin-top: var(--s-2); }
 
 code {
   font-family: var(--font-mono);
@@ -1632,6 +1634,54 @@ body { animation: page-in .4s ease both; }
   color: var(--muted);
 }
 .reorder-list .is-header { margin-left: -14px; color: var(--text); font-weight: 600; }
+
+/* The folder picker: the reorder dialog's size, with a list that scrolls
+   on its own so a bin with hundreds of folders keeps Save on screen. The
+   list gives way first on a short window, and past that the card itself
+   scrolls: at 150% Windows scaling the app's minimum window is ~667×427,
+   where a fixed 120px list pushed Save out of the card. */
+.modal-folders { max-width: 480px; height: auto; max-height: 85vh; overflow-y: auto; }
+.modal-folders h2 { font-size: 1.05rem; font-weight: 700; }
+.modal-folders input { margin-bottom: 0; }
+#folders-hint { margin-top: calc(-1 * var(--s-2)); }   /* reads as the field's caption */
+#folders-error { margin: 0; }
+.folder-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 4.5rem;
+  max-height: 46vh;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-2);
+  padding: var(--s-1) 0;
+}
+.folder-group-head {
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* A <label>, so it would inherit the global label's muted colour and 6px
+   margin: folder names as dim as their counts, and a dead strip between
+   rows where a click did nothing. */
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 34px;
+  margin: 0;
+  padding: 0 var(--s-3);
+  color: var(--text);
+  font-size: 0.83rem;
+  cursor: pointer;
+}
+.folder-row:hover { background: var(--acc-soft); }
+.folder-row span:first-of-type { flex: 1; overflow-wrap: anywhere; }
+.folder-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* margin-left: auto keeps Save on the right when "Let AI choose" is hidden
+   (nothing saved yet), which leaves space-between with a lone child. */
+.folder-actions-right { display: flex; gap: 10px; margin-left: auto; }
 
 /* ─── Help card ────────────────────────────────────────────────────────── */
 /* Reuses .modal-backdrop / .modal for the blur, the centred scale-in and

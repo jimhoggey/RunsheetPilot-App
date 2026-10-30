@@ -9,8 +9,6 @@ overwrote levels the runsheet stated. So the guide gets its own call, and
 precedence stops depending on the model: an item whose lighting the
 runsheet already set is never offered to it.
 """
-import json
-
 import pytest
 
 # The module, not its names: these tests monkeypatch what it calls out to,
@@ -32,27 +30,9 @@ ITEMS = [
 ]
 
 
-def _reply(steps):
-    class _R:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {"choices": [{"message": {"content": json.dumps({"steps": steps})}}]}
-    return _R
-
-
 @pytest.fixture
-def model(monkeypatch):
-    monkeypatch.setattr(lp, "fetch_catalogue", lambda: None)
-    monkeypatch.setattr(lp, "resolve_model", lambda *a, **k: "openai/gpt-4.1-mini")
-    monkeypatch.setattr(lp, "reasoning_for", lambda *a, **k: None)
-
-    def _say(steps):
-        sent = {}
-        monkeypatch.setattr(lp, "chat", lambda *a, **k: (sent.update(k), _reply(steps))[1])
-        return sent
-    return _say
+def model(openrouter):
+    return lambda steps: openrouter.say({"steps": steps})
 
 
 # ── The guide is read here, not asked of the model ──────────────────────────
@@ -122,18 +102,8 @@ def test_an_answer_that_doesnt_hold_up_is_dropped(model, steps, want):
     assert lp.plan_lighting(ITEMS, GUIDE, "sk-or-x", "") == want
 
 
-def test_a_reply_that_is_not_json_leaves_the_runsheet_as_it_is(monkeypatch):
-    monkeypatch.setattr(lp, "fetch_catalogue", lambda: None)
-    monkeypatch.setattr(lp, "resolve_model", lambda *a, **k: "m")
-    monkeypatch.setattr(lp, "reasoning_for", lambda *a, **k: None)
-
-    class _R:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {"choices": [{"message": {"content": "Sorry, I can't help with that."}}]}
-    monkeypatch.setattr(lp, "chat", lambda *a, **k: _R())
+def test_a_reply_that_is_not_json_leaves_the_runsheet_as_it_is(openrouter):
+    openrouter.say("Sorry, I can't help with that.")
     assert lp.plan_lighting(ITEMS, GUIDE, "sk-or-x", "") == {}
 
 
@@ -143,8 +113,6 @@ def test_a_reply_that_is_not_json_leaves_the_runsheet_as_it_is(monkeypatch):
     ([], GUIDE, "sk-or-x"),                                  # no runsheet
     ([{"title": "x", "lighting_steps": [{"level": "5%"}]}], GUIDE, "sk-or-x"),   # nothing blank
 ])
-def test_nothing_to_do_means_no_call(monkeypatch, items, guide, key):
-    def _boom(*a, **k):
-        raise AssertionError("asked the model with nothing to map")
-    monkeypatch.setattr(lp, "chat", _boom)
+def test_nothing_to_do_means_no_call(openrouter, items, guide, key):
+    openrouter.forbid()
     assert lp.plan_lighting(items, guide, key, "") == {}

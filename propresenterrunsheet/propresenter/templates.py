@@ -38,6 +38,11 @@ _TEMPLATE_NAME_FILLERS = {
     "the", "a", "an", "of", "and",
 }
 
+# Public name for the set above: media_match builds the folder-name
+# variant from it (SERVICE_FILLERS | its own container words) so the two
+# can never drift apart.
+SERVICE_FILLERS = _TEMPLATE_NAME_FILLERS
+
 # A weekday that is part of a DATE says when, not which service. A
 # masthead of "Sunday, 27 September, 2026 · 4:00 PM · Young Adults
 # Service" used to hand "sunday" to a "Sunday Morning Library" on a young
@@ -85,11 +90,10 @@ def template_uuids(playlists: list, pinned: str = "") -> set:
     return out
 
 
-def _template_signal_tokens(name: str) -> set:
-    """Return the distinctive lowercased tokens in a playlist name —
-    the ones that identify which service type it's for. The shared
-    "library" / "service" words are stripped so they don't dilute the
-    overlap score.
+def service_tokens(name: str, fillers: set = None) -> set:
+    """Return the distinctive lowercased tokens in a name — the ones that
+    identify WHICH SERVICE it is for. The shared "library" / "service"
+    words are stripped so they don't dilute the overlap score.
 
     "Youth Service - Library"  → {"youth"}
     "Sunday Morning Library"   → {"sunday", "morning"}
@@ -104,15 +108,32 @@ def _template_signal_tokens(name: str) -> set:
     A weekday that is part of a date is dropped (see _WEEKDAY_IN_DATE). A
     plural counts as its singular ("Young Adults" hint, "Young Adult
     Library"), and "YA" as "young adult".
+
+    Public, and `fillers` is overridable, because "which service is this"
+    must be ONE answer across the app. Media-bin folder names ask the
+    same question of "Sunday Service Media" that template names ask of
+    "Sunday Morning Library", and the first attempt at folder scoping
+    tokenised them separately — the two disagreed, and a folder called
+    "Youth" scored a perfect match against any runsheet that merely
+    mentioned youth. See propresenter/media_match.py for the extra
+    container words a FOLDER name adds no service meaning with; they are
+    passed in rather than added here so template auto-detection, which
+    this function has always served, behaves exactly as it did.
     """
     text = _WEEKDAY_IN_DATE.sub(" ", (name or "").lower())
+    drop = _TEMPLATE_NAME_FILLERS if fillers is None else fillers
     out = set()
     for w in re.sub(r"[\W_]+", " ", text).split():
         if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
             w = w[:-1]
-        if w not in _TEMPLATE_NAME_FILLERS:
+        if w not in drop:
             out.update(_TOKEN_ALIASES.get(w, (w,)))
     return out
+
+
+# The name this had while it served template detection alone. Kept so the
+# three call sites below read as they always did.
+_template_signal_tokens = service_tokens
 
 
 def fetch_pp_playlists(base: str) -> list:

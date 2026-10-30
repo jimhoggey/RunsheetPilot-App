@@ -29,12 +29,14 @@ from ..parsing.models import (
     model_reading, next_usable_model, provider_failure, reasoning_for,
     resolve_model,
 )
+from ..parsing.folder_plan import plan_folders
 from ..parsing.lighting_plan import plan_lighting
 from ..parsing.media_plan import plan_media
 from ..parsing.openrouter import Stopped, chat
 from ..propresenter.media_bin import fetch_media_bin
 from ..propresenter.media_match import (
-    candidates as media_candidates, sections as media_sections,
+    bin_folders, eligible_folders, recommended_folders, row_for_service,
+    scope as media_scope, sections as media_sections,
 )
 from .flags import matching_enabled
 from ..parsing.ocr import (
@@ -453,6 +455,146 @@ def _rate_limit_message(resp) -> str:
                 "wait a minute, then click Parse again.")
     return ("OpenRouter is receiving too many requests at the moment "
             "(rate limited). Wait a little and try again.")
+
+
+def _bin_pick(item) -> bool:
+    """True when this item's media was placed from the bin, not a template."""
+    lm = item.get("library_match") if isinstance(item, dict) else None
+    return isinstance(lm, dict) and bool(lm.get("from_bin"))
+
+
+def _no_bin_media(service, title="") -> dict:
+    """What the folder line under Step 1 gets when the bin wasn't consulted.
+
+    `service` is the service's kind and `title` its dated name — sent back
+    unchanged by the folder picker so placing again matches the same way.
+    `saved_as` is the name of the operator's saved row, when one applied.
+    """
+    return {"count": 0, "folders": [], "source": "none",
+            "service": str(service or "").strip(),
+            "title": str(title or "").strip(), "saved_as": "",
+            "bin_folders": [], "matched": []}
+
+
+def place_bin_media(items: list, base: str, settings: dict, or_key: str,
+                    service: str, title: str = "", playlists=None) -> dict:
+    """Put the operator's own Media-bin files under the runsheet's items.
+
+    Code narrows, the model decides — the five steps are drawn out at the
+    top of propresenter/media_match.py:
+
+        1. narrow the bin's folders to those that may be this service's
+        2. the model picks the folders (unless the operator saved some)
+        3. narrow to those folders' files
+        4. the model places files under items
+        5. every pick is checked
+
+    `service` is the KIND of service ("Summit"), `title` the dated name
+    ("Summit 2026 — Sunday Night"): matched on the title, a Sunday row and
+    the Sunday folders claimed a Summit night that fell on a Sunday.
+
+    Edits `items` in place and returns the summary the folder line shows.
+    Safe to run again on the same items — after the operator changes a
+    service's folders — because it replaces only the bin's own earlier
+    picks (marked `from_bin`), never a template's.
+
+    Never removes those earlier picks without a real answer to replace them
+    with. Returns None, touching nothing, when the bin can't be read (far
+    more often ProPresenter not answering than an empty bin), or when the
+    runsheet already has bin media and the model doesn't answer. Clearing
+    first and asking second wiped every slide the parse had placed whenever
+    either hiccupped between the parse and the operator pressing Save.
+    """
+    service, title = str(service or "").strip(), str(title or "").strip()
+    try:
+        bin_items = fetch_media_bin(base)
+    except Exception:
+        log.exception("Media bin unreadable; nothing placed or removed")
+        bin_items = []
+    if not bin_items:
+        return None
+    had = any(_bin_pick(it) for it in items)
+    # The steps see the runsheet as though the bin had placed nothing yet;
+    # `items` itself is only changed once there is an answer.
+    work = [{**it, "library_match": None} if _bin_pick(it) else it for it in items]
+    try:
+        rows = settings.get("media_folders_by_service") or []
+        if playlists is None:
+            # Template names only tell step 1 which other services exist;
+            # without them it leans on the saved rows alone. Never a reason
+            # to place no media at all.
+            try:
+                playlists = fetch_pp_playlists(base)
+            except Exception:
+                log.debug("No playlist names for the services list", exc_info=True)
+                playlists = []
+        known = [p.get("name", "") for p in template_candidates(playlists or [])]
+        model = str(settings.get("or_model") or "")
+        suggested = None                                          # 1–2
+        if not row_for_service(rows, service, title):
+            suggested = plan_folders(
+                service, work,
+                eligible_folders(bin_items, service, work, rows, known),
+                or_key, model, title=title)
+        sc = media_scope(bin_items, service, work, rows, known,   # 3
+                         suggested=suggested, title=title)
+        picks = plan_media(work, sc["assets"], or_key, model)     # 4
+        if picks is None and had:
+            log.warning("Media plan unanswered; the bin's earlier picks stay")
+            return None
+        placed = media_sections(work, picks, sc["assets"])        # 5
+    except Exception:
+        log.exception("Media-bin matching failed; nothing placed or removed")
+        return None if had else _no_bin_media(service, title)
+    for it in items:
+        if _bin_pick(it):
+            it["library_match"] = None
+    for i, section in placed.items():
+        items[i]["library_match"] = section
+    log.info("Media bin: %d of %d items got media from %d folder(s), %s: %s",
+             len(placed), len(items), len(sc["folders"]), sc["source"],
+             ", ".join(repr(log_safe(f, 60)) for f in sc["folders"][:8]))
+    return {**_no_bin_media(service, title),
+            "count": len(placed), "folders": sc["folders"],
+            "source": sc["source"], "saved_as": sc["service"],
+            "bin_folders": bin_folders(bin_items),
+            "matched": recommended_folders(bin_items, service, rows, known)}
+
+
+@bp.route("/api/media/place", methods=["POST"])
+def api_place_media():
+    """Run the Media-bin steps again on a runsheet that is already parsed —
+    after the operator saves a service's folders in the picker, so they
+    see the result without paying for the whole parse again.
+
+    Takes {"parsed": [...items], "service", "title", "host", "port"};
+    answers {"items", "media_from_bin"}. The items come back from the
+    browser, so they are capped and only dicts are kept; nothing in them
+    reaches ProPresenter from here — Create still builds the playlist.
+    """
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
+    parsed = body.get("parsed")
+    if not isinstance(parsed, list):
+        return jsonify({"ok": False, "error": "No runsheet to place media in."}), 400
+    items = [dict(p) for p in parsed[:400] if isinstance(p, dict)]
+    settings = load_settings()
+    # An address ProPresenter can't be on raises UnreachableHost, which the
+    # app-level handler (propresenter_app.py) answers for every route.
+    base = pp_base(body.get("host") or settings.get("pp_host"),
+                   body.get("port") or settings.get("pp_port"))
+    or_key = str(settings.get("or_key") or "").strip()
+    service, title = body.get("service"), body.get("title")
+    summary = place_bin_media(
+        items, base, settings, or_key,
+        service=service[:200] if isinstance(service, str) else "",
+        title=title[:200] if isinstance(title, str) else "")
+    if summary is None:
+        return jsonify({"ok": False, "error":
+                        "ProPresenter or the AI didn't answer, so this "
+                        "runsheet's media is unchanged. Your folders are "
+                        "saved for next time."}), 503
+    return jsonify({"ok": True, "items": items, "media_from_bin": summary})
 
 
 @bp.route("/api/upload_and_parse", methods=["POST"])
@@ -1092,38 +1234,18 @@ def _upload_and_parse(stop: threading.Event):
                          f"unlit items")
             except Exception:
                 log.exception("Lighting guide pass failed; the runsheet's own lighting stands")
-        # No template — so the operator's own Media bin is the source. Their
-        # smart folders are named for the event, which is what makes this
-        # safe to do unasked (propresenter/media_match.py). Never overrides
-        # a template: `sections` skips any item a template already filled.
-        media_placed = {"count": 0, "folder": ""}
+        # The operator's own Media bin, scoped to THIS service. With a
+        # template it fills the gaps around it; without one it is the
+        # whole answer. See place_bin_media.
+        media_placed = None
         if do_matching and base:
-            try:
-                # With a template, the bin fills the gaps AROUND it rather
-                # than replacing it: a template is the screens that are
-                # there every week, and a runsheet that says "promo
-                # Summit" wants a slide the Sunday template has no reason
-                # to carry. Scoped to folders the runsheet actually names,
-                # and `sections` never touches an item the template filled.
-                offered = media_candidates(fetch_media_bin(base),
-                                           service_name or upload_name or "",
-                                           items, folder_only=bool(tmpl_uuid))
-                picks = plan_media(items, offered, or_key,
-                                   str(settings.get("or_model") or ""))
-                placed = media_sections(items, picks, offered)
-                for i, section in placed.items():
-                    items[i]["library_match"] = section
-                folders = {b.get("folder") for b in offered if b.get("folder")}
-                media_placed = {"count": len(placed),
-                                "folder": folders.pop() if len(folders) == 1 else ""}
-                if placed:
-                    log.info("Media bin: %d of %d items got media%s",
-                             len(placed), len(items),
-                             f" from {log_safe(media_placed['folder'], 60)!r}"
-                             if media_placed["folder"] else "")
-            except Exception:
-                log.exception("Media-bin matching failed; the playlist keeps "
-                              "its headers and nothing else changes")
+            media_placed = place_bin_media(
+                items, base, settings, or_key,
+                service=service_type or service_name or upload_name or "",
+                title=service_name or upload_name or "",
+                playlists=pp_playlists)
+        media_placed = media_placed or _no_bin_media(
+            service_type or service_name or upload_name, service_name or upload_name)
         repeats = share_repeated_links(items)
         if sections or objects:
             log.info(f"Template-context parse: "

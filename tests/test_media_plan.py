@@ -13,23 +13,8 @@ OFFERED = [
 
 
 @pytest.fixture
-def model(monkeypatch):
-    monkeypatch.setattr(mp, "fetch_catalogue", lambda: None)
-    monkeypatch.setattr(mp, "resolve_model", lambda *a, **k: "openai/gpt-4.1-mini")
-    monkeypatch.setattr(mp, "reasoning_for", lambda *a, **k: None)
-
-    def _say(payload, status=200):
-        sent = {}
-
-        class _R:
-            status_code = status
-
-            @staticmethod
-            def json():
-                return {"choices": [{"message": {"content": payload}}]}
-        monkeypatch.setattr(mp, "chat", lambda *a, **k: (sent.update(k), _R())[1])
-        return sent
-    return _say
+def model(openrouter):
+    return openrouter.say
 
 
 def test_the_pairings_come_back_as_given(model):
@@ -57,24 +42,31 @@ def test_prose_around_the_json_is_tolerated(model):
 ])
 def test_an_unusable_answer_leaves_the_playlist_plain(model, payload):
     model(payload)
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+    assert not mp.plan_media(ITEMS, OFFERED, "sk-or-x", "")
 
 
 def test_a_refused_call_leaves_the_playlist_plain(model):
     model('{"media": [{"media": 0, "item": 0}]}', status=429)
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+    assert not mp.plan_media(ITEMS, OFFERED, "sk-or-x", "")
 
 
-def test_a_dead_connection_leaves_the_playlist_plain(monkeypatch):
+def test_a_dead_connection_leaves_the_playlist_plain(openrouter):
     import requests
-    monkeypatch.setattr(mp, "fetch_catalogue", lambda: None)
-    monkeypatch.setattr(mp, "resolve_model", lambda *a, **k: "m")
-    monkeypatch.setattr(mp, "reasoning_for", lambda *a, **k: None)
+    openrouter.fail(requests.RequestException("no route to host"))
+    assert not mp.plan_media(ITEMS, OFFERED, "sk-or-x", "")
 
-    def _boom(*a, **k):
-        raise requests.RequestException("no route to host")
-    monkeypatch.setattr(mp, "chat", _boom)
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+
+@pytest.mark.parametrize("payload, status, want", [
+    ('{"media": []}', 200, []),               # answered: nothing fits
+    ('{}', 200, []),                          # answered, said nothing usable
+    ('{"media": []}', 500, None),             # never answered
+    ("I can't help with that.", 200, None),   # no JSON: not an answer
+])
+def test_no_answer_is_told_apart_from_nothing_fits(model, payload, status, want):
+    """Placing media again only replaces what is placed on a real answer —
+    a dropped call must not read as "remove every slide"."""
+    model(payload, status=status)
+    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == want
 
 
 @pytest.mark.parametrize("items, offered, key", [
@@ -82,18 +74,11 @@ def test_a_dead_connection_leaves_the_playlist_plain(monkeypatch):
     (ITEMS, [], "sk-or-x"),                   # nothing in the bin for this event
     (ITEMS, OFFERED, ""),                     # no key
 ])
-def test_nothing_to_match_means_no_call(monkeypatch, items, offered, key):
-    def _boom(*a, **k):
-        raise AssertionError("asked the model with nothing to match")
-    monkeypatch.setattr(mp, "chat", _boom)
+def test_nothing_to_match_means_no_call(openrouter, items, offered, key):
+    openrouter.forbid()
     assert mp.plan_media(items, offered, key, "") == []
 
 
-def test_no_usable_model_means_no_call(monkeypatch):
-    monkeypatch.setattr(mp, "fetch_catalogue", lambda: None)
-    monkeypatch.setattr(mp, "resolve_model", lambda *a, **k: "")
-
-    def _boom(*a, **k):
-        raise AssertionError("asked a model that doesn't exist")
-    monkeypatch.setattr(mp, "chat", _boom)
-    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") == []
+def test_no_usable_model_means_no_call(openrouter):
+    openrouter.no_model()
+    assert mp.plan_media(ITEMS, OFFERED, "sk-or-x", "") is None

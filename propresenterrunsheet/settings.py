@@ -85,13 +85,23 @@ def _default_settings() -> dict:
         # "template": "PreLoop Youth"} — for pairs that share no words
         # and so can never match by rule alone.
         "template_aliases": [],
+        # Which Media-bin folders each service draws on, e.g.
+        # {"match": "Sunday", "folders": ["Current media", "Sunday media"]}.
+        # Per service on purpose, with no "always use" list: a Youth
+        # runsheet must not reach Sunday's media (owner, 30 Oct 2026).
+        # Saved from the folder picker; see propresenter/media_match.py.
+        "media_folders_by_service": [],
     }
 
 
 def load_settings() -> dict:
     if SETTINGS_FILE.exists():
         try:
-            saved = json.loads(SETTINGS_FILE.read_text())
+            # utf-8, not the locale codec: config.py's one-time migration
+            # writes an old settings file back verbatim as UTF-8, em-dashes
+            # and all, and cp1252 on Windows decodes those to mojibake
+            # without raising — which the next save would then keep.
+            saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
             merged = _default_settings()
             merged.update({k: v for k, v in saved.items() if v is not None})
             return merged
@@ -105,10 +115,10 @@ def save_settings(data: dict) -> None:
     existing = {}
     if SETTINGS_FILE.exists():
         try:
-            existing = json.loads(SETTINGS_FILE.read_text())
+            existing = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         except Exception:
             existing = {}
     existing.update(data or {})
     tmp = SETTINGS_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(existing, indent=2))
+    tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     tmp.replace(SETTINGS_FILE)

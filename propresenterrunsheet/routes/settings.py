@@ -17,6 +17,7 @@ from ..parsing.models import (
     free_model_ids, is_router, measured_costs, pick_default_model,
     pick_paid_model, reasoning_for, recommended_models, usable_models,
 )
+from ..propresenter.media_match import tokens as service_words
 from ..propresenter.paths import find_library_dirs, find_pp_root
 from ..settings import load_settings, save_settings
 from .. import stats
@@ -231,6 +232,42 @@ def post_settings():
     stats.track("settings_saved", keys=len(body),
                 **stats.settings_change_props(before, body))
     return jsonify({"ok": True})
+
+
+@bp.route("/api/media_folders", methods=["POST"])
+def post_media_folders():
+    """Save which Media-bin folders one service draws on — the folder
+    picker under Step 1. {"service": "Summit", "folders": [...]}.
+
+    Upserts that one service's row in settings["media_folders_by_service"]
+    rather than taking the whole list from the browser, and checks every
+    value: these are names the operator typed or ProPresenter returned,
+    and they go back out into the page and a model prompt. Rows are the
+    same service when their words are (media_match.tokens), so "Summit"
+    and "summit " are one row. An empty `folders` removes the row, which
+    hands the service back to the model's choice.
+    """
+    body = request.get_json(silent=True)
+    body = body if isinstance(body, dict) else {}
+    named = body.get("service")
+    # A string only: str(["Summit"]) is "['Summit']", which still reads as
+    # the word summit and would have been saved as a row.
+    service = named.strip()[:120] if isinstance(named, str) else ""
+    words = service_words(service)
+    if not words:
+        return jsonify({"ok": False,
+                        "error": "Say which service these folders are for."}), 400
+    raw = body.get("folders")
+    folders = list(dict.fromkeys(
+        f.strip()[:200] for f in (raw if isinstance(raw, list) else [])
+        if isinstance(f, str) and f.strip()))[:50]
+    rows = [r for r in load_settings().get("media_folders_by_service") or []
+            if isinstance(r, dict)
+            and service_words(str(r.get("match") or "")) != words]
+    if folders:
+        rows.append({"match": service, "folders": folders})
+    save_settings({"media_folders_by_service": rows})
+    return jsonify({"ok": True, "rows": rows})
 
 
 @bp.route("/api/prompt", methods=["GET"])
