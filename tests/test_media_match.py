@@ -441,6 +441,15 @@ def test_a_parse_whose_media_call_fails_still_reports_its_folders(parse_client, 
     assert r["items"][0]["library_match"] is None
 
 
+def test_placing_media_refuses_an_address_propresenter_cant_be_on(client):
+    """The SSRF guard: pp_base vets the host, and the app-level handler
+    answers for it — nothing is fetched from 8.8.8.8."""
+    r = client.post("/api/media/place", json={
+        "parsed": [{"title": "Opener"}], "service": "Summit", "host": "8.8.8.8"})
+    got = r.get_json()
+    assert got["ok"] is False and "8.8.8.8" in got["error"]
+
+
 @pytest.mark.parametrize("body", [{}, {"parsed": "x"}, {"parsed": None}, ["parsed"]])
 def test_placing_media_needs_a_runsheet(client, body):
     assert client.post("/api/media/place", json=body).status_code == 400

@@ -579,11 +579,10 @@ def api_place_media():
         return jsonify({"ok": False, "error": "No runsheet to place media in."}), 400
     items = [dict(p) for p in parsed[:400] if isinstance(p, dict)]
     settings = load_settings()
-    try:
-        base = pp_base(body.get("host") or settings.get("pp_host"),
-                       body.get("port") or settings.get("pp_port"))
-    except UnreachableHost as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+    # An address ProPresenter can't be on raises UnreachableHost, which the
+    # app-level handler (propresenter_app.py) answers for every route.
+    base = pp_base(body.get("host") or settings.get("pp_host"),
+                   body.get("port") or settings.get("pp_port"))
     or_key = str(settings.get("or_key") or "").strip()
     service, title = body.get("service"), body.get("title")
     summary = place_bin_media(
