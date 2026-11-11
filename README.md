@@ -254,3 +254,8 @@ unredacted detail stays in `app.log` on your computer.
 The complete list of every event the app can ever send is the `EVENTS`
 tuple at the top of `propresenterrunsheet/stats.py` — one screen, no
 surprises. Nothing is sent when running from source.
+
+---
+
+Made by [Fynn Projects](https://www.fynnprojects.com.au), custom apps for
+church production teams, trades and small businesses.
