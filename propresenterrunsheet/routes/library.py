@@ -64,13 +64,9 @@ def api_library_auto():
 
     The disk scan only ever reads settings.library_dir: a request can't
     point it at another folder (the UI saves a just-typed folder first).
-    Query params override settings:
-      ?host=  / ?port=     PP REST host/port (defaults to settings)
-      ?mode=auto|api|disk  which source(s) to try (defaults to
-                           settings.lib_source, falling back to "auto").
-                           - auto: try API, fall back to disk on failure
-                           - api:  API only (skip disk fallback)
-                           - disk: disk only (skip API)
+    ?host= / ?port= override the saved ProPresenter address. There used
+    to be API-only and disk-only modes too; nobody needed them, and the
+    order above is the right answer for everyone (owner, 21 Nov 2026).
 
     Response shape:
       {"items": [...], "source": "api"|"disk"|"none", "count": N}
@@ -82,37 +78,24 @@ def api_library_auto():
     port = (request.args.get("port") or settings.get("pp_port")
             or "50001").strip()
     disk_dir = (settings.get("library_dir") or "").strip()
-    mode = (request.args.get("mode") or settings.get("lib_source")
-            or "auto").strip().lower()
-    if mode not in ("auto", "api", "disk"):
-        mode = "auto"
 
-    # 1. Try PP REST (unless mode locks to disk only).
-    if mode in ("auto", "api"):
-        items = _fetch_library_via_api(host, port)
-        if items:
-            log.info(f"Library auto: {len(items)} items from PP API "
-                     f"({log_safe(host)}:{log_safe(port)}, mode={mode})")
-            return jsonify({"items": items, "source": "api",
-                            "count": len(items)})
-        if mode == "api":
-            # API-only mode and PP didn't answer — don't fall back to disk.
-            log.info(f"Library auto: PP unreachable in api-only mode "
-                     f"({log_safe(host)}:{log_safe(port)})")
-            return jsonify({"items": [], "source": "none", "count": 0})
+    items = _fetch_library_via_api(host, port)
+    if items:
+        log.info(f"Library auto: {len(items)} items from PP API "
+                 f"({log_safe(host)}:{log_safe(port)})")
+        return jsonify({"items": items, "source": "api", "count": len(items)})
 
-    # 2. Try disk scan (unless mode locks to api only — already returned above).
-    if mode in ("auto", "disk") and disk_dir and Path(disk_dir).exists():
+    if disk_dir and Path(disk_dir).exists():
         try:
             items = scan_library(disk_dir)
             log.info(f"Library auto: {len(items)} items from disk "
-                     f"({log_safe(disk_dir)}, mode={mode})")
+                     f"({log_safe(disk_dir)})")
             return jsonify({"items": items, "source": "disk",
                             "count": len(items)})
         except Exception:
             log.exception(f"Library auto: disk scan of {log_safe(disk_dir)} "
                           "failed")
 
-    # 3. Nothing worked — UI will show "no library, open Settings".
-    log.info(f"Library auto: no source available (mode={mode})")
+    # Nothing worked — UI will show "no library, open Settings".
+    log.info("Library auto: no source available")
     return jsonify({"items": [], "source": "none", "count": 0})

@@ -68,9 +68,7 @@ EVENTS = (
     # adding headers to a playlist the operator already built
     "playlist_updated",
     "playlist_update_failed",
-    # the downloaded-media assist panel
-    "media_assist_shown",
-    "media_assist_reveal",
+    # ProPresenter answering on a port other than the one typed
     "port_discovered",
     # config + updates
     "settings_saved",
@@ -98,8 +96,7 @@ EVENTS = (
 # the right way round for a list whose failure mode is leaking a key.
 SETTINGS_VALUE_SAFE = frozenset({
     # Booleans — the new state of a toggle IS the useful signal.
-    "stats_enabled", "auto_port", "media_assist", "create_timers", "sm_hide",
-    "lib_source",    # 'auto' | 'api' | 'disk'
+    "stats_enabled", "auto_port", "create_timers", "sm_hide",
     "threshold",     # 0.0-1.0
     "or_model",      # model id, already sent alongside parse_completed
     "pp_port",       # a port number is not personal, and the install that

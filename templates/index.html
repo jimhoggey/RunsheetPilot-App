@@ -291,25 +291,6 @@
     <span id="next-step-text"></span>
   </div>
 
-  <!-- Downloaded-media assist — hidden unless the setting is on AND
-       there is something to show. Populated by loadMediaAssist(). -->
-  <div class="step-card" id="media-assist-card" hidden>
-    <div class="step-header">
-      <div class="step-badge"><span class="step-num">＋</span></div>
-      <div class="step-title">Media &amp; countdowns</div>
-      <div class="step-meta" id="media-assist-meta"></div>
-    </div>
-    <div class="step-body">
-      <p class="step-desc">
-        Recently downloaded media. ProPresenter can only take media that's
-        in its <strong>Media</strong> tab — drag these in and they'll link
-        automatically.
-      </p>
-      <div id="media-assist-timers"></div>
-      <div id="media-assist-list"></div>
-    </div>
-  </div>
-
   <!-- ── STEP 3 — CREATE ──────────────────────────────────────────── -->
   <div class="step-card state-locked" id="step-card-3">
     <div class="step-header">
@@ -544,11 +525,9 @@
 </div>
 
 <!-- ═══════════ Settings Modal ═══════════ -->
-<!-- Holds the "set once, forget" config: library source/path, OpenRouter
+<!-- Holds the "set once, forget" config: library folder, OpenRouter
      credentials, the timer toggle, the matching threshold, and the
-     export path. Auto-save mirrors the existing prompt-modal pattern —
-     fields share the same IDs as the old sidebar inputs so the existing
-     event listeners in app.js keep working unchanged. -->
+     export path. Every field auto-saves. -->
 <div id="settings-modal" class="modal-backdrop"
      onclick="if(event.target===this)closeSettingsModal()">
   <div class="modal modal-settings">
@@ -563,21 +542,12 @@
       <section class="settings-section">
         <h3>Library</h3>
         <p class="settings-hint">
-          Where to fetch the list of songs / presentations to match against.
-          <strong>Auto</strong> tries ProPresenter's API first, falls back
-          to the local folder. Loaded silently on launch and again before
-          each parse — most operators never need to touch this.
+          The songs to match against come from ProPresenter itself, or from
+          the folder below when ProPresenter doesn't answer. Loaded on
+          launch and again before each parse.
         </p>
         <div class="field">
-          <label>Source</label>
-          <div class="radio-row">
-            <label><input type="radio" name="lib-source" value="auto" checked> Auto (recommended)</label>
-            <label><input type="radio" name="lib-source" value="api">  ProPresenter API only</label>
-            <label><input type="radio" name="lib-source" value="disk"> Local folder only</label>
-          </div>
-        </div>
-        <div class="field">
-          <label for="lib-dir">Disk path (used by Auto + Disk modes)</label>
+          <label for="lib-dir">Library folder (when ProPresenter doesn't answer)</label>
           <input id="lib-dir" type="text" placeholder="~/Documents/ProPresenter/Libraries/Default">
         </div>
         <div class="row" style="align-items:center;gap:12px">
@@ -621,14 +591,6 @@
           <p class="settings-hint model-check" id="or-model-check" role="status" hidden></p>
           <p class="settings-hint" id="or-model-note"></p>
         </div>
-        <button class="btn btn-dim btn-sm" style="margin-top:4px"
-                onclick="closeSettingsModal(); openPromptModal()">
-          📝 Edit AI prompt
-        </button>
-        <p class="settings-hint" style="margin-top:6px">
-          The instructions the AI follows when reading your runsheet.
-          Most operators never need to touch this.
-        </p>
       </section>
 
 
@@ -758,11 +720,8 @@
         </p>
       </section>
 
-      <!-- New-feature switches. Both default the way they do for a
-           reason: auto-port is a fix for a silent failure and only ever
-           engages after the configured port has already failed, so it is
-           on; media assist lists filenames from the operator's Downloads
-           folder, so it is off until they ask for it. -->
+      <!-- Auto-port is on by default: it fixes a silent failure and only
+           ever engages after the configured port has already failed. -->
       <section class="settings-section">
         <h3>Extras</h3>
 
@@ -776,45 +735,11 @@
           Pilot reads the real one from ProPresenter's own settings and
           switches to it. A port you typed that works is never changed.
         </p>
-
-        <label class="settings-check" style="margin-top:14px">
-          <input type="checkbox" id="media-assist">
-          <span>Show new downloads to import <em>(experimental)</em></span>
-        </label>
-        <p class="settings-hint" style="margin-left:24px;margin-top:4px">
-          After parsing, lists media added to your Downloads and Desktop
-          in the last two days, and guesses which runsheet item each one
-          belongs to. ProPresenter's API can't import media, so you still
-          drag the file into its Media tab — but Runsheet Pilot spots it
-          the moment you do and links it. Reads file <strong>names</strong>
-          only, never contents.
-        </p>
       </section>
     </div>
     <div class="settings-credits">
       Developed by <strong>Fynn</strong>
       <span style="opacity:0.5"> · v<span id="settings-version">—</span></span>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════ Edit AI Prompt Modal ═══════════ -->
-<div id="prompt-modal" class="modal-backdrop"
-     onclick="if(event.target===this)closePromptModal()">
-  <div class="modal">
-    <div class="modal-head">
-      <h2>📝 AI Prompt</h2>
-      <button class="btn btn-dim btn-sm" onclick="closePromptModal()">✕ Close</button>
-    </div>
-    <div class="modal-hint">
-      The runsheet text replaces the <code>{RUNSHEET}</code> placeholder
-      (or is appended if you remove it). Changes auto-save.
-      Empty text reverts to the built-in default.
-    </div>
-    <textarea id="prompt-textarea" spellcheck="false"></textarea>
-    <div class="modal-actions">
-      <button class="btn btn-dim btn-sm" onclick="resetPrompt()">↺ Reset to default</button>
-      <span id="prompt-save-dot" class="save-dot">auto-save</span>
     </div>
   </div>
 </div>

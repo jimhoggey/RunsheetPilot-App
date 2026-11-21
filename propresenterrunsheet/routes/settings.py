@@ -1,4 +1,5 @@
-"""User-settings routes — /api/settings (GET/POST) and /api/prompt (GET/POST).
+"""User-settings routes — /api/settings (GET/POST), the model picker and
+the saved media folders per service.
 
 GET /api/settings tacks on the discovered ProPresenter root and library
 folders so the UI can pre-fill its dropdowns; the POST is a partial
@@ -11,7 +12,6 @@ import sys
 from flask import Blueprint, jsonify, request
 
 from ..config import DATA_DIR, VERSION, WHATS_NEW, recent_release_notes
-from ..parsing.ai import DEFAULT_PROMPT
 from ..parsing.models import (
     catalogue_entry, estimate_cost, fetch_catalogue, fetch_key_info,
     free_model_ids, is_router, measured_costs, pick_default_model,
@@ -274,22 +274,3 @@ def post_media_folders():
         rows.append({"match": service, "folders": folders, "jobs": jobs})
     save_settings({"media_folders_by_service": rows})
     return jsonify({"ok": True, "rows": rows})
-
-
-@bp.route("/api/prompt", methods=["GET"])
-def get_prompt():
-    saved = (load_settings().get("ai_prompt") or "").strip()
-    return jsonify({
-        "prompt":     saved or DEFAULT_PROMPT,
-        "is_default": not saved,
-        "default":    DEFAULT_PROMPT,
-    })
-
-
-@bp.route("/api/prompt", methods=["POST"])
-def post_prompt():
-    body = request.get_json(silent=True) or {}
-    prompt = body.get("prompt", "")
-    # Empty string is meaningful → "revert to default".
-    save_settings({"ai_prompt": prompt if isinstance(prompt, str) else ""})
-    return jsonify({"ok": True})

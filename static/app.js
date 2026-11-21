@@ -7,8 +7,7 @@
      5. Connection test
      6. Parse + render results table
      7. Create playlist in ProPresenter
-     8. AI prompt modal
-     9. Help + boot
+     8. Help + boot
    ───────────────────────────────────────────────────────────────────────── */
 
 // ─── 1. Globals + UI helpers ──────────────────────────────────────────────
@@ -113,7 +112,7 @@ let _saveWhenLoaded = false; // a save asked for mid-launch, sent once all field
 
 const AUTOSAVE_FIELDS = [
   'or-key', 'or-model', 'lib-dir', 'export-dir', 'sm-hide',
-  'stats-enabled', 'auto-port', 'media-assist',
+  'stats-enabled', 'auto-port',
   'pp-host2', 'pp-port2', 'threshold',
   'create-timers', 'timers-key-only', 'template-playlist'
 ];
@@ -169,11 +168,6 @@ function _finishProgress(fill) {
   fill.style.transition = 'width .25s ease';
   fill.style.width = '100%';
 }
-
-// Cached library source mode ('auto'|'api'|'disk') from settings. Updated
-// by the radio buttons in the Settings modal; read by loadLibraryAuto so
-// each refresh respects the operator's preference.
-let libSourceMode = 'auto';
 
 function setSaveDot(state) {
   const dot = document.getElementById('save-dot');
@@ -543,7 +537,6 @@ async function loadSettings() {
   document.getElementById('or-key').value     = s.or_key   || '';
   document.getElementById('stats-enabled').checked = s.stats_enabled !== false;
   document.getElementById('auto-port').checked     = s.auto_port !== false;
-  document.getElementById('media-assist').checked  = !!s.media_assist;
   // Populate the model dropdown from OpenRouter's live catalogue, then select
   // whatever is saved. Empty = Automatic. Awaited so the saved value has an
   // <option> to land on — otherwise assigning .value to a <select> that
@@ -575,14 +568,6 @@ async function loadSettings() {
   smHide.checked = s.sm_hide === true;
   applySmHidden(smHide.checked);
   smHide.addEventListener('change', e => applySmHidden(e.target.checked));
-
-  // Library source preference (auto / api / disk). Used by loadLibraryAuto
-  // to constrain which source(s) it tries. Default "auto" matches the
-  // old behaviour (try API, fall back to disk).
-  libSourceMode = (s.lib_source || 'auto').toLowerCase();
-  if (!['auto', 'api', 'disk'].includes(libSourceMode)) libSourceMode = 'auto';
-  const rb = document.querySelector(`input[name="lib-source"][value="${libSourceMode}"]`);
-  if (rb) rb.checked = true;
 
   // Template playlist selection — fetch the live list of playlists from
   // PP, populate the dropdown, then select the saved UUID (if any).
@@ -631,15 +616,6 @@ async function loadSettings() {
     await saveSettings();
     loadModels(document.getElementById('or-model').value);
   });
-  // Library source radio set — each click updates libSourceMode + autosaves +
-  // triggers a re-load so the operator sees the new source's items immediately.
-  document.querySelectorAll('input[name="lib-source"]').forEach(rb => {
-    rb.addEventListener('change', () => {
-      libSourceMode = rb.value;
-      autoSaveDebounced();
-      reloadLibraryAuto();
-    });
-  });
   suppressAutoSave = false;
   setSaveDot('');
   // Saves launch needed, sent only now that every field is loaded (a save
@@ -677,10 +653,8 @@ async function _postSettings() {
     or_key:                  document.getElementById('or-key').value,
     stats_enabled:           document.getElementById('stats-enabled').checked,
     auto_port:               document.getElementById('auto-port').checked,
-    media_assist:            document.getElementById('media-assist').checked,
     or_model:                document.getElementById('or-model').value,
     library_dir:             document.getElementById('lib-dir').value,
-    lib_source:              libSourceMode,
     export_dir:              document.getElementById('export-dir').value,
     threshold:               parseInt(document.getElementById('threshold').value) / 100,
     create_timers:           document.getElementById('create-timers').checked,
@@ -1571,146 +1545,6 @@ function _syncCreateButton() {
     : _placing ? 'Placing media from your folders — one moment.' : '';
 }
 
-// ─── Downloaded-media assist ──────────────────────────────────────────────
-// ProPresenter's media API is read-only and its Media bin is a registry,
-// not a folder — a file copied into PP's media folder stays invisible
-// (verified against a real install). So the drag is irreducible. What the
-// app does is everything around it: find the file, say which runsheet
-// item it's for, and notice the moment it lands in the bin.
-let _mediaAssistTimer = null;
-let _mediaAssistPolls = 0;
-
-// Poll only while it can achieve something, and not forever. With
-// ProPresenter closed every file reads as "not imported", so a naive
-// "keep polling while anything is pending" never stops — it re-scans
-// Downloads and re-posts the whole runsheet every 3s for the life of
-// the page.
-const MEDIA_POLL_MS = 3000;
-const MEDIA_POLL_MAX = 100;          // ~5 minutes, then it gives up
-
-function _stopMediaPoll() {
-  clearInterval(_mediaAssistTimer);
-  _mediaAssistTimer = null;
-}
-
-async function loadMediaAssist(isPoll) {
-  const card = document.getElementById('media-assist-card');
-  if (!card) return;
-  try {
-    const res = await fetch('/api/media_assist', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        items: matchedItems.map(mi => mi.parsed),
-        host: document.getElementById('pp-host2').value,
-        port: document.getElementById('pp-port2').value,
-        // Only the first look is a "view"; the polls that follow are
-        // the same view, and counting each one would make the metric
-        // measure how long a window stayed open.
-        poll: !!isPoll,
-      })
-    }).then(r => r.json());
-
-    const anything = (res.files || []).length || (res.timers || []).length;
-    if (!res.enabled || !anything) {
-      _stopMediaPoll();
-      card.hidden = true;
-      return;
-    }
-    renderMediaAssist(res);
-    card.hidden = false;
-  } catch (e) {
-    _stopMediaPoll();
-    card.hidden = true;
-  }
-}
-
-function renderMediaAssist(res) {
-  const pending = res.files.filter(f => !f.in_bin);
-  const timers = res.timers || [];
-  const bits = [];
-  if (pending.length) bits.push(`${pending.length} to import`);
-  if (timers.length) bits.push(`${timers.length} countdown${timers.length !== 1 ? 's' : ''} to sort`);
-  document.getElementById('media-assist-meta').textContent =
-    bits.join(' · ') || 'all imported';
-
-  // Countdowns the runsheet asked for. Rows already covered by the
-  // ProPresenter template — the Sunday countdown you reuse every week —
-  // never reach here, so anything shown genuinely needs doing.
-  document.getElementById('media-assist-timers').innerHTML = timers.map(t => {
-    const made = t.state === 'rendered';
-    const near = t.nearest
-      ? ` Closest you have is ${t.nearest.minutes} min.` : '';
-    const line = made
-      ? `<span style="color:var(--org)">Made in Service Visuals, not in ProPresenter yet</span>`
-      : `<span style="color:var(--org)">No ${t.minutes}-minute countdown exists — make one in Service Visuals.${escapeHtml(near)}</span>`;
-    const action = made
-      ? `<button class="btn btn-dim btn-sm" onclick="revealMedia(this)"
-                 data-path="${escapeHtml(t.path)}">Show me the file</button>`
-      : '';
-    return `<div style="display:flex;align-items:center;gap:12px;padding:9px 0;
-                        border-bottom:1px solid var(--border)">
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600">⏱ ${escapeHtml(t.title)} — needs ${t.minutes} min</div>
-        <div class="hint">${line}</div>
-      </div>
-      <div style="flex:none">${action}</div>
-    </div>`;
-  }).join('');
-
-  document.getElementById('media-assist-list').innerHTML = res.files.map(f => {
-    const kb = f.size > 1048576
-      ? (f.size / 1048576).toFixed(1) + ' MB'
-      : Math.round(f.size / 1024) + ' KB';
-    const age = f.age_h < 1 ? 'just now'
-      : (f.age_h < 24 ? Math.round(f.age_h) + 'h ago'
-                      : Math.round(f.age_h / 24) + 'd ago');
-    const forItem = f.suggested
-      ? `<span style="color:var(--acc-2)">→ ${escapeHtml(f.suggested.title)}</span>`
-      : '<span style="color:var(--dim)">no obvious match</span>';
-    const state = f.in_bin
-      ? '<span style="color:var(--grn);font-weight:600">✓ in ProPresenter</span>'
-      : `<button class="btn btn-dim btn-sm" onclick="revealMedia(this)"
-                 data-path="${escapeHtml(f.path)}">Show me the file</button>`;
-    return `<div style="display:flex;align-items:center;gap:12px;padding:9px 0;
-                        border-bottom:1px solid var(--border)">
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;
-                    white-space:nowrap">${escapeHtml(f.name)}</div>
-        <div class="hint">${kb} · ${age} · ${forItem}</div>
-      </div>
-      <div style="flex:none">${state}</div>
-    </div>`;
-  }).join('');
-
-  // PP writes its Media registry the instant a file is dropped in, so a
-  // short poll picks the import up within a second or two. It stops when
-  // nothing is pending, when ProPresenter isn't answering (nothing can
-  // change until it is), and after a bounded number of ticks.
-  _stopMediaPoll();
-  if (pending.length && res.bin_ok && _mediaAssistPolls < MEDIA_POLL_MAX) {
-    _mediaAssistTimer = setInterval(() => {
-      if (++_mediaAssistPolls >= MEDIA_POLL_MAX) { _stopMediaPoll(); return; }
-      loadMediaAssist(true);
-    }, MEDIA_POLL_MS);
-  }
-}
-
-async function revealMedia(btn) {
-  const path = btn.dataset.path;
-  btn.disabled = true;
-  btn.textContent = 'Opening…';
-  try {
-    const res = await fetch('/api/media_assist/reveal', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({path})
-    }).then(r => r.json());
-    btn.textContent = res.ok ? 'Drag it into Media →' : 'Couldn\'t open';
-  } catch (e) {
-    btn.textContent = 'Couldn\'t open';
-  }
-  setTimeout(() => { btn.disabled = false; btn.textContent = 'Show me the file'; }, 4000);
-}
-
 // ─── Config drawer ────────────────────────────────────────────────────────
 // The sidebar hides off-screen by default (v2.8.0) — it held controls used
 // perhaps once a month, at the permanent cost of a third of the window.
@@ -1873,7 +1707,6 @@ async function loadLibraryAuto() {
     const qs = new URLSearchParams({
       host: document.getElementById('pp-host2').value || 'localhost',
       port: document.getElementById('pp-port2').value || '50001',
-      mode: libSourceMode || 'auto',
     }).toString();
     const res = await fetch('/api/library/auto?' + qs).then(r => r.json());
     libraryItems = res.items || [];
@@ -2164,9 +1997,6 @@ async function rematchNow() {
 
 // ─── Start over — wipe the parsed state back to a fresh Step 1 ───────────
 function resetFlow() {
-  _stopMediaPoll();
-  _mediaAssistPolls = 0;
-  document.getElementById('media-assist-card').hidden = true;
   uploadedFile = null;
   _clearRunsheetState();
   _templateBackToAuto();
@@ -2307,7 +2137,6 @@ async function parseRunsheet() {
     renderResults();
     _renderFolderVerdict();            // its Save needs matchedItems to place into
     _showNextStepHint(matchedItems.length);
-    loadMediaAssist();
     parseSucceeded = true;
     // The template was changed while this parse ran, so its links came
     // from the one it was sent. Re-link against the pick on screen now,
@@ -3049,72 +2878,6 @@ async function restoreSnapshot(path) {
   }
 }
 
-// ─── 8. AI prompt modal ───────────────────────────────────────────────────
-let promptSaveTimer = null;
-
-async function openPromptModal() {
-  const ta = document.getElementById('prompt-textarea');
-  ta.value = '';
-  document.getElementById('prompt-modal').classList.add('active');
-  setPromptSaveDot('');
-  try {
-    const res = await fetch('/api/prompt').then(r => r.json());
-    ta.value = res.prompt || '';
-    if (res.is_default) setPromptSaveDot('default');
-  } catch (e) {
-    ta.value = '(could not load prompt: ' + e + ')';
-  }
-}
-
-function closePromptModal() {
-  document.getElementById('prompt-modal').classList.remove('active');
-}
-
-function setPromptSaveDot(state) {
-  const dot = document.getElementById('prompt-save-dot');
-  dot.className = 'save-dot ' + (state === 'saving' || state === 'saved' ? state : '');
-  dot.textContent = state === 'saving' ? 'saving…'
-                  : state === 'saved'  ? 'saved ✓'
-                  : state === 'default' ? 'using default'
-                  : 'auto-save';
-}
-
-function autoSavePromptDebounced() {
-  setPromptSaveDot('saving');
-  clearTimeout(promptSaveTimer);
-  promptSaveTimer = setTimeout(savePrompt, 600);
-}
-
-async function savePrompt() {
-  const value = document.getElementById('prompt-textarea').value;
-  try {
-    await fetch('/api/prompt', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({prompt: value})
-    });
-    setPromptSaveDot(value.trim() ? 'saved' : 'default');
-    if (value.trim()) setTimeout(() => setPromptSaveDot(''), 1500);
-  } catch (e) {
-    setPromptSaveDot('');
-    alert('Could not save prompt: ' + e);
-  }
-}
-
-async function resetPrompt() {
-  if (!confirm('Discard your customisations and revert to the built-in default prompt?')) return;
-  try {
-    await fetch('/api/prompt', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({prompt: ''})
-    });
-    const res = await fetch('/api/prompt').then(r => r.json());
-    document.getElementById('prompt-textarea').value = res.prompt || '';
-    setPromptSaveDot('default');
-  } catch (e) {
-    alert('Could not reset: ' + e);
-  }
-}
-
 // ─── Easter egg ───────────────────────────────────────────────────────────
 // Seven taps on the version badge within a rolling 3-second window pops
 // a small thank-you toast. Hidden by design — the badge looks decorative,
@@ -3700,12 +3463,9 @@ function smRefreshPreview() {
 
 smInit();
 
-// Wire up the prompt-modal textarea + ESC-to-close (script runs after DOM
-// is parsed, so the elements exist).
-document.getElementById('prompt-textarea')
-        .addEventListener('input', autoSavePromptDebounced);
+// ESC closes whichever dialog is open.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closePromptModal(); closeHelp(); dismissReorder(); closeFolderPicker(); }
+  if (e.key === 'Escape') { closeHelp(); dismissReorder(); closeFolderPicker(); }
 });
 
 // ─── 11. Self-update ───────────────────────────────────────────────────────
