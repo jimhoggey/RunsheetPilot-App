@@ -11,7 +11,6 @@ from flask import Blueprint, jsonify, request
 from ..service_mate.state import (
     _ensure_item_cues, _read_runsheet_state, _write_runsheet_state,
 )
-from ..service_mate import state as _sm_state
 
 
 bp = Blueprint("runsheet", __name__)
@@ -96,17 +95,3 @@ def api_runsheet_cue():
     state.pop("pp_remaining_seconds", None)
     _write_runsheet_state(state)
     return jsonify({"ok": True, "current_index": new})
-
-
-@bp.route("/api/runsheet/state", methods=["DELETE"])
-def api_runsheet_state_delete():
-    import logging
-    # Read the file path through the module so monkeypatched tmp paths in
-    # tests are honoured (conftest patches _sm_state.RUNSHEET_STATE_FILE).
-    log = logging.getLogger("pp_runsheet")
-    try:
-        if _sm_state.RUNSHEET_STATE_FILE.exists():
-            _sm_state.RUNSHEET_STATE_FILE.unlink()
-    except Exception:
-        log.exception("Failed to delete runsheet_state.json")
-    return jsonify({"ok": True})

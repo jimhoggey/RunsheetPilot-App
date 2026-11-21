@@ -309,15 +309,6 @@ def _pp_active_section_probe(state: dict, base: str) -> dict:
     return result
 
 
-def _pp_active_section_index(state: dict, base: str):
-    """Map the currently-active PP playlist item back to a runsheet item
-    index. Thin wrapper around `_pp_active_section_probe` — preserved as a
-    standalone callable for the test suite. Returns the section index, or
-    None when no confident match (or when PP isn't reachable / has no
-    active playlist)."""
-    return _pp_active_section_probe(state, base)["section_idx"]
-
-
 def _maybe_advance_from_pp(state: dict) -> dict:
     """Auto-track ProPresenter so the Service Mate follows whatever the
     operator is doing. See the module docstring for the three-signal scheme.

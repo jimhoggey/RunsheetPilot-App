@@ -555,9 +555,9 @@ class _StubResponse:
         return self._payload
 
 
-def test_pp_active_section_index_walks_back_to_header(app_module, monkeypatch):
+def test_pp_active_section_walks_back_to_header(monkeypatch):
     """Operator clicks media at index 3 (under the 'Countdown' header at
-    index 2). _pp_active_section_index should walk back and match the header
+    index 2). _pp_active_section_probe should walk back and match the header
     name 'Countdown - Start 9:27am  —  9:25 AM' → cleaned 'Countdown - Start
     9:27am' → runsheet item 1."""
     playlist_uuid = "PLIST-UUID"
@@ -593,11 +593,11 @@ def test_pp_active_section_index_walks_back_to_header(app_module, monkeypatch):
         {"title": "Countdown - Start 9:27am"},
         {"title": "Worship and Ministry Time"},
     ], "current_index": 0}
-    idx = app_module._pp_active_section_index(state, "http://localhost:55416")
-    assert idx == 1
+    idx = pp_track._pp_active_section_probe(state, "http://localhost:55416")
+    assert idx["section_idx"] == 1
 
 
-def test_pp_active_section_index_returns_none_when_pp_unreachable(app_module, monkeypatch):
+def test_pp_active_section_is_none_when_pp_unreachable(monkeypatch):
     import requests as req
 
     def boom(*a, **kw):
@@ -607,9 +607,9 @@ def test_pp_active_section_index_returns_none_when_pp_unreachable(app_module, mo
     from propresenterrunsheet.service_mate import pp_track
     monkeypatch.setattr(pp_track, "_PP_PLAYLIST_CACHE",
                         {"uuid": None, "items": [], "fetched_at": 0.0})
-    assert app_module._pp_active_section_index(
+    assert pp_track._pp_active_section_probe(
         {"items": [{"title": "a"}]}, "http://localhost:55416"
-    ) is None
+    )["section_idx"] is None
 
 
 def test_pp_active_section_uuid_match_wins_over_index(app_module, monkeypatch):
@@ -658,9 +658,9 @@ def test_pp_active_section_uuid_match_wins_over_index(app_module, monkeypatch):
     # which is itself a header → we'd return idx 1 (Response). With UUID-first
     # we resolve to position 1 (Sermon Slides), walk back to position 0
     # (Preach header), match runsheet idx 0.
-    assert app_module._pp_active_section_index(
+    assert pp_track._pp_active_section_probe(
         state, "http://localhost:55416"
-    ) == 0
+    )["section_idx"] == 0
 
 
 def test_maybe_advance_requires_two_polls_before_committing(app_module, monkeypatch):

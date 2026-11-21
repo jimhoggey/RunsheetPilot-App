@@ -239,7 +239,11 @@ def test_local_pp_settings_never_raises_on_an_unknown_platform():
 
 from propresenterrunsheet.propresenter import net
 from propresenterrunsheet.propresenter.net import (
-    UnreachableHost, is_reachable_pp_host, pp_base)
+    UnreachableHost, pp_base, resolve_pp_host)
+
+
+def is_reachable_pp_host(host) -> bool:
+    return resolve_pp_host(host) is not None
 
 # Name lookups go through a fake resolver so these tests mean the same
 # thing on this Mac (where Sound-Desk-Mac.local really resolves) and

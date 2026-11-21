@@ -376,10 +376,6 @@ def _default_spawn(op):
         # group so macOS doesn't reap it along with us.
         subprocess.Popen(["/bin/sh", "-c", script],
                          start_new_session=True, close_fds=True)
-    elif kind == "spawn_exe":
-        subprocess.Popen([str(target)], creationflags=flags, close_fds=True)
-    else:  # spawn_app (legacy mac path — superseded by relaunch_mac)
-        subprocess.Popen(["open", str(target)])
 
 
 def _execute_swap(ops, spawn=None, hard_exit=None):
@@ -398,8 +394,7 @@ def _execute_swap(ops, spawn=None, hard_exit=None):
             elif kind == "move":
                 shutil.move(str(op[1]), str(op[2]))
                 done.append(op)
-            elif kind in ("spawn_exe", "spawn_app", "relaunch_windows",
-                          "relaunch_mac"):
+            elif kind in ("relaunch_windows", "relaunch_mac"):
                 spawn(op)
             elif kind == "exit":
                 log.info("Update applied — restarting")

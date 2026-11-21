@@ -136,19 +136,6 @@ def _identify_clock(ip: str) -> dict:
             "error": stock.get("error") or "no response"}
 
 
-def _set_clock_brightness_custom(ip: str, brt: int) -> bool:
-    """Brightness for a custom-firmware clock. The stock `/set?brt=` route does
-    not exist on the ESP firmware."""
-    import requests as req
-    try:
-        r = req.post(f"http://{ip}/api/brightness",
-                     json={"brightness": max(1, min(100, int(brt)))}, timeout=4)
-        return bool(r.ok)
-    except Exception:
-        log.debug("Clock %s brightness failed", log_safe(ip))
-        return False
-
-
 def _push_test_state(ip: str, role: str) -> bool:
     """Test card for a custom-firmware clock.
 
@@ -175,17 +162,6 @@ def _push_test_state(ip: str, role: str) -> bool:
         "next_duration_s": 60,
     }
     return _push_state(ip, payload)
-
-
-def _set_clock_standby(ip: str) -> bool:
-    """Clear a custom-firmware clock to its waiting screen."""
-    import requests as req
-    try:
-        r = req.post(f"http://{ip}/api/standby", json={}, timeout=4)
-        return bool(r.ok)
-    except Exception:
-        log.debug("Clock %s standby failed", log_safe(ip))
-        return False
 
 
 def _push_to_clock(ip: str, image_bytes: bytes,
