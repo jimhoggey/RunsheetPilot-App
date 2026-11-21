@@ -705,9 +705,12 @@ def _upload_and_parse(stop: threading.Event):
                 lead, model = attachment, reader
                 used_model = model
 
-        # 5. Assemble the prompt — user-customised or default, plus the
-        # Service Mate cue addendum so the model also emits per-role cues.
-        prompt_template = (settings.get("ai_prompt") or "").strip() or DEFAULT_PROMPT
+        # 5. Assemble the prompt, plus the Service Mate cue addendum so the
+        # model also emits per-role cues. One prompt for every church: the
+        # editable copy was removed (owner, 21 Nov 2026) — the prompt is
+        # refined and tested in the code, where a change is checked against
+        # many runsheet layouts, and a saved custom one is ignored.
+        prompt_template = DEFAULT_PROMPT
         runsheet_text = raw[:7000]
 
         # 5a. If the operator has (or we can auto-detect) a "template

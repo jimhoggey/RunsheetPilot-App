@@ -33,11 +33,6 @@ def _default_settings() -> dict:
         "library_dir":   lib_dirs[0] if lib_dirs else "",
         "export_dir":    str(Path.home() / "Desktop"),
         "threshold":     0.55,
-        # Library auto-load mode. "auto" tries PP REST first then falls back
-        # to disk — works for the most operators out of the box. Was "disk"
-        # before the UI redesign; switched to "auto" so the Settings modal
-        # radio defaults to the recommended option for first-time users.
-        "lib_source":    "auto",
         "create_timers": True,
         # Timers for the sermon, worship and games only (timers.is_key_part).
         "timers_key_only": False,
@@ -52,14 +47,6 @@ def _default_settings() -> dict:
         # assumed 50001), it only ever engages AFTER the configured port
         # has failed, and it never overrides a port that works.
         "auto_port": True,
-        # The downloaded-media assist panel. OFF by default — new, and it
-        # lists filenames from the operator's Downloads folder, which is
-        # not something to switch on for someone without asking.
-        "media_assist": False,
-        # Folders it watches. Empty means Downloads + Desktop.
-        "media_assist_dirs": [],
-        # User-customised AI prompt. Empty string = use built-in DEFAULT_PROMPT.
-        "ai_prompt":     "",
         # UUID of the PP playlist used as a template at parse time. When
         # set (or auto-detected — first playlist whose name contains
         # "library" / "template"), the parser feeds the template's

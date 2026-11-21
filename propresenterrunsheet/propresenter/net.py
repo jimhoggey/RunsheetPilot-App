@@ -40,8 +40,8 @@ _HOST_RE = re.compile(r"[^A-Za-z0-9.\-]")
 _BLOCKED = {ipaddress.ip_address("169.254.169.254"),
             ipaddress.ip_address("fd00:ec2::254")}
 
-# Resolution cache: the media-assist poll and port discovery hit pp_base
-# every few seconds, and re-asking mDNS each time is pointless. Short TTL
+# Resolution cache: Service Mate and port discovery hit pp_base every few
+# seconds, and re-asking mDNS each time is pointless. Short TTL
 # so a machine that changes address is picked up within a minute.
 _CACHE_TTL_S = 30
 # A name that didn't resolve is remembered too, more briefly. Such a lookup
