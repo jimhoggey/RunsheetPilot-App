@@ -56,8 +56,8 @@ from ..parsing.models import fetch_catalogue, next_usable_model, resolve_model
 from ..propresenter.update_safety import UpdateAborted
 from ..propresenter.templates import (
     auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlist_raw,
-    fetch_pp_playlists, playlist_to_objects, playlist_to_sections,
-    resolve_object, resolve_with_aliases, template_uuids,
+    fetch_pp_playlists, link_items_to_template, playlist_to_sections,
+    template_uuids,
 )
 from ..propresenter.timers import _create_pp_timers
 from ..service_mate.state import (
@@ -101,10 +101,13 @@ def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
     Create (their exact report). Clicking "Refresh playlists" couldn't
     help — it only refills the dropdown.
 
-    So the same title-vs-template-object rule from parse (every word of
-    the object's name in the item's title; sections win over single
-    objects) runs again HERE, but only when at least one non-song item
-    is unmatched — a fully-matched parse costs nothing extra. Best-effort
+    So the same engine parse and Re-match use (link_items_to_template:
+    every word of the object's name in the item's title, the operator's
+    aliases first, sections over single objects, repeated parts shared)
+    runs again HERE, but only when at least one non-song item is
+    unmatched — a fully-matched parse costs nothing extra. It used to be
+    a copy of that engine without the aliases on section headers, so
+    Create could miss a link parse would have made. Best-effort
     throughout: template still unreachable -> unchanged behaviour.
 
     `hint` is the service label the model reported at parse time,
@@ -126,39 +129,18 @@ def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
                 (mi["parsed"].get("title") or "") for mi in needs)
             tmpl_uuid = auto_detect_template_uuid(
                 fetch_pp_playlists(base), hint=hint) or ""
-        if not tmpl_uuid:
-            return 0
-        raw = fetch_pp_playlist_items(base, tmpl_uuid)
-        sections = playlist_to_sections(raw)
-        objects = playlist_to_objects(raw)
-        # Section headers as matchable pseudo-objects: a title hit on the
-        # header name expands the whole section, same as parse time.
-        headers = [{"name": s_["header"]["name"], "_section": s_}
-                   for s_ in sections]
-        hits = 0
-        for mi in needs:
-            parsed = mi["parsed"]
-            title = parsed.get("title") or ""
-            hdr = resolve_object(title, headers)
-            if hdr:
-                parsed["library_match"] = hdr["_section"]
-                hits += 1
-                continue
-            obj = resolve_with_aliases(title, objects, aliases)
-            if obj:
-                parsed["library_match"] = {
-                    "header": {"name": obj["name"], "uuid": obj["uuid"],
-                               "color": {}},
-                    "items": [obj],
-                }
-                hits += 1
-        if hits:
-            log.info("Create-time template re-match linked %d item(s) "
-                     "the parse missed (PP was likely closed then)", hits)
-        return hits
     except Exception:
-        log.exception("Create-time template re-match failed; continuing")
+        log.exception("Create-time template lookup failed; continuing")
         return 0
+    if not tmpl_uuid:
+        return 0
+    hits = link_items_to_template(
+        [mi["parsed"] for mi in matched if isinstance(mi.get("parsed"), dict)],
+        base, tmpl_uuid, aliases=aliases, fetch=fetch_pp_playlist_items)
+    if hits:
+        log.info("Create-time template re-match linked %d item(s) "
+                 "the parse missed (PP was likely closed then)", hits)
+    return hits
 
 
 def _write_sm_state(name, matched, timer_result, keep_position=False,

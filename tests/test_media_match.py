@@ -13,8 +13,8 @@ import json
 import pytest
 
 from propresenterrunsheet.propresenter.media_match import (
-    MAX_CANDIDATES, MAX_PER_ITEM, eligible_folders, recommended_folders,
-    row_for_service, scope, sections, tokens,
+    MAX_CANDIDATES, MAX_PER_ITEM, eligible_folders, place, recommended_folders,
+    row_for_service, scope, tokens,
 )
 from propresenterrunsheet.settings import load_settings, save_settings
 
@@ -159,9 +159,10 @@ def test_a_saved_row_is_final_even_over_the_model():
 
 def test_the_models_folders_are_used_in_its_order():
     sc = scope(BIN, "Summit", SUMMIT, [], TEMPLATES,
-               suggested=["Summit pre-service", "Summit 2026 Friday"])
+               suggested=["Summit 2026 Saturday", "Summit 2026 Friday"])
     assert sc["source"] == "suggested"
-    assert [a["uuid"] for a in sc["assets"]] == ["P1", "F1", "F2"]
+    assert sc["folders"] == ["Summit 2026 Saturday", "Summit 2026 Friday"]
+    assert [a["uuid"] for a in sc["assets"]] == ["A1", "F1", "F2"]
 
 
 def test_the_model_cannot_choose_another_services_folder_or_invent_one():
@@ -181,7 +182,8 @@ def test_nothing_for_this_service_offers_nothing_rather_than_the_whole_bin():
     """Owner, 30 Oct 2026: sending every title is wasteful with a low
     chance of success. Nothing matching is said, not papered over."""
     sc = scope(BIN, "Carols by Candlelight", [{"title": "Welcome"}], [], TEMPLATES)
-    assert sc == {"assets": [], "folders": [], "source": "none", "service": ""}
+    assert (sc["assets"], sc["folders"], sc["source"]) == ([], [], "none")
+    assert not any(sc["fixed"].values())
 
 
 @pytest.mark.parametrize("bad", [
@@ -214,24 +216,21 @@ OFFERED = [{"uuid": "U1", "name": "WTSSF_Summit2026_Opener", "folder": "Summit 2
            {"uuid": "U3", "name": "Summit Countdown", "folder": "Summit 2026"}]
 
 
-def test_each_pick_becomes_a_header_plus_its_media_marked_as_the_bins():
-    out = sections(ITEMS, [{"media": 2, "item": 0}, {"media": 0, "item": 1}], OFFERED)
-    assert out[0]["header"]["name"] == "Countdown"
-    assert out[0]["items"] == [{"name": "Summit Countdown", "uuid": "U3",
-                                "target_uuid": "U3", "type": "media", "index": 0}]
-    assert out[0]["from_bin"] is True, "so a re-run replaces it and not a template's"
-    assert [e["uuid"] for e in out[1]["items"]] == ["U1"]
+def _placed(picks, items=ITEMS, offered=OFFERED):
+    return place(items, picks, offered)[0]
+
+
+def test_each_pick_becomes_media_marked_as_the_bins():
+    out = _placed([{"media": 2, "item": 0}, {"media": 0, "item": 1}])
+    assert out[0] == [{"name": "Summit Countdown", "uuid": "U3", "target_uuid": "U3",
+                       "type": "media", "index": 0, "from_bin": True, "job": "pick"}]
+    assert [e["uuid"] for e in out[1]] == ["U1"]
     assert 2 not in out
 
 
 def test_several_assets_can_sit_under_one_item_in_the_order_given():
-    out = sections(ITEMS, [{"media": 0, "item": 1}, {"media": 1, "item": 1}], OFFERED)
-    assert [(e["uuid"], e["index"]) for e in out[1]["items"]] == [("U1", 0), ("U2", 1)]
-
-
-def test_an_item_a_template_already_filled_is_left_alone():
-    items = [{"title": "Countdown", "library_match": {"header": {}, "items": [{}]}}]
-    assert sections(items, [{"media": 2, "item": 0}], OFFERED) == {}
+    out = _placed([{"media": 0, "item": 1}, {"media": 1, "item": 1}])
+    assert [e["uuid"] for e in out[1]] == ["U1", "U2"]
 
 
 @pytest.mark.parametrize("picks", [
@@ -240,25 +239,25 @@ def test_an_item_a_template_already_filled_is_left_alone():
     ["nonsense", None, 7], [], None, "not a list",
 ])
 def test_an_answer_that_doesnt_hold_up_is_dropped(picks):
-    assert sections(ITEMS, picks, OFFERED) == {}
+    assert _placed(picks) == {}
 
 
 def test_one_asset_can_serve_several_segments():
     """Owner, 28 Oct 2026: a hold screen belongs in more than one place."""
-    out = sections(ITEMS, [{"media": 0, "item": 0}, {"media": 0, "item": 1}], OFFERED)
-    assert [e["uuid"] for e in out[0]["items"]] == ["U1"]
-    assert [e["uuid"] for e in out[1]["items"]] == ["U1"]
+    out = _placed([{"media": 0, "item": 0}, {"media": 0, "item": 1}])
+    assert [e["uuid"] for e in out[0]] == ["U1"]
+    assert [e["uuid"] for e in out[1]] == ["U1"]
 
 
 def test_but_never_twice_under_the_same_header():
-    out = sections(ITEMS, [{"media": 0, "item": 0}, {"media": 0, "item": 0}], OFFERED)
-    assert [e["uuid"] for e in out[0]["items"]] == ["U1"]
+    out = _placed([{"media": 0, "item": 0}, {"media": 0, "item": 0}])
+    assert [e["uuid"] for e in out[0]] == ["U1"]
 
 
 def test_an_item_takes_only_so_much_media():
     big = [{"uuid": f"U{i}", "name": f"Summit {i}"} for i in range(10)]
-    out = sections([{"title": "Opener"}], [{"media": i, "item": 0} for i in range(10)], big)
-    assert len(out[0]["items"]) == MAX_PER_ITEM
+    out = _placed([{"media": i, "item": 0} for i in range(10)], [{"title": "Opener"}], big)
+    assert len(out[0]) == MAX_PER_ITEM
 
 
 # ── Through the parse route ─────────────────────────────────────────────────
@@ -286,9 +285,9 @@ def _route(monkeypatch, items, service_type="", folders=None, picks=None, bin_it
         seen["eligible"] = _names(eligible)
         return folders or []
 
-    def _media(items, offered, key, model, post=None):
+    def _media(items, offered, key, model, **k):
         seen["offered"] = [a["uuid"] for a in offered]
-        return picks or []
+        return {"media": picks or [], "stale": [], "missing": []}
     monkeypatch.setattr(parse_mod, "plan_folders", _folders)
     monkeypatch.setattr(parse_mod, "plan_media", _media)
     return seen
@@ -314,17 +313,17 @@ def test_with_no_template_the_model_picks_folders_then_files(parse_client, monke
     assert [it["library_match"]["items"][0]["target_uuid"] for it in r["items"]] == ["F1", "F2"]
     got = r["media_from_bin"]
     assert (got["count"], got["source"], got["folders"]) == (2, "suggested", ["Summit 2026 Friday"])
-    assert {"name": "Summit 2026 Friday", "count": 2} in got["bin_folders"]
+    assert {"name": "Summit 2026 Friday", "count": 2, "job": "pick"} in got["bin_folders"]
 
 
 def test_saved_folders_skip_the_folder_call(parse_client, monkeypatch):
     save_settings({"media_folders_by_service": [
-        {"match": "Summit", "folders": ["Summit pre-service"]}]})
-    seen = _route(monkeypatch, [{"title": "Pre-service loop", "type": "other"}],
+        {"match": "Summit", "folders": ["Summit 2026 Saturday"]}]})
+    seen = _route(monkeypatch, [{"title": "Opener", "type": "other"}],
                   service_type="Summit", picks=[{"media": 0, "item": 0}])
     r = _upload(parse_client, "Summit 2026.pdf")
     assert "eligible" not in seen, "the operator's choice is final; no model asked"
-    assert seen["offered"] == ["P1"]
+    assert seen["offered"] == ["A1"]
     got = r["media_from_bin"]
     assert (got["source"], got["saved_as"], got["service"]) == ("chosen", "Summit", "Summit")
 
@@ -334,7 +333,8 @@ def test_a_failed_folder_call_falls_back_to_folder_names(parse_client, monkeypat
                   service_type="Summit", folders=[])
     r = _upload(parse_client, "Summit 2026.pdf")
     assert r["media_from_bin"]["source"] == "matched"
-    assert set(seen["offered"]) == {"F1", "F2", "A1", "P1"}
+    assert set(seen["offered"]) == {"F1", "F2", "A1"}, "the loop needs no model"
+    assert r["items"][0]["library_match"]["items"][0]["uuid"] == "P1", "it opens"
 
 
 def test_a_template_leaves_the_media_bin_on_for_the_gaps(parse_client, monkeypatch):
@@ -372,7 +372,7 @@ def test_placing_again_replaces_the_bins_own_picks_and_never_a_templates(client,
     monkeypatch.setattr(parse_mod, "plan_folders",
                         lambda *a, **k: pytest.fail("saved folders are final"))
     monkeypatch.setattr(parse_mod, "plan_media",
-                        lambda items, offered, *a, **k: [{"media": 0, "item": 1}])
+                        lambda items, offered, *a, **k: {"media": [{"media": 0, "item": 1}]})
     save_settings({"or_key": "k", "media_folders_by_service": [
         {"match": "Summit", "folders": ["Summit 2026 Saturday"]}]})
     template = {"header": {"name": "Welcome", "uuid": "H"}, "items": [{"name": "T"}]}
@@ -419,10 +419,11 @@ def test_but_a_real_answer_that_nothing_fits_does_clear_them(client, monkeypatch
     """The operator un-ticked those folders; their slides must go."""
     import propresenterrunsheet.routes.parse as parse_mod
     monkeypatch.setattr(parse_mod, "pp_base", lambda *a, **k: "http://pp")
-    monkeypatch.setattr(parse_mod, "fetch_media_bin", lambda base: BIN)
+    monkeypatch.setattr(parse_mod, "fetch_media_bin",
+                        lambda base: [b for b in BIN if b["uuid"] != "P1"])
     monkeypatch.setattr(parse_mod, "fetch_pp_playlists", lambda base: [])
-    monkeypatch.setattr(parse_mod, "plan_folders", lambda *a, **k: [])
-    monkeypatch.setattr(parse_mod, "plan_media", lambda *a, **k: [])
+    monkeypatch.setattr(parse_mod, "plan_folders", lambda *a, **k: {})
+    monkeypatch.setattr(parse_mod, "plan_media", lambda *a, **k: {"media": []})
     placed = {"header": {"name": "Opener"}, "items": [{"name": "F1"}], "from_bin": True}
     r = client.post("/api/media/place", json={
         "parsed": [{"title": "Opener", "library_match": placed}], "service": "Summit"})
@@ -438,6 +439,7 @@ def test_a_parse_whose_media_call_fails_still_reports_its_folders(parse_client, 
     r = _upload(parse_client, "Summit 2026.pdf")
     got = r["media_from_bin"]
     assert (got["count"], got["folders"]) == (0, ["Summit 2026 Friday"])
+    assert got["ai_failed"] is True, "so the line says so, not 'nothing fit'"
     assert r["items"][0]["library_match"] is None
 
 

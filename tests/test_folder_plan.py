@@ -25,9 +25,24 @@ def model(openrouter):
 
 
 def test_the_chosen_folders_come_back_by_name_in_the_models_order(model):
-    model(json.dumps({"folders": [1, 0]}))
-    assert fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "") == [
-        "Summit 2026 Saturday", "Summit 2026 Friday"]
+    model(json.dumps({"folders": [{"n": 1, "job": "pick"}, {"n": 0, "job": "start"}]}))
+    got = fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "")
+    assert list(got) == ["Summit 2026 Saturday", "Summit 2026 Friday"]
+    assert got == {"Summit 2026 Saturday": "pick", "Summit 2026 Friday": "start"}
+
+
+@pytest.mark.parametrize("job", ["everything", "", None, 3, ["every"]])
+def test_a_job_that_isnt_one_is_left_to_the_folder_name(model, job):
+    model(json.dumps({"folders": [{"n": 0, "job": job}]}))
+    assert fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "") == {
+        "Summit 2026 Friday": ""}
+
+
+def test_the_model_is_told_the_five_jobs(model):
+    sent = model('{"folders": []}')
+    fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "")
+    asked = sent["body"]["messages"][0]["content"]
+    assert all(f'"{j}"' in asked for j in ("every", "preach", "start", "end", "pick"))
 
 
 def test_the_model_reads_folder_names_and_the_runsheet_never_files(model):
@@ -51,9 +66,9 @@ def test_only_providers_that_keep_nothing_are_asked(model):
 
 
 @pytest.mark.parametrize("picks, want", [
-    ([0, 0, 0], ["Summit 2026 Friday"]),          # said three times, used once
-    ([9, -1, 2], ["Current media"]),               # out of range dropped
-    ([True, "1", None, 1.0], []),                  # not an index at all
+    ([0, 0, 0], {"Summit 2026 Friday": ""}),       # said three times, used once
+    ([9, -1, 2], {"Current media": ""}),           # out of range dropped
+    ([True, "1", None, 1.0, {"n": "0"}], {}),      # not an index at all
 ])
 def test_every_number_is_held_to_the_list_it_was_shown(model, picks, want):
     model(json.dumps({"folders": picks}))
@@ -65,12 +80,12 @@ def test_every_number_is_held_to_the_list_it_was_shown(model, picks, want):
 ])
 def test_an_unusable_answer_chooses_nothing(model, payload):
     model(payload)
-    assert fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "") == []
+    assert fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "") == {}
 
 
 def test_a_failed_call_chooses_nothing(model):
     model('{"folders": [0]}', status=500)
-    assert fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "") == []
+    assert fp.plan_folders("Summit", ITEMS, FOLDERS, "sk-or-x", "") == {}
 
 
 @pytest.mark.parametrize("service, items, folders, key", [
@@ -80,12 +95,12 @@ def test_a_failed_call_chooses_nothing(model):
 ])
 def test_no_call_is_made_with_nothing_to_ask(openrouter, service, items, folders, key):
     openrouter.forbid()
-    assert fp.plan_folders(service, items, folders, key, "") == []
+    assert fp.plan_folders(service, items, folders, key, "") == {}
 
 
 def test_a_long_bin_is_cut_to_the_prompt_cap(model):
     many = [{"name": f"Folder {i}", "count": 1} for i in range(fp._MAX_FOLDERS + 50)]
     sent = model(json.dumps({"folders": [fp._MAX_FOLDERS + 10]}))
-    assert fp.plan_folders("Summit", ITEMS, many, "sk-or-x", "") == [], \
+    assert fp.plan_folders("Summit", ITEMS, many, "sk-or-x", "") == {}, \
         "a folder it was never shown can't be chosen"
     assert f"{fp._MAX_FOLDERS}. " not in sent["body"]["messages"][0]["content"]
