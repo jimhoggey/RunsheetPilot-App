@@ -169,7 +169,7 @@ from propresenterrunsheet.service_mate import (  # noqa: E402
     _CLOCKS_LOOP_LAST_PUSHED, _CLOCK_THEME_SET,
     _clean_header_name, _compute_remaining_seconds, _cue_for,
     _ensure_item_cues, _format_mmss, _maybe_advance_from_pp,
-    _next_visible_item, _parse_pp_time, _pp_active_section_index,
+    _next_visible_item, _parse_pp_time,
     _render_cue, _render_standby, _render_test_card,
     _sm_font, _text_width,
 )
@@ -190,7 +190,7 @@ __all__ = [
     "_CLOCKS_LOOP_LAST_PUSHED", "_CLOCK_THEME_SET",
     "_clean_header_name", "_compute_remaining_seconds", "_cue_for",
     "_ensure_item_cues", "_format_mmss", "_maybe_advance_from_pp",
-    "_next_visible_item", "_parse_pp_time", "_pp_active_section_index",
+    "_next_visible_item", "_parse_pp_time",
     "_render_cue", "_render_standby", "_render_test_card",
     "_sm_font", "_text_width",
 ]

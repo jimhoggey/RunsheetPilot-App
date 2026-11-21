@@ -139,11 +139,6 @@ def resolve_pp_host(host):
     return resolved
 
 
-def is_reachable_pp_host(host) -> bool:
-    """True when `host` is somewhere ProPresenter could actually be."""
-    return resolve_pp_host(host) is not None
-
-
 def reset_cache():
     """Tests, and anywhere a stale resolution would confuse things."""
     _cache.clear()

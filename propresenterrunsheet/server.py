@@ -362,7 +362,7 @@ def _run_status_window(port: int) -> None:
     log.info("Status window closed — shutting down server")
 
 
-def main(app=None) -> None:
+def main(app) -> None:
     """Boot the app: discover a free port, start the Service Mate daemon,
     open the browser, and run waitress in a background thread while the
     main thread hosts the tkinter status window.
@@ -373,17 +373,12 @@ def main(app=None) -> None:
     clicking Quit) returns from `mainloop()`; with only daemon threads
     left (waitress + clocks), the process exits naturally.
 
-    `app` should be passed in from propresenter_app.py's `if __name__ ==
-    "__main__"` block. We accept None and fall back to importing it as a
-    convenience for the legacy callsite, but the explicit-pass path is
-    the safe one — `from propresenter_app import app` inside a frozen
-    PyInstaller bundle has been observed to yield a freshly-loaded
-    module instance whose `app` is missing the routes registered on the
-    bootloader's __main__ copy. End result: every URL 404s, even the
-    ones that obviously exist in the source.
+    `app` is passed in from propresenter_app.py's `if __name__ ==
+    "__main__"` block, never imported here: `from propresenter_app import
+    app` inside a frozen PyInstaller bundle has been observed to yield a
+    freshly-loaded module instance whose `app` is missing the routes
+    registered on the bootloader's __main__ copy, so every URL 404s.
     """
-    if app is None:
-        from propresenter_app import app  # legacy / dev fallback
 
     # CI diagnostic: verify the pywebview backend is actually inside the
     # bundle, then exit. Never starts the server. See _probe_webview.

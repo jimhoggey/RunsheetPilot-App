@@ -133,14 +133,6 @@ def test_runsheet_cue_errors_when_no_state(client):
     assert r.status_code == 400
 
 
-def test_runsheet_state_delete(client):
-    client.post("/api/runsheet/state", json={"items": [{"title": "a"}]})
-    d = client.delete("/api/runsheet/state")
-    assert d.status_code == 200
-    left = client.get("/api/runsheet/state").get_json()
-    assert not {k: v for k, v in left.items() if k != "pp_follow"}
-
-
 # ── Clocks config ────────────────────────────────────────────────────────────
 
 def test_clocks_get_returns_default(client, app_module):

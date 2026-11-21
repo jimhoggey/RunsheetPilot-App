@@ -100,7 +100,7 @@ let _saveWhenLoaded = false; // a save asked for mid-launch, sent once all field
 const AUTOSAVE_FIELDS = [
   'or-key', 'or-model', 'lib-dir', 'export-dir', 'sm-hide',
   'stats-enabled', 'auto-port', 'media-assist',
-  'pp-host', 'pp-port', 'pp-host2', 'pp-port2', 'threshold',
+  'pp-host2', 'pp-port2', 'threshold',
   'create-timers', 'timers-key-only', 'template-playlist'
 ];
 
@@ -167,13 +167,6 @@ function setSaveDot(state) {
   dot.textContent = state === 'saving' ? 'saving…'
                  : state === 'saved'  ? 'saved ✓'
                  : 'auto-save';
-}
-
-function switchTab(t) {
-  document.getElementById('tab-btn-disk').classList.toggle('active', t === 'disk');
-  document.getElementById('tab-btn-api').classList.toggle('active', t === 'api');
-  document.getElementById('tab-disk').classList.toggle('active', t === 'disk');
-  document.getElementById('tab-api').classList.toggle('active', t === 'api');
 }
 
 function setStatus(html, color) {
@@ -531,8 +524,6 @@ function _modelNote(data) {
 
 async function loadSettings() {
   const s = await fetch('/api/settings').then(r => r.json());
-  document.getElementById('pp-host').value    = s.pp_host  || 'localhost';
-  document.getElementById('pp-port').value    = s.pp_port  || '50001';
   document.getElementById('pp-host2').value   = s.pp_host  || 'localhost';
   document.getElementById('pp-port2').value   = s.pp_port  || '50001';
   document.getElementById('or-key').value     = s.or_key   || '';
@@ -635,16 +626,6 @@ async function loadSettings() {
       reloadLibraryAuto();
     });
   });
-  // Mirror host/port between the two sections
-  document.getElementById('pp-host').addEventListener('input', e =>
-    document.getElementById('pp-host2').value = e.target.value);
-  document.getElementById('pp-port').addEventListener('input', e =>
-    document.getElementById('pp-port2').value = e.target.value);
-  document.getElementById('pp-host2').addEventListener('input', e =>
-    document.getElementById('pp-host').value = e.target.value);
-  document.getElementById('pp-port2').addEventListener('input', e =>
-    document.getElementById('pp-port').value = e.target.value);
-
   suppressAutoSave = false;
   setSaveDot('');
   // Saves launch needed, sent only now that every field is loaded (a save
@@ -1989,24 +1970,13 @@ async function _runTest(host, port) {
   // not always use 50001). Write the working value back into the field
   // and save it, or the operator fixes the same thing every launch.
   if (res.ok && res.port && res.port !== String(port)) {
-    ['pp-port2', 'pp-port'].forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.value = res.port;
-    });
+    document.getElementById('pp-port2').value = res.port;
     saveSettings();
     setStatus(`🔌 ${escapeHtml(res.note || 'Found ProPresenter on port ' + res.port + '.')}`);
   }
   return res;
 }
 
-async function testConnection() {
-  const res = await _runTest(
-    document.getElementById('pp-host').value,
-    document.getElementById('pp-port').value);
-  alert(res.ok
-    ? `✅ Connected — ${res.count} library/libraries found.`
-    : `❌ ${res.error}\nOpen ProPresenter and turn on Network (Preferences → Integrations), then try again.`);
-}
 async function testConnection2() {
   const res = await _runTest(
     document.getElementById('pp-host2').value,

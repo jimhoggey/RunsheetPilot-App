@@ -59,9 +59,9 @@ def test_a_folder_name_reduces_to_the_service_it_is_for(name, want):
 def test_template_detection_reads_names_exactly_as_it_did():
     """Folder fillers are passed in, never added to the shared set, so the
     template picker this tokeniser has always served is unchanged."""
-    from propresenterrunsheet.propresenter.templates import _template_signal_tokens
-    assert _template_signal_tokens("Youth Service - Library") == {"youth"}
-    assert _template_signal_tokens("Sunday Media Library") == {"sunday", "media"}
+    from propresenterrunsheet.propresenter.templates import service_tokens
+    assert service_tokens("Youth Service - Library") == {"youth"}
+    assert service_tokens("Sunday Media Library") == {"sunday", "media"}
 
 
 # ── Step 1: narrow — another service's folders never reach the model ────────

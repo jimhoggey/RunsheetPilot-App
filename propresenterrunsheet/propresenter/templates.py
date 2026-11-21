@@ -131,11 +131,6 @@ def service_tokens(name: str, fillers: set = None) -> set:
     return out
 
 
-# The name this had while it served template detection alone. Kept so the
-# three call sites below read as they always did.
-_template_signal_tokens = service_tokens
-
-
 def fetch_pp_playlists(base: str) -> list:
     """List the operator's playlists as [{"uuid": ..., "name": ...,
     "index": ...}]. Strips trailing whitespace from names because PP's
@@ -496,14 +491,14 @@ def auto_detect_template_uuid(playlists: list,
     candidates = template_candidates(playlists)
     if not candidates:
         return None
-    hint_tokens = _template_signal_tokens(hint) if hint else set()
+    hint_tokens = service_tokens(hint) if hint else set()
     if hint_tokens:
         # Most shared words wins. On a tie, the template whose name the
         # hint covers most fully: "Youth Service" is all of "Youth
         # Library" but only half of "Junior Youth Library", so a youth
         # runsheet no longer depends on which one ProPresenter lists first.
         def fit(p):
-            words = _template_signal_tokens(p.get("name", ""))
+            words = service_tokens(p.get("name", ""))
             shared = len(words & hint_tokens)
             return shared, shared / len(words) if words else 0.0
         best = max(candidates, key=fit)   # max keeps the first on a full tie
@@ -513,7 +508,7 @@ def auto_detect_template_uuid(playlists: list,
         # over one that makes the wrong claim: a name with no distinctive
         # tokens ("Library") is a catch-all and can still be used.
         catch_all = next((p for p in candidates
-                          if not _template_signal_tokens(p.get("name", ""))),
+                          if not service_tokens(p.get("name", ""))),
                          None)
         if catch_all is not None:
             return catch_all.get("uuid") or None

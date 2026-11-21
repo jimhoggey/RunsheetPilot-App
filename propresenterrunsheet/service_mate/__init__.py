@@ -57,7 +57,6 @@ from .pp_track import (
     _clean_header_name,
     _maybe_advance_from_pp,
     _parse_pp_time,
-    _pp_active_section_index,
     _pp_get_playlist_items,
 )
 from .render import (

@@ -1,12 +1,9 @@
-"""ProPresenter library routes.
+"""ProPresenter library route.
 
-Two ways to load the song library:
-  /api/library/fetch  — call PP's REST API (requires PP running with
-                        Network mode enabled)
-  /api/library/auto   — try API first, fall back to reading .pro files in
-                        the library folder saved in Settings. Called
-                        silently by the UI on launch + before each parse so
-                        the operator never has to touch the library settings."""
+/api/library/auto tries PP's REST API first, then falls back to reading
+.pro files in the library folder saved in Settings. Called silently by
+the UI on launch and before each parse, so the operator never has to
+touch the library settings."""
 
 import logging
 from pathlib import Path
@@ -22,31 +19,16 @@ bp = Blueprint("library", __name__)
 log = logging.getLogger("pp_runsheet")
 
 
-@bp.route("/api/library/fetch", methods=["POST"])
-def api_fetch_library():
-    body = request.get_json(silent=True) or {}
-    host = body.get("host") or "localhost"
-    port = body.get("port") or "50001"
-    items = _fetch_library_via_api(host, port)
-    if items is None:
-        return jsonify({"error":
-            f"Cannot connect to ProPresenter at {host}:{port}. "
-            "Make sure ProPresenter is running and Network is enabled."}), 200
-    log.info(f"Library fetch via API: {len(items)} items")
-    return jsonify({"items": items, "count": len(items)})
-
-
 def _fetch_library_via_api(host: str, port: str):
-    """Shared by /api/library/fetch and /api/library/auto. Returns the
+    """Used by /api/library/auto. Returns the
     library items list on success, None when PP is unreachable, or
     raises for unexpected errors. Picks the FIRST library returned by
     /v1/libraries — operators with multiple libraries can still point
     Settings at a specific library folder and choose disk mode."""
     import requests as req
     from ..propresenter.net import pp_base
-    # Built OUTSIDE the try: /api/library/fetch takes host/port from the
-    # request body, so this was an unguarded SSRF sink — the one raw URL
-    # build that was request-driven. pp_base validates and pins to the
+    # Built OUTSIDE the try: host/port can come from the request, so an
+    # unvalidated URL here would be an SSRF sink. pp_base validates and pins to the
     # vetted address, and UnreachableHost propagates to the app-level
     # handler as a plain refusal.
     base = pp_base(host, port)

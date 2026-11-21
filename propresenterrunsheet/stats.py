@@ -61,8 +61,6 @@ EVENTS = (
     "match_completed",
     "rematch_used",
     "matching_disabled",
-    "library_loaded",
-    "template_used",
     # creating the playlist in ProPresenter
     "playlist_created",
     "playlist_failed",
@@ -78,7 +76,6 @@ EVENTS = (
     "settings_saved",
     "update_available",
     "update_applied",
-    "service_mate_toggled",
     # failures
     "crash",
 )

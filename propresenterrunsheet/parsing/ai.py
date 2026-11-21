@@ -338,32 +338,8 @@ SERVICE_MATE_CUE_ADDENDUM = (
     "level; an item the runsheet gives no lighting for gets []."
 )
 
-# Appended after SERVICE_MATE_CUE_ADDENDUM when the church has given the
-# app its lighting guide (Service Mate settings): the usual cue for each
-# moment of a service. The runsheet still wins wherever the two differ.
-LIGHTING_GUIDE_ADDENDUM = (
-    "\n\nLIGHTING GUIDE — this church's usual lighting cues:\n---\n{GUIDE}\n---\n"
-    "THE RUNSHEET ALWAYS WINS. Wherever the runsheet writes a level for an "
-    "item — anywhere in its text, including inside a tech-team note (\"Tech "
-    "Team:Lights: house up to 60%\", \"Lights 20%\") — that level is the "
-    "step, exactly as written, with the runsheet's own moment as `when`. "
-    "Never drop it, and never replace it with the guide's.\n"
-    "The guide fills the rest. Go through its moments IN ORDER and give each "
-    "one that happens in this runsheet ONE step, on the item it happens in, "
-    "with the guide's level, and its cue as `when` — what happens in the "
-    "room (\"halfway through the song\", \"host walks on\") — never the "
-    "moment's name. Use each moment once, and only ever move FORWARD: every "
-    "moment goes on the item the one before it went on, or a later one, "
-    "never an earlier one. Skip moments this runsheet doesn't have.\n"
-    "SONGS: where the runsheet lists songs as their own items — a title, "
-    "often with no time or length of its own — the worship-set moments go "
-    "on THOSE items, in the order they are listed; not on a \"Worship\" "
-    "block before them, and never on a later item such as the preach. Such "
-    "a block takes only a moment about the set STARTING. In a worship set "
-    "the first song is praise and the rest are worship, so the \"first "
-    "worship song\" is the SECOND song of the set: both \"first worship "
-    "song starts\" and \"halfway through the first worship song\" go on it."
-)
+# The longest lighting guide kept (Service Mate settings). Planning it onto
+# a runsheet is parsing/lighting_plan.py's own call.
 LIGHTING_GUIDE_MAX_CHARS = 12000
 
 
