@@ -29,8 +29,9 @@ belong above? Three signals, in descending order of trust:
           out of the live playlist before the old headers are stripped.
           Nothing beats being told.
   ai      The alignment pass read the slide and decided (parsing/align.py).
-  name    The shipped `resolve_object` rule — every word of the item's
-          name appears in the runsheet title — run per candidate.
+  name    The same rule as templates.resolve_object — every word of the
+          item's name appears in the runsheet title — run per candidate
+          (_name_tier).
 
 (There was an "alias" tier too: phrase → slide pairs taught in Settings.
 Removed in v2.20 with the setting; the owner never used it.)
@@ -53,7 +54,6 @@ import re
 
 from .playlist import _coloured_header_for, _color_dict, asset_uuid_of
 from .playlist import ACTION_NEEDED_COLOR
-from .templates import resolve_object
 
 
 # Marks a header we could not line up with any existing item. One glyph,
