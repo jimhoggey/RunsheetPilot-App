@@ -423,16 +423,35 @@ def test_section_with_empty_items_only_emits_runsheet_header():
     assert "Some section" in payload[0]["id"]["name"]
 
 
-def test_section_match_preempts_song_fuzzy_match():
-    """A section_match (template playlist) should win over the song
-    fuzzy match (library scan) — section reuse is more deliberate."""
+def test_a_song_keeps_its_song_with_media_on_its_line():
+    """Until v2.20 a section on a song line replaced the song: the
+    playlist got the slides and never the song. The song comes first."""
     payload = build_playlist_payload([{
         "parsed": {"type": "song", "title": "Heat the house",
                    "library_match": _culture_section()},
-        # If the fuzzy match were honoured, we'd get one presentation;
-        # section expansion gives us header + 3 presentations instead.
-        "match":  {"uuid": "wrong-uuid", "name": "wrong", "index": 0},
+        "match":  {"uuid": "song-uuid", "name": "Heat the House", "index": 0},
     }])
-    assert len(payload) == 4  # header + 3 expanded media items
+    assert len(payload) == 5  # header, the song, 3 media items
     assert "Heat the house" in payload[0]["id"]["name"]
-    assert payload[1]["target_uuid"] == "pres-heat-uuid"
+    assert payload[1]["id"]["uuid"] == "song-uuid"
+    assert payload[2]["target_uuid"] == "pres-heat-uuid"
+
+
+def test_a_loop_that_opens_the_service_plays_before_a_first_song():
+    loop = {"name": "Pre loop", "uuid": "L", "target_uuid": "L", "type": "media",
+            "from_bin": True, "job": "start"}
+    qr = {**loop, "name": "QR", "uuid": "Q", "target_uuid": "Q", "job": "pick"}
+    payload = build_playlist_payload([{
+        "parsed": {"type": "song", "title": "Opener", "library_match": {
+            "header": {"name": "Opener"}, "items": [loop, qr], "from_bin": True}},
+        "match": {"uuid": "song-uuid", "name": "Opener", "index": 0},
+    }])
+    assert [e["id"]["uuid"] for e in payload[1:]] == ["L", "song-uuid", "Q"]
+
+
+def test_an_unmatched_song_with_media_is_still_action_needed():
+    payload = build_playlist_payload([{
+        "parsed": {"type": "song", "title": "New Song",
+                   "library_match": _culture_section()}, "match": None}])
+    assert payload[0]["id"]["name"].startswith("⚠ ACTION NEEDED")
+    assert len(payload) == 4

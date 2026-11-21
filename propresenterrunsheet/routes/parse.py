@@ -35,8 +35,9 @@ from ..parsing.media_plan import plan_media
 from ..parsing.openrouter import Stopped, chat
 from ..propresenter.media_bin import fetch_media_bin
 from ..propresenter.media_match import (
-    bin_folders, eligible_folders, recommended_folders, row_for_service,
-    scope as media_scope, sections as media_sections,
+    bin_entries, bin_folders, eligible_folders, folder_job,
+    place as media_place, recommended_folders, row_for_service,
+    scope as media_scope, stale as media_stale, with_bin, without_bin,
 )
 from .flags import matching_enabled
 from ..parsing.ocr import (
@@ -458,9 +459,8 @@ def _rate_limit_message(resp) -> str:
 
 
 def _bin_pick(item) -> bool:
-    """True when this item's media was placed from the bin, not a template."""
-    lm = item.get("library_match") if isinstance(item, dict) else None
-    return isinstance(lm, dict) and bool(lm.get("from_bin"))
+    """True when some of this item's media was placed from the bin."""
+    return isinstance(item, dict) and bool(bin_entries(item.get("library_match")))
 
 
 def _no_bin_media(service, title="") -> dict:
@@ -469,11 +469,15 @@ def _no_bin_media(service, title="") -> dict:
     `service` is the service's kind and `title` its dated name — sent back
     unchanged by the folder picker so placing again matches the same way.
     `saved_as` is the name of the operator's saved row, when one applied.
+    `jobs` is each folder's job; `stale` and `left` are what the folder
+    line warns about; `ai_failed` that the placement call didn't answer,
+    as opposed to answering that nothing fits.
     """
-    return {"count": 0, "folders": [], "source": "none",
+    return {"count": 0, "folders": [], "jobs": {}, "source": "none",
             "service": str(service or "").strip(),
             "title": str(title or "").strip(), "saved_as": "",
-            "bin_folders": [], "matched": []}
+            "bin_folders": [], "matched": [], "stale": [],
+            "left": {"announcements": 0, "preach": 0}, "ai_failed": False}
 
 
 def place_bin_media(items: list, base: str, settings: dict, or_key: str,
@@ -484,10 +488,11 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
     top of propresenter/media_match.py:
 
         1. narrow the bin's folders to those that may be this service's
-        2. the model picks the folders (unless the operator saved some)
+        2. the model picks the folders and their jobs (unless the operator
+           saved some)
         3. narrow to those folders' files
-        4. the model places files under items
-        5. every pick is checked
+        4. the model places the announcements and other files under items
+        5. every pick is checked, and every folder's job done
 
     `service` is the KIND of service ("Summit"), `title` the dated name
     ("Summit 2026 — Sunday Night"): matched on the title, a Sunday row and
@@ -516,7 +521,8 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
     had = any(_bin_pick(it) for it in items)
     # The steps see the runsheet as though the bin had placed nothing yet;
     # `items` itself is only changed once there is an answer.
-    work = [{**it, "library_match": None} if _bin_pick(it) else it for it in items]
+    work = [{**it, "library_match": without_bin(it.get("library_match"))}
+            if _bin_pick(it) else it for it in items]
     try:
         rows = settings.get("media_folders_by_service") or []
         if playlists is None:
@@ -538,27 +544,34 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
                 or_key, model, title=title)
         sc = media_scope(bin_items, service, work, rows, known,   # 3
                          suggested=suggested, title=title)
-        picks = plan_media(work, sc["assets"], or_key, model)     # 4
-        if picks is None and had:
+        answer = plan_media(work, sc["assets"], or_key, model,    # 4
+                            title=title or service,
+                            today=_dt.date.today().isoformat())
+        if answer is None and had:
             log.warning("Media plan unanswered; the bin's earlier picks stay")
             return None
-        placed = media_sections(work, picks, sc["assets"])        # 5
+        placed, left = media_place(work, (answer or {}).get("media"),  # 5
+                                   sc["assets"], sc["fixed"])
     except Exception:
         log.exception("Media-bin matching failed; nothing placed or removed")
         return None if had else _no_bin_media(service, title)
-    for it in items:
-        if _bin_pick(it):
-            it["library_match"] = None
-    for i, section in placed.items():
-        items[i]["library_match"] = section
+    for i, it in enumerate(items):
+        it["library_match"] = with_bin(it, placed.get(i, []))
     log.info("Media bin: %d of %d items got media from %d folder(s), %s: %s",
              len(placed), len(items), len(sc["folders"]), sc["source"],
-             ", ".join(repr(log_safe(f, 60)) for f in sc["folders"][:8]))
+             ", ".join(f"{log_safe(f, 60)!r} ({j})" for f, j in
+                       list(sc["jobs"].items())[:8]))
     return {**_no_bin_media(service, title),
             "count": len(placed), "folders": sc["folders"],
-            "source": sc["source"], "saved_as": sc["service"],
-            "bin_folders": bin_folders(bin_items),
-            "matched": recommended_folders(bin_items, service, rows, known)}
+            "jobs": sc["jobs"], "source": sc["source"],
+            "saved_as": sc["service"],
+            # With the job each name suggests: what the picker's dropdown
+            # starts on for a folder the operator ticks.
+            "bin_folders": [{**f, "job": folder_job(f["name"])}
+                            for f in bin_folders(bin_items)],
+            "matched": recommended_folders(bin_items, service, rows, known),
+            "stale": media_stale(answer, sc["assets"])[:10], "left": left,
+            "ai_failed": answer is None and bool(sc["assets"])}
 
 
 @bp.route("/api/media/place", methods=["POST"])
@@ -1183,7 +1196,11 @@ def _upload_and_parse(stop: threading.Event):
                 # Defensive: some models try to be helpful and return a
                 # {"name": "Culture"} dict instead of the bare string.
                 name = (raw_match.get("name") or "").strip()
-            section = resolve_section(name, sections) if name else None
+            # Never on a song, the same rule as title matching below: a
+            # tagged song skipped the song match, and the playlist got the
+            # template's slides (often last week's songs) instead of it.
+            section = (resolve_section(name, sections)
+                       if name and it.get("type") != "song" else None)
             if section:
                 it["library_match"] = section
                 resolved_section_hits += 1
@@ -1422,6 +1439,10 @@ def api_match():
     # free-tier account only gets 50 AI parses a day, so spending one to
     # pick up a rename in PP would be the wrong trade.
     if body.get("rematch_template"):
+        # Re-match recomputes TEMPLATE links; the bin's files ride along,
+        # put back after (a Re-match used to wipe them and say nothing).
+        kept = [bin_entries(it.get("library_match")) if isinstance(it, dict)
+                else [] for it in parsed]
         settings = load_settings()
         base = pp_base(body.get("host") or settings.get("pp_host"),
                        body.get("port") or settings.get("pp_port"))
@@ -1463,6 +1484,9 @@ def api_match():
             n = link_items_to_template(parsed, base, tmpl,
                                        aliases=settings.get("template_aliases"),
                                        force=True)
+        for it, entries in zip(parsed, kept):
+            if entries:
+                it["library_match"] = with_bin(it, entries)
         log.info("Re-match: %d/%d items linked to the template", n,
                  len(parsed))
         stats.track("rematch_used", linked=n, items=len(parsed))
@@ -1476,12 +1500,13 @@ def api_match():
         # build_playlist_payload can expand it. Confidence 1.0 — the LLM
         # had the section names in front of it and we already validated.
         lib = item.get("library_match")
-        if isinstance(lib, dict) and lib.get("header") and lib.get("items") is not None:
+        if (isinstance(lib, dict) and lib.get("header")
+                and lib.get("items") is not None and item.get("type") != "song"):
             results.append({"parsed": item, "match": lib, "confidence": 1.0})
             continue
-        # Priority 2: existing song-only fuzzy match against whatever
-        # library the UI sent in this request — unchanged behaviour for
-        # songs the LLM didn't pre-link.
+        # Priority 2: song-only fuzzy match against whatever library the UI
+        # sent in this request. Always for a song, even one with media from
+        # the bin: that media plays after the song, never instead of it.
         if item.get("type") == "song" and library:
             match, conf = fuzzy_match(item.get("title", ""), library, threshold)
         else:

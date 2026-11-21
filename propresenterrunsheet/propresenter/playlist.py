@@ -144,6 +144,17 @@ def _coloured_header_for(p: dict) -> dict:
     }
 
 
+def _presentation(eff: dict) -> dict:
+    """A matched song or single reused slide, as a playlist entry.
+    is_hidden / is_pco are required by the PP API; we never produce hidden
+    items and don't integrate with Planning Center, so both stay False."""
+    pres_uuid = eff.get("uuid", "")
+    return {"id": {"uuid": pres_uuid, "name": eff.get("name", ""),
+                   "index": eff.get("index", 0)},
+            "type": "presentation", "target_uuid": pres_uuid,
+            "is_hidden": False, "is_pco": False}
+
+
 def build_playlist_payload(matched: list) -> list:
     """Assemble the items list to PUT to PP's /v1/playlist/{uuid}.
 
@@ -180,112 +191,74 @@ def build_playlist_payload(matched: list) -> list:
         p = mi.get("parsed") or {}
         m = mi.get("match")
         lib = p.get("library_match")
+        song = p.get("type") == "song"
+        # A song's own match — never a section: a song's match is the .pro
+        # file, whatever media sits on its line.
+        found = (m if song and isinstance(m, dict) and m.get("uuid")
+                 and not m.get("header") else None)
+        # Every runsheet item gets a labelled slot in PP, header FIRST
+        # (field report 2026-08-04: "every item needs a header, and then
+        # the matched or reused section is if we can populate that header
+        # or not"). An unmatched song's is a red ACTION NEEDED placeholder
+        # so the volunteer notices and adds it by hand.
+        items.append(_action_needed(p) if song and not found
+                     else _coloured_header_for(p))
 
-        # Section expansion — runsheet's own header (so "Culture: Jamie
-        # and Alex — 6:45 PM" keeps its context) followed by the template
-        # section's items echoed in PP's native shape.
-        #
-        # PP-API rules locked in by live testing:
-        #   • `id.uuid` mirrors the ASSET UUID (not the template's
-        #     playlist-item UUID — PP 404s on that). Asset UUID location
-        #     depends on `type`:
-        #       media        → top-level `target_uuid`
-        #       presentation → `presentation_info.presentation_uuid`
-        #       (loops are presentation + `duration`)
-        #   • Preserve the original `type` — media UUID sent as
-        #     `type=presentation` gets looked up in the .pro library
-        #     and 404s.
-        #   • For loops, preserve `presentation_info` AND `duration` so
-        #     PP keeps the loop behaviour in the new playlist.
+        # Section expansion — the template section's or the bin's items
+        # under the runsheet's own header (so "Culture: Jamie and Alex —
+        # 6:45 PM" keeps its context), echoed in PP's native shape. On a
+        # song line the song comes first, after only a loop that opens
+        # the service: until v2.20 the section replaced the song.
         if (isinstance(lib, dict)
                 and lib.get("header")
                 and isinstance(lib.get("items"), list)):
-            items.append(_coloured_header_for(p))
-            for ti in lib["items"]:
-                pinfo = ti.get("presentation_info") or {}
-                # Asset UUID: presentation_info.presentation_uuid for
-                # presentation + loop items, target_uuid for media. Fall
-                # back to the bare uuid only for synthetic test fixtures
-                # that lack both. Shared with update mode — see
-                # asset_uuid_of's docstring for why it is one function.
-                asset = asset_uuid_of(ti)
-                item_type = ti.get("type") or "presentation"
-                entry = {
-                    "id":          {"uuid":  asset,
-                                    "name":  ti.get("name", ""),
-                                    "index": ti.get("index", 0)},
-                    "type":        item_type,
-                    # PP's PUT 400s with "missing field `target_uuid`"
-                    # when this key is absent — even on presentation /
-                    # loop items where PP's own GET omits it. Always
-                    # emit; empty string is fine for non-media.
-                    "target_uuid": ti.get("target_uuid", "") or "",
-                    "is_hidden":   False, "is_pco": False,
-                }
-                # Echo the optional PP-shape fields when present so loops
-                # keep their behaviour + presentation items keep their
-                # .pro UUID + arrangement reference. Note: PP's REST GET
-                # sometimes omits `duration` on the read-back even when
-                # the loop is correctly set in the PP UI — verified that
-                # loops do work end-to-end in the desktop app despite the
-                # API not echoing the value back.
-                if pinfo:
-                    entry["presentation_info"] = pinfo
-                if ti.get("duration") is not None:
-                    entry["duration"] = ti["duration"]
-                if ti.get("destination"):
-                    entry["destination"] = ti["destination"]
-                items.append(entry)
-            continue
-
-        # Single-presentation reuse (legacy shape) — one presentation entry.
-        if isinstance(lib, dict) and lib.get("uuid"):
-            eff = lib
-        elif p.get("type") == "song" and m and m.get("uuid"):
-            eff = m
-        else:
-            eff = None
-
-        if eff:
-            # Header FIRST, then the content under it. Every runsheet item
-            # gets a labelled slot in PP — a matched song used to replace
-            # its header with the bare presentation, so the operator lost
-            # the runsheet's own wording, timing and colour for that line.
-            # (Field report 2026-08-04: "every item needs a header, and
-            # then the matched or reused section is if we can populate
-            # that header or not.")
-            items.append(_coloured_header_for(p))
-            pres_uuid = eff.get("uuid", "")
-            # is_hidden / is_pco are required by the PP API. We never produce
-            # hidden items and don't integrate with Planning Center Online —
-            # both stay False on every item we send.
-            items.append({
-                "id":          {"uuid":  pres_uuid,
-                                "name":  eff.get("name", ""),
-                                "index": eff.get("index", 0)},
-                "type":        "presentation",
-                "target_uuid": pres_uuid,
-                "is_hidden":   False, "is_pco": False,
-            })
-        elif p.get("type") == "song":
-            # Unmatched song → red ACTION NEEDED placeholder so the volunteer
-            # notices and can manually add the song in PP. Uses the shared
-            # header_label so it stays as short as every other header —
-            # this branch used to append the raw notes blob independently,
-            # which is precisely how the two paths drifted apart.
-            label = f"⚠ ACTION NEEDED — {header_label(p)}"
-            items.append({
-                "id":           {"uuid": "", "name": label, "index": 0},
-                "type":         "header",
-                "target_uuid":  "",
-                "is_hidden":    False, "is_pco": False,
-                "header_color": _color_dict(ACTION_NEEDED_COLOR),
-            })
-        else:
-            # Non-song, no match → coloured header from the runsheet's own
-            # labelling. Make scripture items visually distinctive in PP —
-            # operator uses the green colour + book emoji to spot them, then
-            # opens PP's built-in Bible feature manually (PP's REST API has
-            # no scripture endpoints in v7.21).
-            items.append(_coloured_header_for(p))
+            entries = [_echo(ti) for ti in lib["items"] if isinstance(ti, dict)]
+            if found:
+                lead = next((k for k, ti in enumerate(lib["items"])
+                             if not (isinstance(ti, dict)
+                                     and ti.get("job") == "start")),
+                            len(lib["items"]))
+                entries.insert(lead, _presentation(found))
+            items.extend(entries)
+        elif isinstance(lib, dict) and lib.get("uuid"):
+            # Single-presentation reuse (legacy shape).
+            items.append(_presentation(lib))
+        elif found:
+            items.append(_presentation(found))
     return items
+
+
+def _action_needed(p: dict) -> dict:
+    """The red header for a song the library has no match for. Uses the
+    shared header_label so it stays as short as every other header."""
+    return {"id": {"uuid": "", "name": f"⚠ ACTION NEEDED — {header_label(p)}",
+                   "index": 0},
+            "type": "header", "target_uuid": "",
+            "is_hidden": False, "is_pco": False,
+            "header_color": _color_dict(ACTION_NEEDED_COLOR)}
+
+
+def _echo(ti: dict) -> dict:
+    """A template or bin item in PP's native shape. Rules locked in by
+    live testing:
+      • `id.uuid` mirrors the ASSET uuid (not the template's playlist-item
+        uuid — PP 404s on that); asset_uuid_of knows where it lives.
+      • The original `type` is kept: a media uuid sent as
+        `type=presentation` is looked up in the .pro library and 404s.
+      • `target_uuid` is always sent — PP's PUT 400s without it, even on
+        presentation items where PP's own GET omits it.
+      • `presentation_info`, `duration` and `destination` are echoed when
+        present, so loops keep looping (PP's GET sometimes omits
+        `duration` even when the loop is set; loops still work)."""
+    entry = {"id": {"uuid": asset_uuid_of(ti), "name": ti.get("name", ""),
+                    "index": ti.get("index", 0)},
+             "type": ti.get("type") or "presentation",
+             "target_uuid": ti.get("target_uuid", "") or "",
+             "is_hidden": False, "is_pco": False}
+    if ti.get("presentation_info"):
+        entry["presentation_info"] = ti["presentation_info"]
+    if ti.get("duration") is not None:
+        entry["duration"] = ti["duration"]
+    if ti.get("destination"):
+        entry["destination"] = ti["destination"]
+    return entry

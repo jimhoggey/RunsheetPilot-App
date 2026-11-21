@@ -1629,6 +1629,16 @@ body { animation: page-in .4s ease both; }
 .folder-row:hover { background: var(--acc-soft); }
 .folder-row span:first-of-type { flex: 1; overflow-wrap: anywhere; }
 .folder-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Each ticked folder's job. Only shown once the folder is ticked: the job
+   of a folder that isn't used is noise. */
+.folder-job { flex: 0 0 9.5rem; width: 9.5rem; margin: 0; padding: 4px 8px; font-size: 0.78rem; }
+.folder-row .folder-count { min-width: 4.5em; text-align: right; }
+/* What the folder line warns about: an announcement that looks past, a
+   screen a line asks for that nobody made, files with no line to go to. */
+.folder-warnings {
+  margin: var(--s-1) 0 0; padding: 0 0 0 1.2em;
+  font-size: 0.8rem; line-height: 1.5; color: var(--org);
+}
 /* margin-left: auto keeps Save on the right when "Let AI choose" is hidden
    (nothing saved yet), which leaves space-between with a lone child. */
 .folder-actions-right { display: flex; gap: 10px; margin-left: auto; }

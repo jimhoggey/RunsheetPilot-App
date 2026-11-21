@@ -17,6 +17,7 @@ numbers, and every number is checked against that list.
 An operator's saved folders for a service are final, so the caller
 skips this call entirely when there are some (owner, 30 Oct 2026).
 """
+from ..propresenter.media_match import JOBS
 from .ask import ask_json
 from .media_plan import _item_row
 
@@ -51,14 +52,23 @@ PROMPT = (
     "— Summit's folders, not the weekly youth service's.\n"
     "The next step chooses the individual files and leaves out any that "
     "don't fit, so include a folder whenever it is this service's.\n"
-    "Answer with JSON only: {\"folders\": [0, 3]}"
+    "Give each folder you include its job:\n"
+    "- \"every\": this week's announcements; every file goes in\n"
+    "- \"preach\": the preach or sermon screens\n"
+    "- \"start\": plays before the service starts, like a pre-service loop\n"
+    "- \"end\": plays after it, like an end-of-service loop\n"
+    "- \"pick\": anything else; only files that fit a line are used\n"
+    "Answer with JSON only: "
+    "{\"folders\": [{\"n\": 0, \"job\": \"pick\"}, {\"n\": 3, \"job\": \"start\"}]}"
 )
 
 
 def plan_folders(service: str, items: list, folders: list, or_key: str,
-                 configured_model: str, title: str = "", post=None) -> list:
-    """The folder names the model chose, in its order, de-duplicated and
-    held to `folders` ([{"name", "count"}], from eligible_folders).
+                 configured_model: str, title: str = "", post=None) -> dict:
+    """{folder name: job} for the folders the model chose, in its order,
+    held to `folders` ([{"name", "count"}], from eligible_folders). A job
+    that isn't one of media_match.JOBS comes back "", and the folder's
+    name then decides it.
 
     `service` is the kind ("Summit"), `title` the dated name ("Summit 2026
     — Saturday Night") — the title is what tells Friday's folder from
@@ -67,7 +77,7 @@ def plan_folders(service: str, items: list, folders: list, or_key: str,
     """
     shown = (folders or [])[:_MAX_FOLDERS]
     if not (shown and or_key and ((service or "").strip() or items)):
-        return []
+        return {}
     listing = "\n".join(f"{i}. {f['name']} ({f['count']} files)"
                         for i, f in enumerate(shown))
     lines = "\n".join(f"- {_item_row(it)}" for it in (items or [])[:_MAX_ITEMS]
@@ -78,10 +88,9 @@ def plan_folders(service: str, items: list, folders: list, or_key: str,
                     or_key, configured_model, label="Folder plan",
                     timeout_s=45, post=post)
     picks = (data or {}).get("folders")
-    out = []
-    for n in picks if isinstance(picks, list) else []:
+    out = {}
+    for p in picks if isinstance(picks, list) else []:
+        n, job = (p.get("n"), p.get("job")) if isinstance(p, dict) else (p, "")
         if isinstance(n, int) and not isinstance(n, bool) and 0 <= n < len(shown):
-            name = shown[n]["name"]
-            if name not in out:
-                out.append(name)
+            out.setdefault(shown[n]["name"], job if job in JOBS else "")
     return out

@@ -17,7 +17,7 @@ from ..parsing.models import (
     free_model_ids, is_router, measured_costs, pick_default_model,
     pick_paid_model, reasoning_for, recommended_models, usable_models,
 )
-from ..propresenter.media_match import tokens as service_words
+from ..propresenter.media_match import JOBS, tokens as service_words
 from ..propresenter.paths import find_library_dirs, find_pp_root
 from ..settings import load_settings, save_settings
 from .. import stats
@@ -236,8 +236,11 @@ def post_settings():
 
 @bp.route("/api/media_folders", methods=["POST"])
 def post_media_folders():
-    """Save which Media-bin folders one service draws on — the folder
-    picker under Step 1. {"service": "Summit", "folders": [...]}.
+    """Save which Media-bin folders one service draws on, and each one's
+    job — the folder picker under Step 1.
+    {"service": "Summit", "folders": [...], "jobs": {folder: job}}.
+    A job that isn't one of media_match.JOBS is dropped, and the folder's
+    name decides it instead.
 
     Upserts that one service's row in settings["media_folders_by_service"]
     rather than taking the whole list from the browser, and checks every
@@ -264,8 +267,11 @@ def post_media_folders():
     rows = [r for r in load_settings().get("media_folders_by_service") or []
             if isinstance(r, dict)
             and service_words(str(r.get("match") or "")) != words]
+    raw = body.get("jobs")
+    jobs = {f: raw[f] for f in folders
+            if isinstance(raw, dict) and raw.get(f) in JOBS}
     if folders:
-        rows.append({"match": service, "folders": folders})
+        rows.append({"match": service, "folders": folders, "jobs": jobs})
     save_settings({"media_folders_by_service": rows})
     return jsonify({"ok": True, "rows": rows})
 

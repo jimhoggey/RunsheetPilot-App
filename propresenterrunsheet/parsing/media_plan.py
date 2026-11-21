@@ -19,17 +19,24 @@ PROMPT = (
     "Below are a church service's runsheet items, numbered, and the media "
     "files available for it in ProPresenter, numbered. The files are named "
     "by whoever made them, so match on meaning: \"WTSSF_Summit2026_Screen_"
-    "QR_1920x1080\" is the QR screen, \"...Opener...\" is the opener film.\n"
-    "Say which item each file belongs to. Most files belong somewhere, but "
-    "a file you can't place confidently is better left out than guessed — a "
-    "wrong file on screen is worse than none. Leave an item out if nothing "
-    "fits it; give an item two or three files only when they really all "
-    "belong to that one segment.\n"
-    "A file may be used in more than one item when it genuinely belongs in "
-    "each — a hold screen, a loop, a lower third or a QR slide can recur "
-    "through a service. A film, a sermon bumper or anything made for one "
-    "moment belongs to one item only; repeating it is a mistake.\n"
-    "Answer with JSON only: {\"media\": [{\"media\": 0, \"item\": 2}, ...]}"
+    "QR_1920x1080\" is the QR screen, \"...Opener...\" is the opener film. "
+    "\"has:\" lists the screens an item already has from the service's "
+    "template.\n"
+    "Files marked MUST PLACE are this week's announcements: every one goes "
+    "in. Put each under the item it belongs to — the item that names it or "
+    "its event (a Junior Youth screen under \"Junior Youth Out\"), else the "
+    "announcements item.\n"
+    "Place an unmarked file only where it clearly belongs: a wrong file on "
+    "screen is worse than none. Leave an item out if nothing fits it. A "
+    "hold screen, a loop, a lower third or a QR slide can recur through a "
+    "service; a film, a sermon bumper or anything made for one moment "
+    "belongs to one item only.\n"
+    "The tech notes are hints, not the full list: an item with no note can "
+    "still have a file that fits it.\n"
+    "Also list, by number, as \"stale\": files whose name says they are for "
+    "a date or event that has passed by the service date.\n"
+    "Answer with JSON only: {\"media\": [{\"media\": 0, \"item\": 2}], "
+    "\"stale\": [5]}"
 )
 
 
@@ -46,32 +53,57 @@ def _item_row(it: dict) -> str:
     return f"{title} — {note}" if note else title
 
 
+def _line_row(it: dict) -> str:
+    """An item as the placement call sees it: title, note, and the
+    template screens it already has — so the model neither doubles one
+    up nor reports one as missing."""
+    lm = it.get("library_match")
+    has = [str(e.get("name") or "") for e in (lm or {}).get("items") or []
+           if isinstance(e, dict)] if isinstance(lm, dict) else []
+    has = ", ".join(n for n in has if n)[:160]
+    return f"{_item_row(it)} (has: {has})" if has else _item_row(it)
+
+
 def _media_row(a: dict) -> str:
     """The file, under the folder it sits in. The folder is the operator's
     own filing — "Summit 2026", "Pre-service loops" — and is often the
     only thing that says what a file like WTSSF_B2_v3 is for."""
     name = a.get("name") or ""
     folder = (a.get("folder") or "").strip()
-    return f"{folder} / {name}" if folder else name
+    row = f"{folder} / {name}" if folder else name
+    return f"{row} — MUST PLACE" if a.get("job") == "every" else row
 
 
 def plan_media(items: list, offered: list, or_key: str, configured_model: str,
-               post=None):
-    """[{"media": n, "item": i}, …] — the model's pairings, unvalidated.
+               title: str = "", today: str = "", post=None):
+    """{"media": [{"media", "item"}], "stale": [n]} — the model's answer,
+    unvalidated (media_match.place and media_match.notes hold it to what
+    was offered).
 
-    [] when there is nothing to match or no key, or the model answered and
-    nothing fits; None when the model DIDN'T answer (no model, the call
-    failed, no JSON). The playlist is then built with each item's own
-    coloured header and no media either way — but placing media again
-    keeps what is already placed on None, and only replaces it on a real
-    answer (routes/parse.place_bin_media).
+    No "missing screen" question: asked which screens a line's note wants
+    that nothing supplies, GPT-4.1 mini named a screen it had just placed
+    on that very line (21 Nov 2026), and a wrong red header on a Sunday
+    is worse than none. The office keeps the folders current; the model
+    only says where each file goes.
+
+    Empty lists when there is nothing to place or no key, or the model
+    answered and nothing fits; None when the model DIDN'T answer (no
+    model, the call failed, no JSON). Placing media again keeps what is
+    already placed on None, and only replaces it on a real answer
+    (routes/parse.place_bin_media).
+
+    `title` is the service's dated name and `today` the date, which is
+    how a file for "Young Adults 29th Nov" can be told apart from a past
+    event.
     """
+    empty = {"media": [], "stale": []}
     if not (items and offered and or_key):
-        return []
-    data = ask_json(f"{PROMPT}\n\nRUNSHEET:\n{_rows(_item_row, items)}\n\n"
+        return empty
+    data = ask_json(f"{PROMPT}\n\nSERVICE: {str(title or '').strip()[:200]}\n"
+                    f"TODAY: {today}\n\nRUNSHEET:\n{_rows(_line_row, items)}\n\n"
                     f"MEDIA:\n{_rows(_media_row, offered)}",
                     or_key, configured_model, label="Media plan", post=post)
     if data is None:
         return None
-    picks = data.get("media")
-    return picks if isinstance(picks, list) else []
+    return {k: data.get(k) if isinstance(data.get(k), list) else []
+            for k in empty}

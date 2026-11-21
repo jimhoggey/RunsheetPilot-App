@@ -30,11 +30,25 @@ function _noTemplate() {
 // `media_from_bin` (routes/parse.place_bin_media). `source` says who chose
 // the folders: 'chosen' (saved for this service), 'suggested' (the AI),
 // 'matched' (folder names), 'none'. `service` and `title` go back to the
-// server unchanged when the folder picker places media again.
+// server unchanged when the folder picker places media again. `jobs` is
+// each folder's job; `stale`, `left` and `ai_failed` are what the folder
+// line warns about.
 function _noBinMedia() {
-  return {count: 0, folders: [], source: 'none', service: '', title: '',
-          saved_as: '', bin_folders: [], matched: []};
+  return {count: 0, folders: [], jobs: {}, source: 'none', service: '', title: '',
+          saved_as: '', bin_folders: [], matched: [], stale: [],
+          left: {announcements: 0, preach: 0}, ai_failed: false};
 }
+// The five folder jobs (propresenter/media_match.JOBS), as the operator
+// reads them.
+const FOLDER_JOBS = {
+  every: 'every file', preach: 'under the preach', start: 'plays first',
+  end: 'plays last', pick: 'only what fits',
+};
+// Own keys only: a job from the server or the AI is looked up here, and
+// "constructor" must not read as a job.
+// (hasOwnProperty, not Object.hasOwn: older booth Macs' WebKit lacks it.)
+const _jobLabel = job =>
+  (Object.prototype.hasOwnProperty.call(FOLDER_JOBS, job) ? FOLDER_JOBS[job] : '');
 let mediaFromBin = _noBinMedia();
 // True while the folder picker's Save is placing media again. Create waits
 // for it (_syncCreateButton): building the playlist mid-placement would
@@ -1046,9 +1060,30 @@ function _setBanner(el, html) {
 // Which Media-bin folders this runsheet's media came from and who chose
 // them — the answer to "why did it pick THAT slide?". Shown once a parse
 // has read the bin and found folders in it; nothing to pick otherwise.
-function _folderNames(names) {
-  const shown = names.slice(0, 2).map(n => `<strong>${escapeHtml(n)}</strong>`);
-  return shown.join(', ') + (names.length > 2 ? ` +${names.length - 2} more` : '');
+function _folderNames(names, jobs = {}) {
+  const shown = names.slice(0, 3).map(n => `<strong>${escapeHtml(n)}</strong>` +
+    (_jobLabel(jobs[n]) ? ` (${_jobLabel(jobs[n])})` : ''));
+  return shown.join(', ') + (names.length > 3 ? ` +${names.length - 3} more` : '');
+}
+
+// The folder line's warnings, one per line: what the operator should check
+// in ProPresenter before the service. Names come from ProPresenter, so
+// every one is escaped.
+function _folderWarnings(m) {
+  const out = [];
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  if (m.ai_failed) out.push('The AI didn’t answer, so only announcements, preach ' +
+    'and loops were placed. Save in the folder picker to try again.');
+  if ((m.stale || []).length) out.push(`May be out of date: ${m.stale.map(
+    s => `<strong>${escapeHtml(s)}</strong>`).join(', ')}. Still in the playlist; ` +
+    'remove it in ProPresenter if it’s finished.');
+  const left = m.left || {};
+  if (left.announcements) out.push(`${plural(left.announcements, 'announcement',
+    'announcements')} had no announcements line to go under.`);
+  if (left.preach) out.push(`${plural(left.preach, 'preach screen', 'preach screens')} ` +
+    'weren’t placed: there’s no preach line in this runsheet.');
+  return out.length
+    ? `<ul class="folder-warnings">${out.map(w => `<li>⚠ ${w}</li>`).join('')}</ul>` : '';
 }
 
 function _renderFolderVerdict() {
@@ -1058,11 +1093,11 @@ function _renderFolderVerdict() {
   const service = escapeHtml(m.saved_as || m.service || 'this service');
   const items = m.count
     ? ` — media for ${m.count} item${m.count === 1 ? '' : 's'}`
-    : ' — nothing in them fit this runsheet';
+    : m.ai_failed ? '' : ' — nothing in them fit this runsheet';
   const lines = {
-    chosen:    ['📁', `From your <strong>${service}</strong> folders: ${_folderNames(m.folders)}${items}`],
-    suggested: ['✨', `AI picked ${_folderNames(m.folders)} for <strong>${service}</strong>${items}`],
-    matched:   ['📁', `Matched ${_folderNames(m.folders)} by name for <strong>${service}</strong>${items}`],
+    chosen:    ['📁', `From your <strong>${service}</strong> folders: ${_folderNames(m.folders, m.jobs)}${items}`],
+    suggested: ['✨', `AI picked ${_folderNames(m.folders, m.jobs)} for <strong>${service}</strong>${items}`],
+    matched:   ['📁', `Matched ${_folderNames(m.folders, m.jobs)} by name for <strong>${service}</strong>${items}`],
     none:      ['📁', `None of your Media folders look like <strong>${service}</strong>`],
   };
   // matchedItems too: the line used to appear while the match call was
@@ -1074,7 +1109,8 @@ function _renderFolderVerdict() {
   _setBanner(el,
     `<button type="button" class="notice notice-info template-banner" ` +
     `onclick="openFolderPicker()"><span><span aria-hidden="true">${glyph}</span> ${msg}</span>` +
-    `<span class="template-banner-action">${m.source === 'none' ? 'Pick folders' : 'Change'} ›</span></button>`);
+    `<span class="template-banner-action">${m.source === 'none' ? 'Pick folders' : 'Change'} ›</span></button>` +
+    _folderWarnings(m));
 }
 
 // ─── The folder picker ────────────────────────────────────────────────────
@@ -1083,12 +1119,20 @@ function _renderFolderVerdict() {
 // the service (POST /api/media_folders) and places this runsheet's media
 // again from them (POST /api/media/place) — no second parse.
 let _folderPicks = new Set();
+// Each folder's job in the picker: what this runsheet used, else the job
+// its name suggests (bin_folders[].job, from the server's one rule).
+let _folderJobs = new Map();
 
 function openFolderPicker() {
   const m = mediaFromBin;
   const seed = _savedFolders
-    || {service: m.saved_as || m.service || '', folders: m.folders || []};
+    || {service: m.saved_as || m.service || '', folders: m.folders || [], jobs: m.jobs || {}};
   _folderPicks = new Set(seed.folders);
+  _folderJobs = new Map((m.bin_folders || []).map(
+    f => [f.name, _jobLabel(f.job) ? f.job : 'pick']));
+  for (const [name, job] of Object.entries(seed.jobs || {})) {
+    if (_jobLabel(job)) _folderJobs.set(name, job);
+  }
   document.getElementById('folders-service').value = seed.service;
   document.getElementById('folders-filter').value = '';
   _folderError('');
@@ -1159,14 +1203,29 @@ function _renderFolderList() {
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = _folderPicks.has(name);
-      box.onchange = () => { box.checked ? _folderPicks.add(name) : _folderPicks.delete(name); };
       const label = document.createElement('span');
       label.textContent = name;
       const count = document.createElement('span');
       count.className = 'folder-count';
       const n = counts.get(name);
       count.textContent = n == null ? '' : `${n} file${n === 1 ? '' : 's'}`;
-      row.append(box, label, count);
+      const job = document.createElement('select');
+      job.className = 'folder-job';
+      job.setAttribute('aria-label', `What to do with ${name}`);
+      for (const [value, text] of Object.entries(FOLDER_JOBS)) {
+        job.append(new Option(text, value));
+      }
+      job.value = _folderJobs.get(name) || 'pick';
+      // Invisible rather than hidden while unticked, so ticking a folder
+      // doesn't reflow the row under the pointer.
+      const showJob = () => { job.style.visibility = box.checked ? '' : 'hidden'; };
+      showJob();
+      job.onchange = () => _folderJobs.set(name, job.value);
+      box.onchange = () => {
+        box.checked ? _folderPicks.add(name) : _folderPicks.delete(name);
+        showJob();
+      };
+      row.append(box, label, job, count);
       group.append(row);
     }
     list.append(group);
@@ -1188,6 +1247,7 @@ async function saveFolderPicker(forget) {
   const service = forget
     ? (_savedFolders?.service || mediaFromBin.saved_as || typed) : typed;
   const folders = forget ? [] : [..._folderPicks];
+  const jobs = Object.fromEntries(folders.map(f => [f, _folderJobs.get(f) || 'pick']));
   if (!forget && !folders.length) {
     _folderError('Tick at least one folder — or choose “Forget saved folders”.');
     return;
@@ -1198,7 +1258,7 @@ async function saveFolderPicker(forget) {
   try {
     const r = await fetch('/api/media_folders', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service, folders}),
+      body: JSON.stringify({service, folders, jobs}),
     });
     const saved = await r.json().catch(() => ({}));
     if (!r.ok || !saved.ok) {
@@ -1211,7 +1271,7 @@ async function saveFolderPicker(forget) {
   } finally {
     btn.disabled = false;
   }
-  _savedFolders = {service, folders};
+  _savedFolders = {service, folders, jobs};
   closeFolderPicker();
   await _placeBinMediaAgain(service, forget);
 }
@@ -2350,9 +2410,14 @@ function renderResults() {
     if (p.type === 'song') total++;
 
     let matchCell, scoreCell;
+    // Folder files on this line — they ride along with a song too.
+    const lm = p.library_match;
+    const fromBin = lm && Array.isArray(lm.items)
+      ? lm.items.filter(e => e && (e.from_bin || lm.from_bin)).length : 0;
     if (p.type === 'song') {
       if (m) {
-        matchCell  = `<span class="match-ok">${escapeHtml(m.name)}</span>`;
+        matchCell  = `<span class="match-ok">${escapeHtml(m.name)}</span>` +
+          (fromBin ? ` <span class="match-ok">+ 📁 ${fromBin}</span>` : '');
         scoreCell  = `<span class="score">${Math.round(conf*100)}%</span>`;
         matched++;
       } else {
@@ -2366,10 +2431,16 @@ function renderResults() {
       // SECTION (e.g. runsheet "Culture Moment" → template section
       // "Culture" with 3 media items). Operator sees the section name
       // and how many slides will be interpolated into the playlist.
-      const n = m.items.length;
-      matchCell = `<span class="match-ok">♻ ${escapeHtml(m.header.name || '')} <span style="color:var(--muted);font-weight:400">(${n} slide${n!==1?'s':''})</span></span>`;
+      // ♻ is the template's, 📁 the folders': "why is THAT slide here"
+      // has two different answers, so the table gives both.
+      const tpl = Math.max(0, m.items.length - fromBin);
+      const muted = t => `<span style="color:var(--muted);font-weight:400">${t}</span>`;
+      matchCell = [
+        tpl ? `♻ ${escapeHtml(m.header.name || '')} ${muted(`(${tpl} slide${tpl !== 1 ? 's' : ''})`)}` : '',
+        fromBin ? `📁 ${muted(`${fromBin} from folders`)}` : '',
+      ].filter(Boolean).map(t => `<span class="match-ok">${t}</span>`).join(' ');
       scoreCell = `<span class="score">${Math.round((conf || 1) * 100)}%</span>`;
-      reused++;
+      if (tpl) reused++;
     } else if (m && m.uuid) {
       // Single-presentation reuse (older shape, still supported) —
       // one library presentation linked at parse time.
