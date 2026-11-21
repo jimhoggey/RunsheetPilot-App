@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 
-VERSION = "2.19.0"
+VERSION = "2.20.0"
 APP_NAME = "Runsheet Pilot"
 
 # Release notes, newest first. ONE source of truth: the what's-new popup
@@ -41,6 +41,15 @@ APP_NAME = "Runsheet Pilot"
 # The same lines go in the GitHub release body.
 # tests/test_whats_new.py enforces the cap AND that VERSION has an entry.
 RELEASE_NOTES = {
+    "2.20.0": [
+        "Every announcement in your Announcements folder now goes in, under "
+        + "the line it belongs to. Preach slides go under the preach, and "
+        + "your loops open and close the playlist.",
+        "Settings → Service folders: pick each template's folders once, say "
+        + "what each one is for, and every runsheet for that service uses them.",
+        "A song never loses its song file to a slide any more, and I warn "
+        + "you about announcements that look out of date.",
+    ],
     "2.19.0": [
         "Tell me which Media folders each service uses and I'll stick to "
         + "them — a Summit night won't reach into your Sunday folders. Click "

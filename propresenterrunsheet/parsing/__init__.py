@@ -1,21 +1,11 @@
 """PDF + AI parsing for the runsheet upload pipeline.
 
-  pdf.py       — extract_pdf_text (pdfplumber wrapper)
-  duration.py  — _TIME_RE, _extract_*
-  ai.py        — DEFAULT_PROMPT, prompt assembly, JSON cleanup of model output
-"""
+  pdf.py          — extract_pdf_text (pdfplumber wrapper)
+  duration.py     — _TIME_RE, _extract_*
+  ai.py           — DEFAULT_PROMPT, prompt assembly, JSON cleanup of model output
+  ask.py          — the one helper every small AI question goes through
+  folder_plan.py  — which media folders hold a service's media, and their jobs
+  media_plan.py   — which line each folder file goes under
 
-from .ai import (
-    DEFAULT_PROMPT,
-    LIBRARY_CONTEXT_ADDENDUM,
-    LIBRARY_NAMES_MAX,
-    SERVICE_MATE_CUE_ADDENDUM,
-    assemble_prompt,
-    parse_ai_response,
-)
-from .duration import (
-    _TIME_RE,
-    _extract_duration_min,
-    _extract_time_str,
-)
-from .pdf import extract_pdf_text
+Callers import the submodules directly; this package re-exports nothing.
+"""
