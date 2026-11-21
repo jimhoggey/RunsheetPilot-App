@@ -6,6 +6,7 @@ folders so the UI can pre-fill its dropdowns; the POST is a partial
 update that merges into whatever's already on disk."""
 
 import difflib
+import logging
 import string
 import sys
 
@@ -17,13 +18,19 @@ from ..parsing.models import (
     free_model_ids, is_router, measured_costs, pick_default_model,
     pick_paid_model, reasoning_for, recommended_models, usable_models,
 )
-from ..propresenter.media_match import JOBS, tokens as service_words
+from ..propresenter.media_bin import fetch_media_bin
+from ..propresenter.media_match import (
+    JOBS, bin_folders, folder_job, tokens as service_words,
+)
+from ..propresenter.net import pp_base, pp_id
 from ..propresenter.paths import find_library_dirs, find_pp_root
+from ..propresenter.templates import fetch_pp_playlists, template_candidates
 from ..settings import load_settings, save_settings
 from .. import stats
 
 
 bp = Blueprint("settings", __name__)
+log = logging.getLogger("pp_runsheet")
 
 
 @bp.route("/api/models", methods=["GET"])
@@ -236,19 +243,21 @@ def post_settings():
 
 @bp.route("/api/media_folders", methods=["POST"])
 def post_media_folders():
-    """Save which Media-bin folders one service draws on, and each one's
-    job — the folder picker under Step 1.
-    {"service": "Summit", "folders": [...], "jobs": {folder: job}}.
+    """Save which Media-bin folders one service draws on, each one's job,
+    and what the church says each holds — from Settings → Service folders
+    or the folder picker under Step 1.
+    {"service": "Summit", "template": uuid?, "folders": [...],
+     "jobs": {folder: job}, "notes": {folder: text}}.
     A job that isn't one of media_match.JOBS is dropped, and the folder's
     name decides it instead.
 
-    Upserts that one service's row in settings["media_folders_by_service"]
-    rather than taking the whole list from the browser, and checks every
-    value: these are names the operator typed or ProPresenter returned,
-    and they go back out into the page and a model prompt. Rows are the
-    same service when their words are (media_match.tokens), so "Summit"
-    and "summit " are one row. An empty `folders` removes the row, which
-    hands the service back to the model's choice.
+    Upserts one row in settings["media_folders_by_service"] rather than
+    taking the whole list from the browser, and checks every value: these
+    are names the operator typed or ProPresenter returned, and they go
+    back out into the page and a model prompt. With a `template`, the row
+    is that template's (one per template). Without one, rows are the same
+    service when their words are (media_match.tokens), so "Summit" and
+    "summit " are one row. An empty `folders` removes the row.
     """
     body = request.get_json(silent=True)
     body = body if isinstance(body, dict) else {}
@@ -257,20 +266,66 @@ def post_media_folders():
     # the word summit and would have been saved as a row.
     service = named.strip()[:120] if isinstance(named, str) else ""
     words = service_words(service)
-    if not words:
+    template = body.get("template")
+    try:
+        if template and not isinstance(template, str):
+            raise ValueError("not text")
+        template = pp_id(template) if template else ""
+    except ValueError:
+        return jsonify({"ok": False, "error": "That isn't a ProPresenter template."}), 400
+    if not (words or template):
         return jsonify({"ok": False,
                         "error": "Say which service these folders are for."}), 400
     raw = body.get("folders")
     folders = list(dict.fromkeys(
         f.strip()[:200] for f in (raw if isinstance(raw, list) else [])
         if isinstance(f, str) and f.strip()))[:50]
-    rows = [r for r in load_settings().get("media_folders_by_service") or []
-            if isinstance(r, dict)
-            and service_words(str(r.get("match") or "")) != words]
+    same = (lambda r: r.get("template") == template) if template else (
+        lambda r: not r.get("template")
+        and service_words(str(r.get("match") or "")) == words)
+    saved = [r for r in load_settings().get("media_folders_by_service") or []
+             if isinstance(r, dict)]
+    old = next((r for r in saved if same(r)), {})
+    rows = [r for r in saved if not same(r)]
     raw = body.get("jobs")
     jobs = {f: raw[f] for f in folders
             if isinstance(raw, dict) and raw.get(f) in JOBS}
+    # The picker under Step 1 has no notes box: a save from it keeps the
+    # notes written in Settings for the folders still ticked.
+    raw = body.get("notes") if "notes" in body else old.get("notes")
+    notes = {f: " ".join(raw[f].split())[:200] for f in folders
+             if isinstance(raw, dict) and isinstance(raw.get(f), str)
+             and raw[f].strip()}
     if folders:
-        rows.append({"match": service, "folders": folders, "jobs": jobs})
+        rows.append({"match": service, "folders": folders, "jobs": jobs,
+                     **({"template": template} if template else {}),
+                     **({"notes": notes} if notes else {})})
     save_settings({"media_folders_by_service": rows})
     return jsonify({"ok": True, "rows": rows})
+
+
+@bp.route("/api/service_folders", methods=["GET"])
+def get_service_folders():
+    """Everything Settings → Service folders shows: each template in
+    ProPresenter, the rows saved for templates and services, and the
+    Media bin's folders to choose from, each with the job its name
+    suggests. ProPresenter not answering still returns the saved rows,
+    with `pp_ok` false, so the section can say so instead of going blank.
+    """
+    settings = load_settings()
+    rows = [r for r in settings.get("media_folders_by_service") or []
+            if isinstance(r, dict)]
+    playlists, folders = [], []
+    try:
+        base = pp_base(settings.get("pp_host"), settings.get("pp_port"))
+        playlists = fetch_pp_playlists(base)       # [] when PP doesn't answer
+        folders = [{**f, "job": folder_job(f["name"])}
+                   for f in bin_folders(fetch_media_bin(base))]
+    except Exception:
+        log.info("Service folders: ProPresenter didn't answer", exc_info=True)
+    templates = [{"uuid": p["uuid"], "name": p.get("name", "")}
+                 for p in template_candidates(playlists) if p.get("uuid")]
+    # No playlists and no folders at all is ProPresenter not answering, not
+    # a ProPresenter with nothing in it.
+    return jsonify({"pp_ok": bool(playlists or folders), "templates": templates,
+                    "rows": rows, "bin_folders": folders})

@@ -594,18 +594,19 @@
       </section>
 
 
-      <!-- TEMPLATE LINKS ─────────────────────────────────────── -->
+      <!-- SERVICE FOLDERS ─────────────────────────────────────── -->
+      <!-- One card per ProPresenter template: the Media folders Runsheet
+           Pilot adds from for that service, each with its job and an
+           optional note. Filled by loadServiceFolders() in app.js. -->
       <section class="settings-section">
-        <h3>Template links</h3>
+        <h3>Service folders</h3>
         <p class="settings-hint">
-          Runsheet Pilot matches a runsheet line to a template slide when
-          the slide's name appears in the line — "Welcome and Connection
-          Cards" finds the <strong>Welcome</strong> slide. When the two
-          share no words (runsheet says <em>Youth Arrival + Hangout</em>,
-          the slide is called <em>PreLoop Youth</em>), teach it here once.
+          For each of your ProPresenter templates, the Media folders to add
+          from and what each one is for. A runsheet that matches a template
+          uses exactly these folders. A note helps the AI put each
+          announcement under the right line.
         </p>
-        <div id="alias-rows"></div>
-        <button class="btn btn-dim btn-sm" onclick="addAliasRow()">+ Add a link</button>
+        <div id="service-folders"></div>
       </section>
 
       <!-- PLAYLIST OPTIONS ────────────────────────────────────── -->

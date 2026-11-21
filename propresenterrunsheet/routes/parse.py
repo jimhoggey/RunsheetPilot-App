@@ -36,7 +36,7 @@ from ..parsing.openrouter import Stopped, chat
 from ..propresenter.media_bin import fetch_media_bin
 from ..propresenter.media_match import (
     bin_entries, bin_folders, eligible_folders, folder_job,
-    place as media_place, recommended_folders, row_for_service,
+    place as media_place, recommended_folders, saved_row,
     scope as media_scope, stale as media_stale, with_bin, without_bin,
 )
 from .flags import matching_enabled
@@ -51,7 +51,7 @@ from ..propresenter.net import UnreachableHost, pp_base
 from ..propresenter.templates import (
     auto_detect_template_uuid, fetch_pp_playlist_items, fetch_pp_playlists,
     link_items_to_template, playlist_to_objects, playlist_to_sections,
-    resolve_section, resolve_with_aliases, share_repeated_links,
+    resolve_object, resolve_section, share_repeated_links,
     template_candidates,
 )
 from ..service_mate.state import _ensure_item_cues, _write_runsheet_state
@@ -481,7 +481,8 @@ def _no_bin_media(service, title="") -> dict:
 
 
 def place_bin_media(items: list, base: str, settings: dict, or_key: str,
-                    service: str, title: str = "", playlists=None) -> dict:
+                    service: str, title: str = "", playlists=None,
+                    template: str = "") -> dict:
     """Put the operator's own Media-bin files under the runsheet's items.
 
     Code narrows, the model decides — the five steps are drawn out at the
@@ -497,6 +498,8 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
     `service` is the KIND of service ("Summit"), `title` the dated name
     ("Summit 2026 — Sunday Night"): matched on the title, a Sunday row and
     the Sunday folders claimed a Summit night that fell on a Sunday.
+    `template` is the uuid of the template this runsheet was matched to;
+    folders saved for that template (Settings → Service folders) win.
 
     Edits `items` in place and returns the summary the folder line shows.
     Safe to run again on the same items — after the operator changes a
@@ -537,16 +540,17 @@ def place_bin_media(items: list, base: str, settings: dict, or_key: str,
         known = [p.get("name", "") for p in template_candidates(playlists or [])]
         model = str(settings.get("or_model") or "")
         suggested = None                                          # 1–2
-        if not row_for_service(rows, service, title):
+        if not saved_row(rows, service, title, template):
             suggested = plan_folders(
                 service, work,
                 eligible_folders(bin_items, service, work, rows, known),
                 or_key, model, title=title)
         sc = media_scope(bin_items, service, work, rows, known,   # 3
-                         suggested=suggested, title=title)
+                         suggested=suggested, title=title, template=template)
         answer = plan_media(work, sc["assets"], or_key, model,    # 4
                             title=title or service,
-                            today=_dt.date.today().isoformat())
+                            today=_dt.date.today().isoformat(),
+                            notes=sc["notes"])
         if answer is None and had:
             log.warning("Media plan unanswered; the bin's earlier picks stay")
             return None
@@ -580,10 +584,11 @@ def api_place_media():
     after the operator saves a service's folders in the picker, so they
     see the result without paying for the whole parse again.
 
-    Takes {"parsed": [...items], "service", "title", "host", "port"};
-    answers {"items", "media_from_bin"}. The items come back from the
-    browser, so they are capped and only dicts are kept; nothing in them
-    reaches ProPresenter from here — Create still builds the playlist.
+    Takes {"parsed": [...items], "service", "title", "template", "host",
+    "port"}; answers {"items", "media_from_bin"}. The items come back from
+    the browser, so they are capped and only dicts are kept; nothing in
+    them reaches ProPresenter from here — Create still builds the
+    playlist. `template` is only compared with saved rows, never sent on.
     """
     body = request.get_json(silent=True)
     body = body if isinstance(body, dict) else {}
@@ -597,11 +602,12 @@ def api_place_media():
     base = pp_base(body.get("host") or settings.get("pp_host"),
                    body.get("port") or settings.get("pp_port"))
     or_key = str(settings.get("or_key") or "").strip()
-    service, title = body.get("service"), body.get("title")
+    service, title, tmpl = body.get("service"), body.get("title"), body.get("template")
     summary = place_bin_media(
         items, base, settings, or_key,
         service=service[:200] if isinstance(service, str) else "",
-        title=title[:200] if isinstance(title, str) else "")
+        title=title[:200] if isinstance(title, str) else "",
+        template=tmpl[:100] if isinstance(tmpl, str) else "")
     if summary is None:
         return jsonify({"ok": False, "error":
                         "ProPresenter or the AI didn't answer, so this "
@@ -1210,8 +1216,7 @@ def _upload_and_parse(stop: threading.Event):
                 continue
             # Title hit on a section header — same rule, no tag needed.
             # Songs excluded for the same reason as objects below.
-            hdr = (resolve_with_aliases(it.get("title", ""), header_objects,
-                                        settings.get("template_aliases"))
+            hdr = (resolve_object(it.get("title", ""), header_objects)
                    if it.get("type") != "song" else None)
             if hdr and hdr.get("_section"):
                 it["library_match"] = hdr["_section"]
@@ -1228,8 +1233,7 @@ def _upload_and_parse(stop: threading.Event):
             # Songs are deliberately excluded: they belong to the
             # fuzzy-match + Pick flow, and a template slide named
             # "Worship" must not hijack a song titled "Worship Medley".
-            obj = (resolve_with_aliases(it.get("title", ""), objects,
-                                        settings.get("template_aliases"))
+            obj = (resolve_object(it.get("title", ""), objects)
                    if it.get("type") != "song" else None)
             if obj:
                 it["library_match"] = {
@@ -1263,7 +1267,7 @@ def _upload_and_parse(stop: threading.Event):
                 items, base, settings, or_key,
                 service=service_type or service_name or upload_name or "",
                 title=service_name or upload_name or "",
-                playlists=pp_playlists)
+                playlists=pp_playlists, template=tmpl_uuid or "")
         media_placed = media_placed or _no_bin_media(
             service_type or service_name or upload_name, service_name or upload_name)
         repeats = share_repeated_links(items)
@@ -1484,9 +1488,7 @@ def api_match():
                     it["library_match"] = None
             n = 0
         else:
-            n = link_items_to_template(parsed, base, tmpl,
-                                       aliases=settings.get("template_aliases"),
-                                       force=True)
+            n = link_items_to_template(parsed, base, tmpl, force=True)
         for it, entries in zip(parsed, kept):
             if entries:
                 it["library_match"] = with_bin(it, entries)

@@ -319,7 +319,7 @@ def test_where_a_header_sits_is_shown_to_the_model_not_given_as_fact(monkeypatch
     assert seen["items"] == ["Offering", "IMG_1"] and seen["known"] == {}
 
 
-def test_only_songs_and_aliases_are_facts_to_the_model(monkeypatch):
+def test_only_songs_are_facts_to_the_model(monkeypatch):
     playlist = [_pres("Goodness Of God", "2"), _media("Offering", "3")]
     runsheet = [{"parsed": {"type": "song", "title": "Goodness of God"}},
                 {"parsed": {"type": "other", "title": "Offering"}}]

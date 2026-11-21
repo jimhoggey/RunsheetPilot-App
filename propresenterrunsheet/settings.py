@@ -64,16 +64,13 @@ def _default_settings() -> dict:
         # for operators who don't own a GeekMagic clock. UI-only flag;
         # the daemon's own enabled switch lives in clocks.json.
         "sm_hide":         False,
-        # Operator-taught links from a runsheet phrase to a template
-        # object name, e.g. {"match": "Youth Arrival",
-        # "template": "PreLoop Youth"} — for pairs that share no words
-        # and so can never match by rule alone.
-        "template_aliases": [],
-        # Which Media-bin folders each service draws on, e.g.
-        # {"match": "Sunday", "folders": ["Current media", "Sunday media"]}.
-        # Per service on purpose, with no "always use" list: a Youth
-        # runsheet must not reach Sunday's media (owner, 30 Oct 2026).
-        # Saved from the folder picker; see propresenter/media_match.py.
+        # Which Media-bin folders each service draws on, with each folder's
+        # job and what the church says it holds, e.g. {"match": "Sunday
+        # Morning Library", "template": <uuid>, "folders": ["Announcements"],
+        # "jobs": {"Announcements": "every"}, "notes": {...}}. Per service
+        # on purpose, with no "always use" list: a Youth runsheet must not
+        # reach Sunday's media (owner, 30 Oct 2026). Saved from Settings →
+        # Service folders or the folder picker; see media_match.py.
         "media_folders_by_service": [],
     }
 
