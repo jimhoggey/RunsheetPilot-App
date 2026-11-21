@@ -344,7 +344,7 @@ async function loadModels(saved) {
   // A free model saved before the key had credit: parses already run on the
   // paid pick (the server's rule), so show that by moving to Automatic.
   // Not mid-launch: a save sends every field, and loadSettings hasn't
-  // filled the folders and aliases yet — saving now wiped them on disk.
+  // filled the folders yet — saving now wiped them on disk.
   if (data.free_saved) {
     sel.value = '';
     if (suppressAutoSave) _saveWhenLoaded = true;
@@ -553,8 +553,6 @@ async function loadSettings() {
   document.getElementById('thresh-val').textContent = document.getElementById('threshold').value + '%';
   document.getElementById('create-timers').checked = s.create_timers !== false;
   document.getElementById('timers-key-only').checked = !!s.timers_key_only;
-  _aliases = Array.isArray(s.template_aliases) ? s.template_aliases : [];
-  renderAliasRows();
   for (const kind of Object.keys(_times)) {
     const saved = s[`${kind}_times`];
     _times[kind] = Array.isArray(saved) ? saved.slice(-10) : [];
@@ -663,9 +661,6 @@ async function _postSettings() {
     // ORGANISE must not re-pin the template every future parse uses.
     template_playlist_uuid:  _createTemplateUuid,
     sm_hide:                 document.getElementById('sm-hide').checked,
-    // Drop half-typed rows so a blank pair can't shadow a real match.
-    template_aliases:        _aliases.filter(a => (a.match || '').trim()
-                                              && (a.template || '').trim()),
   };
   try {
     const r = await fetch('/api/settings', {method:'POST',
@@ -1107,7 +1102,14 @@ function openFolderPicker() {
   for (const [name, job] of Object.entries(seed.jobs || {})) {
     if (_jobLabel(job)) _folderJobs.set(name, job);
   }
-  document.getElementById('folders-service').value = seed.service;
+  // A runsheet matched to a template saves to that template's folders —
+  // the same list as Settings → Service folders, so the two can't disagree.
+  const svcBox = document.getElementById('folders-service');
+  svcBox.value = parsedTemplate.uuid ? (parsedTemplate.name || seed.service) : seed.service;
+  svcBox.readOnly = !!parsedTemplate.uuid;
+  document.getElementById('folders-hint').textContent = parsedTemplate.uuid
+    ? 'Saved for this template — the same list as Settings → Service folders.'
+    : 'A shorter name covers more: “Summit” matches every Summit.';
   document.getElementById('folders-filter').value = '';
   _folderError('');
   document.getElementById('folders-forget').hidden =
@@ -1232,7 +1234,8 @@ async function saveFolderPicker(forget) {
   try {
     const r = await fetch('/api/media_folders', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service, folders, jobs}),
+      body: JSON.stringify({service, folders, jobs,
+                            ...(parsedTemplate.uuid ? {template: parsedTemplate.uuid} : {})}),
     });
     const saved = await r.json().catch(() => ({}));
     if (!r.ok || !saved.ok) {
@@ -1263,6 +1266,7 @@ async function _placeBinMediaAgain(savedFor, forgot) {
       body: JSON.stringify({
         parsed: matchedItems.map(mi => mi.parsed),
         service: mediaFromBin.service, title: mediaFromBin.title,
+        template: parsedTemplate.uuid || '',
         host: document.getElementById('pp-host2').value,
         port: document.getElementById('pp-port2').value,
       }),
@@ -1735,6 +1739,7 @@ async function reloadLibraryAuto() {
 // ─── Settings modal (Library / OpenRouter / Playlist options / Export) ───
 function openSettingsModal() {
   document.getElementById('settings-modal').classList.add('active');
+  loadServiceFolders();
 }
 function closeSettingsModal() {
   document.getElementById('settings-modal').classList.remove('active');
@@ -1918,34 +1923,169 @@ function _hideNextStepHint() {
   if (hint) hint.hidden = true;
 }
 
-// ─── Template links (operator-taught aliases) ─────────────────────────────
-// Each row is "when the runsheet says X → use template slide Y". Saved as
-// template_aliases and applied at parse AND create time, so a link taught
-// once keeps working even when the runsheet's wording drifts.
-let _aliases = [];
+// ─── Service folders (Settings) ───────────────────────────────────────────
+// One card per ProPresenter template, plus any service saved from the
+// folder picker: the Media folders Runsheet Pilot adds from, each with
+// its job and the church's own note on what it holds (the note reaches the
+// AI that places announcements). Each card saves itself to its own row
+// (POST /api/media_folders); built with DOM calls because folder and
+// template names are whatever the operator typed into ProPresenter.
+let _svc = {templates: [], rows: [], bin_folders: [], pp_ok: true};
+const _svcTimers = new Map();
+const JOB_NOTE_HINTS = {
+  every: 'e.g. one-off events and ones we run for a while: Connect Dinner, Barefoot Bowls',
+  preach: "e.g. this week's preach title and slides",
+  start: 'e.g. plays while people arrive',
+  end: 'e.g. plays as people leave',
+  pick: 'e.g. extra screens we sometimes need',
+};
 
-function renderAliasRows() {
-  const box = document.getElementById('alias-rows');
+async function loadServiceFolders() {
+  const box = document.getElementById('service-folders');
   if (!box) return;
-  box.innerHTML = _aliases.map((a, i) => `
-    <div class="row alias-row" style="gap:6px;align-items:center;margin-bottom:6px">
-      <input type="text" placeholder="When the runsheet says…"
-             value="${escapeHtml(a.match || '')}" style="flex:1;margin:0"
-             oninput="updateAlias(${i}, 'match', this.value)">
-      <span style="color:var(--muted)">→</span>
-      <input type="text" placeholder="use this template slide"
-             value="${escapeHtml(a.template || '')}" style="flex:1;margin:0"
-             oninput="updateAlias(${i}, 'template', this.value)">
-      <button class="btn btn-dim btn-sm" onclick="removeAlias(${i})"
-              title="Remove this link">✕</button>
-    </div>`).join('');
+  box.textContent = 'Looking for your templates in ProPresenter…';
+  try {
+    _svc = await fetch('/api/service_folders').then(r => r.json());
+  } catch (_) {
+    _svc = {templates: [], rows: [], bin_folders: [], pp_ok: false};
+  }
+  _renderServiceFolders();
 }
-function addAliasRow() { _aliases.push({match: '', template: ''}); renderAliasRows(); }
-function removeAlias(i) { _aliases.splice(i, 1); renderAliasRows(); saveAliases(); }
-function updateAlias(i, field, value) {
-  if (_aliases[i]) { _aliases[i][field] = value; autoSaveDebounced(); }
+
+function _el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
 }
-function saveAliases() { autoSaveDebounced(); }
+
+function _renderServiceFolders() {
+  const box = document.getElementById('service-folders');
+  box.replaceChildren();
+  if (!_svc.pp_ok) box.append(_el('p', 'settings-hint',
+    'ProPresenter isn’t answering, so its templates and folders can’t be ' +
+    'listed. Open ProPresenter, then open Settings again.'));
+  const known = new Set((_svc.templates || []).map(t => t.uuid));
+  const cards = [
+    ...(_svc.templates || []).map(t => ({name: t.name, template: t.uuid})),
+    // Saved for a template ProPresenter no longer has, or for a service
+    // with no template (Summit, saved from the picker under Step 1).
+    ...(_svc.rows || []).filter(r => !r.template || !known.has(r.template))
+      .map(r => ({name: r.match, template: r.template || ''})),
+  ];
+  if (!cards.length && _svc.pp_ok) box.append(_el('p', 'settings-hint',
+    'No templates found. A ProPresenter playlist with “Template” or ' +
+    '“Library” in its name shows up here.'));
+  for (const c of cards) box.append(_svcCard(c));
+}
+
+function _svcCard(c) {
+  const row = (_svc.rows || []).find(r => c.template
+    ? r.template === c.template : (!r.template && r.match === c.name)) || {};
+  const state = {folders: [...(row.folders || [])], jobs: {...(row.jobs || {})},
+                 notes: {...(row.notes || {})}};
+  const card = _el('div', 'svc-card');
+  const list = _el('div', 'svc-folders');
+  const render = () => {
+    list.replaceChildren(...state.folders.map((_, i) => _svcFolderRow(c, state, i, render)));
+    if (!state.folders.length) list.append(_el('p', 'settings-hint',
+      'No folders yet, so the AI chooses them for each runsheet.'));
+  };
+  const add = _el('button', 'btn btn-dim btn-sm', '+ Add a folder');
+  add.type = 'button';
+  add.onclick = () => {
+    state.folders.push('');
+    render();
+    list.querySelector('.svc-folder:last-child select')?.focus();
+  };
+  render();
+  card.append(_el('div', 'svc-head', c.name), list, add);
+  return card;
+}
+
+function _svcFolderRow(c, state, i, render) {
+  const name = state.folders[i];
+  const guess = n => ((_svc.bin_folders || []).find(f => f.name === n) || {}).job || 'pick';
+  const row = _el('div', 'svc-folder');
+  const pick = _el('select', 'svc-pick');
+  pick.setAttribute('aria-label', `Folder ${i + 1} for ${c.name}`);
+  pick.append(new Option('Choose a folder…', ''));
+  const inBin = new Set((_svc.bin_folders || []).map(f => f.name));
+  if (name && !inBin.has(name)) pick.append(new Option(`${name} (not in ProPresenter)`, name));
+  for (const f of _svc.bin_folders || []) {
+    if (f.name === name || !state.folders.includes(f.name)) pick.append(new Option(f.name, f.name));
+  }
+  pick.value = name;
+  pick.onchange = () => {
+    const was = state.folders[i];
+    state.folders[i] = pick.value;
+    state.jobs[pick.value] = guess(pick.value);
+    state.notes[pick.value] = state.notes[was] || '';
+    delete state.jobs[was];
+    delete state.notes[was];
+    render();
+    _saveServiceFolders(c, state);
+  };
+  const job = _el('select', 'folder-job');
+  job.setAttribute('aria-label', `What to do with ${name || 'this folder'}`);
+  for (const [value, text] of Object.entries(FOLDER_JOBS)) job.append(new Option(text, value));
+  job.value = _jobLabel(state.jobs[name]) ? state.jobs[name] : guess(name);
+  job.disabled = !name;
+  const note = _el('input', 'svc-note');
+  note.type = 'text';
+  note.maxLength = 200;
+  note.placeholder = JOB_NOTE_HINTS[job.value] || '';
+  note.value = state.notes[name] || '';
+  note.disabled = !name;
+  note.setAttribute('aria-label', `What ${name || 'this folder'} holds (optional)`);
+  job.onchange = () => {
+    state.jobs[name] = job.value;
+    note.placeholder = JOB_NOTE_HINTS[job.value] || '';
+    _saveServiceFolders(c, state);
+  };
+  note.oninput = () => { state.notes[name] = note.value; _saveServiceFolders(c, state); };
+  const del = _el('button', 'btn btn-dim btn-sm', '✕');
+  del.type = 'button';
+  del.setAttribute('aria-label', `Remove ${name || 'this folder'}`);
+  del.onclick = () => {
+    const card = row.closest('.svc-card');
+    state.folders.splice(i, 1);
+    delete state.jobs[name];
+    delete state.notes[name];
+    render();
+    card?.querySelector(':scope > button')?.focus();   // not lost with the row
+    _saveServiceFolders(c, state);
+  };
+  row.append(pick, job, note, del);
+  return row;
+}
+
+// Half a second after the last change, so typing a note is one save.
+function _saveServiceFolders(c, state) {
+  const key = c.template || `service:${c.name}`;
+  clearTimeout(_svcTimers.get(key));
+  setSaveDot('saving');
+  _svcTimers.set(key, setTimeout(async () => {
+    const folders = state.folders.filter(Boolean);
+    const body = {service: c.name, folders,
+      jobs: Object.fromEntries(folders.map(f => [f, state.jobs[f] || 'pick'])),
+      notes: Object.fromEntries(folders.map(f => [f, state.notes[f] || '']))};
+    if (c.template) body.template = c.template;
+    try {
+      const r = await fetch('/api/media_folders', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)});
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok || !res.ok) throw new Error(res.error || 'not saved');
+      _svc.rows = res.rows || _svc.rows;
+      setSaveDot('saved');
+    } catch (_) {
+      setSaveDot('');
+      setStatus('❌ Couldn’t save the folders for ' + escapeHtml(c.name) + '. Try again.',
+                'var(--red)');
+    }
+  }, 500));
+}
 
 function applySmHidden(hidden) {
   const card = document.getElementById('sm-card');
@@ -2690,7 +2830,6 @@ function _renderUpdatePlan(res) {
   const placed = res.anchored, loose = res.unplaced;
   const bits = [];
   if (res.by_recall) bits.push(`${res.by_recall} remembered from last time`);
-  if (res.by_alias)  bits.push(`${res.by_alias} from your aliases`);
   if (res.by_ai)     bits.push(`${res.by_ai} read off the slides`);
   if (res.by_name)   bits.push(`${res.by_name} matched by name`);
   html += `<div class="notice notice-info">

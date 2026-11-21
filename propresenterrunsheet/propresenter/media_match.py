@@ -178,6 +178,21 @@ def row_for_service(rows: list, service: str, title: str = "") -> dict:
     return hit
 
 
+def saved_row(rows: list, service: str, title: str = "", template: str = "") -> dict:
+    """The operator's saved folders for this runsheet, or {}: the row
+    saved for the template the runsheet was matched to (Settings →
+    Service folders), else the row whose name names this service.
+
+    The template comes first because it is how the app has already
+    decided what service this is: a runsheet matched to "Sunday Morning
+    Library" uses that template's folders whatever it calls itself."""
+    if template:
+        for row in rows or []:
+            if isinstance(row, dict) and row.get("template") == template:
+                return row
+    return row_for_service(rows, service, title)
+
+
 def other_service_tokens(service: str, rows: list, template_names=()) -> set:
     """Words that name a service OTHER than this one.
 
@@ -276,17 +291,20 @@ def _budgeted(assets: list, items: list, cap: int = MAX_CANDIDATES) -> list:
 
 
 def scope(bin_items: list, service: str, items=None, rows=None,
-          template_names=(), suggested=None, title: str = "") -> dict:
+          template_names=(), suggested=None, title: str = "",
+          template: str = "") -> dict:
     """What to offer the asset-choosing model, what code places itself,
     and where it all came from.
 
-    Returns {"assets", "fixed", "folders", "jobs", "source", "service"}.
-    `assets` are the `every` and `pick` files for the model, each tagged
-    with its "job" — every announcement first and always, then a budget
-    of the rest. `fixed` holds the preach, start and end files, which
-    never need the model. `jobs` is {folder: job}. `source` says who
-    chose the folders, best authority first:
-      "chosen"    — the operator's saved row for this service; final.
+    Returns {"assets", "fixed", "folders", "jobs", "notes", "source",
+    "service"}. `assets` are the `every` and `pick` files for the model,
+    each tagged with its "job" — every announcement first and always,
+    then a budget of the rest. `fixed` holds the preach, start and end
+    files, which never need the model. `jobs` is {folder: job}, `notes`
+    the operator's own words about what a folder holds. `source` says
+    who chose the folders, best authority first:
+      "chosen"    — the operator's saved row for this runsheet's template
+                    or service (saved_row); final.
       "suggested" — the folder-choosing model (`suggested`, {folder:
                     job} or a list), held to eligible_folders so it
                     can't reach another service's.
@@ -296,10 +314,11 @@ def scope(bin_items: list, service: str, items=None, rows=None,
     The caller shows `folders` whatever the source: a silent scope is
     what made the first version feel arbitrary.
     """
-    row = row_for_service(rows, service, title)
+    row = saved_row(rows, service, title, template)
     folders = [str(f).strip() for f in (row.get("folders") or [])
                if isinstance(f, str) and f.strip()] if row else []
     given = row.get("jobs") if row and isinstance(row.get("jobs"), dict) else {}
+    said = row.get("notes") if row and isinstance(row.get("notes"), dict) else {}
     source = "chosen" if folders else ""
     if not folders and suggested:
         allowed = {f["name"] for f in eligible_folders(
@@ -328,6 +347,8 @@ def scope(bin_items: list, service: str, items=None, rows=None,
                       "start": sorted(by_job["start"], key=lambda a: _natural(a["name"])),
                       "end": sorted(by_job["end"], key=lambda a: _natural(a["name"]))},
             "folders": folders, "jobs": jobs, "source": source,
+            "notes": {f: " ".join(said[f].split())[:200] for f in folders
+                      if isinstance(said.get(f), str) and said[f].strip()},
             "service": str(row.get("match") or "") if row else ""}
 
 

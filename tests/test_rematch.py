@@ -86,15 +86,6 @@ def test_force_clears_a_link_that_no_longer_matches():
     assert items[0]["library_match"] is None
 
 
-def test_aliases_are_honoured():
-    items = [{"type": "other", "title": "Youth Arrival + Hangout",
-              "library_match": None}]
-    link_items_to_template(items, "http://pp", "TPL", fetch=_fetch,
-                           aliases=[{"match": "Youth Arrival",
-                                     "template": "Welcome"}])
-    assert items[0]["library_match"]["header"]["name"] == "Welcome"
-
-
 def test_empty_template_is_a_no_op_and_never_raises():
     items = [{"type": "other", "title": "Welcome", "library_match": None}]
     assert link_items_to_template(items, "http://pp", "TPL",

@@ -28,10 +28,13 @@ belong above? Three signals, in descending order of trust:
   recall  Where the operator dragged that header LAST time. Read back
           out of the live playlist before the old headers are stripped.
           Nothing beats being told.
-  alias   The operator's own `template_aliases` table, already used at
-          parse time for names that share no words.
-  name    The shipped `resolve_object` rule — every word of the item's
-          name appears in the runsheet title — run per candidate.
+  ai      The alignment pass read the slide and decided (parsing/align.py).
+  name    The same rule as templates.resolve_object — every word of the
+          item's name appears in the runsheet title — run per candidate
+          (_name_tier).
+
+(There was an "alias" tier too: phrase → slide pairs taught in Settings.
+Removed in v2.20 with the setting; the owner never used it.)
 
 Playlist media is named things like "PRESERVICE LOOP" and "CTA_GIVING";
 runsheet lines read "Pre-service" and "Offering & Announcements". The
@@ -51,7 +54,6 @@ import re
 
 from .playlist import _coloured_header_for, _color_dict, asset_uuid_of
 from .playlist import ACTION_NEEDED_COLOR
-from .templates import resolve_object, resolve_with_aliases
 
 
 # Marks a header we could not line up with any existing item. One glyph,
@@ -302,7 +304,7 @@ def _name_tier(c: dict, ttokens: set) -> tuple:
     return (10 * len(c["tokens"]), "name") if len(c["tokens"]) > 1 else (5, "weak")
 
 
-def score_pairs(matched: list, candidates: list, aliases=None,
+def score_pairs(matched: list, candidates: list,
                 recalled=None, ai_anchors=None) -> list:
     """Every (runsheet item, existing item) pairing worth considering,
     with a score saying how much we trust it.
@@ -311,13 +313,12 @@ def score_pairs(matched: list, candidates: list, aliases=None,
     weak name overlap must never outrank being told where it goes:
 
         1000  recall — the operator dragged this header here before
-         500  alias  — the operator's own taught phrase→name pairing
          200  ai     — the alignment pass read the slide and decided
         10*n  name   — every word of an n-token name (n≥2) is in the title
            5  weak   — the same, but only one token survived noise-stripping
 
-    The AI tier sits deliberately BELOW both operator signals. It can
-    read a slide that says GIVING and connect it to a line called
+    The AI tier sits deliberately BELOW the operator's own placement. It
+    can read a slide that says GIVING and connect it to a line called
     "Offering", which no string rule will ever do — and it can also be
     confidently wrong. A thing the operator told us outranks a thing the
     model inferred, always.
@@ -335,13 +336,6 @@ def score_pairs(matched: list, candidates: list, aliases=None,
         for c in candidates:
             if want == c["pos"]:
                 score, via = 1000, "recall"
-            elif (resolve_with_aliases(title, [c], aliases) is not None
-                  and resolve_object(title, [c]) is None):
-                # Reusing the shipped resolver one candidate at a time
-                # turns "best object for this title" into "does THIS
-                # object fit this title" — the primitive needed here —
-                # without a second copy of the rule drifting from it.
-                score, via = 500, "alias"
             elif ai.get(n) == c["pos"]:
                 # Where the model only agreed with the name, say so: the
                 # preview's "read off the slide" is for what reading found.
@@ -483,7 +477,7 @@ def banner_header() -> dict:
     }
 
 
-def build_update_payload(existing: list, matched: list, aliases=None,
+def build_update_payload(existing: list, matched: list,
                          sections=None, reorder=False) -> tuple:
     """The complete items list to PUT back, plus a report on what it did.
 
@@ -535,8 +529,7 @@ def build_update_payload(existing: list, matched: list, aliases=None,
         sections = {new: sections[old] for new, old in enumerate(order)
                     if old in sections}
     candidates = anchor_candidates(kept)
-    pairs = score_pairs(matched, candidates, aliases, recalled,
-                        starts_of(sections))
+    pairs = score_pairs(matched, candidates, recalled, starts_of(sections))
     anchors = choose_anchors(pairs)
 
     items_in = [mi for mi in (matched or []) if isinstance(mi, dict)]
@@ -594,8 +587,6 @@ def build_update_payload(existing: list, matched: list, aliases=None,
         "anchored":       anchored_count,
         "by_recall":      sum(1 for a in anchors.values()
                               if a["via"] == "recall"),
-        "by_alias":       sum(1 for a in anchors.values()
-                              if a["via"] == "alias"),
         "by_ai":          sum(1 for a in anchors.values()
                               if a["via"] == "ai"),
         "by_name":        sum(1 for a in anchors.values()

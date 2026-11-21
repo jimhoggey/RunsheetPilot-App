@@ -89,7 +89,7 @@ def _export_file_name(name) -> str:
     return safe.lstrip(". ") or "Playlist"
 
 
-def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
+def _rematch_template(matched, base, tmpl_uuid, hint=""):
     """Re-run the deterministic template match for items that missed it.
     Returns how many items it linked.
 
@@ -102,13 +102,11 @@ def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
     help — it only refills the dropdown.
 
     So the same engine parse and Re-match use (link_items_to_template:
-    every word of the object's name in the item's title, the operator's
-    aliases first, sections over single objects, repeated parts shared)
-    runs again HERE, but only when at least one non-song item is
-    unmatched — a fully-matched parse costs nothing extra. It used to be
-    a copy of that engine without the aliases on section headers, so
-    Create could miss a link parse would have made. Best-effort
-    throughout: template still unreachable -> unchanged behaviour.
+    every word of the object's name in the item's title, sections over
+    single objects, repeated parts shared) runs again HERE, but only when
+    at least one non-song item is unmatched — a fully-matched parse costs
+    nothing extra. Best-effort throughout: template still unreachable ->
+    unchanged behaviour.
 
     `hint` is the service label the model reported at parse time,
     forwarded by the client. Because this rescue re-resolves "Auto" from
@@ -136,7 +134,7 @@ def _rematch_template(matched, base, tmpl_uuid, aliases=None, hint=""):
         return 0
     hits = link_items_to_template(
         [mi["parsed"] for mi in matched if isinstance(mi.get("parsed"), dict)],
-        base, tmpl_uuid, aliases=aliases, fetch=fetch_pp_playlist_items)
+        base, tmpl_uuid, fetch=fetch_pp_playlist_items)
     if hits:
         log.info("Create-time template re-match linked %d item(s) "
                  "the parse missed (PP was likely closed then)", hits)
@@ -250,11 +248,9 @@ def api_create_playlist():
         unlinked = []
         template_relinked = 0
         if do_matching:
-            from ..settings import load_settings as _ls
             template_relinked = _rematch_template(
                 matched, base,
                 (body.get("template_playlist_uuid") or "").strip(),
-                (_ls() or {}).get("template_aliases"),
                 hint=(body.get("service_label") or "").strip()) or 0
 
             bin_items = fetch_media_bin(base)
@@ -641,11 +637,6 @@ def api_pp_playlists():
 # Everything below writes into a playlist the operator built by hand.
 # Read update_safety.py's module docstring before changing any of it.
 
-def _aliases():
-    from ..settings import load_settings
-    return (load_settings() or {}).get("template_aliases")
-
-
 def _runsheet(body: dict) -> list:
     """The parsed runsheet from a request, lines only. Every index — the
     model's, the placements', the slide reading's — counts these, so
@@ -739,8 +730,8 @@ def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
     Media file names in a working playlist are often out of date, so a
     name match is NOT a fact here: the model sees each item's name and
     what its slide reads, and trusts the slide. The facts it works around
-    are the ones someone vouches for — an alias the operator taught, and
-    a song, whose .pro name is its title. Existing headers go in as
+    are the ones someone vouches for — a song, whose .pro name is its
+    title. Existing headers go in as
     context rather than facts: when slides are moved around them, where
     they sit stops meaning anything. Positions count only non-header
     items, as the payload builder does; ProPresenter's own indexes count
@@ -755,8 +746,7 @@ def _ai_sections(base: str, playlist_uuid: str, raw: list, matched: list,
         return {}, None
     known = {p["above_index"]: p["index"] for p in report.get("placements", [])
              if p.get("above_index") is not None and p.get("via") != "recall"
-             and (p.get("via") == "alias"
-                  or (kept[p["above_index"]].get("type") or "").lower() == "presentation")}
+             and (kept[p["above_index"]].get("type") or "").lower() == "presentation"}
     if len(known) >= len(kept):
         return known, None              # every slide already vouched for
     catalogue = fetch_catalogue()
@@ -788,7 +778,6 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
     playlist_uuid, playlist_name, playlists = _resolve_target(
         base, playlist_uuid)
     raw = _read_target(base, playlist_uuid)
-    aliases = _aliases()
     sections = _sane_sections(sections, len(matched),
                               sum(1 for it in raw if isinstance(it, dict)
                                   and not is_header(it)))
@@ -797,11 +786,10 @@ def _plan_update(base: str, playlist_uuid: str, matched: list,
         # Asked even when the names placed everything: a stale name
         # "matches" just as confidently as a right one. A first pass
         # without the model says which placements are vouched for.
-        _, first = build_update_payload(raw, matched, aliases)
+        _, first = build_update_payload(raw, matched)
         sections, ai_model = _ai_sections(base, playlist_uuid, raw, matched,
                                           first)
-    items, report = build_update_payload(raw, matched, aliases, sections,
-                                         reorder)
+    items, report = build_update_payload(raw, matched, sections, reorder)
     return {
         "uuid":         playlist_uuid,       # ProPresenter's, not the client's
         "name":         playlist_name,
@@ -912,7 +900,7 @@ def api_update_playlist_preview():
     # Out of runsheet order: what yes would look like, for the question.
     new_order = []
     if rep["out_of_order"] and not rep["moved"]:
-        alt, _ = build_update_payload(plan["raw"], matched, _aliases(),
+        alt, _ = build_update_payload(plan["raw"], matched,
                                       plan["sections"], reorder=True)
         new_order = [[is_header(it), ((it.get("id") or {}).get("name") or "")]
                      for it in alt]
@@ -930,7 +918,7 @@ def api_update_playlist_preview():
         "ai_model":    plan["ai_model"],
         "new_order":   new_order,
         **{k: rep[k] for k in
-           ("anchored", "by_recall", "by_alias", "by_ai", "by_name",
+           ("anchored", "by_recall", "by_ai", "by_name",
             "unplaced", "headers_added", "headers_removed", "content_count",
             "placements", "out_of_order", "moved")},
     })
@@ -1086,7 +1074,6 @@ def api_update_playlist():
                     headers_removed=rep["headers_removed"],
                     anchored=rep["anchored"],
                     by_recall=rep["by_recall"],
-                    by_alias=rep["by_alias"],
                     by_ai=rep["by_ai"],
                     unplaced=rep["unplaced"],
                     moved=rep["moved"],
@@ -1099,7 +1086,6 @@ def api_update_playlist():
             "headers_removed":    rep["headers_removed"],
             "anchored":           rep["anchored"],
             "by_recall":          rep["by_recall"],
-            "by_alias":           rep["by_alias"],
             "by_ai":              rep["by_ai"],
             "by_name":            rep["by_name"],
             "unplaced":           rep["unplaced"],

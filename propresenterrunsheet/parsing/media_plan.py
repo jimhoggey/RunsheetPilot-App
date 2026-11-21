@@ -75,7 +75,7 @@ def _media_row(a: dict) -> str:
 
 
 def plan_media(items: list, offered: list, or_key: str, configured_model: str,
-               title: str = "", today: str = "", post=None):
+               title: str = "", today: str = "", notes=None, post=None):
     """{"media": [{"media", "item"}], "stale": [n]} — the model's answer,
     unvalidated (media_match.place and media_match.notes hold it to what
     was offered).
@@ -94,14 +94,18 @@ def plan_media(items: list, offered: list, or_key: str, configured_model: str,
 
     `title` is the service's dated name and `today` the date, which is
     how a file for "Young Adults 29th Nov" can be told apart from a past
-    event.
+    event. `notes` is {folder: the church's own words about it}, from
+    Settings → Service folders ("one-off events and ones we run for a
+    while: Connect Dinner, Barefoot Bowls").
     """
     empty = {"media": [], "stale": []}
     if not (items and offered and or_key):
         return empty
+    said = "".join(f"\n- {f}: {n}" for f, n in (notes or {}).items() if n)
     data = ask_json(f"{PROMPT}\n\nSERVICE: {str(title or '').strip()[:200]}\n"
                     f"TODAY: {today}\n\nRUNSHEET:\n{_rows(_line_row, items)}\n\n"
-                    f"MEDIA:\n{_rows(_media_row, offered)}",
+                    + (f"WHAT THE CHURCH SAYS ITS FOLDERS HOLD:{said}\n\n" if said else "")
+                    + f"MEDIA:\n{_rows(_media_row, offered)}",
                     or_key, configured_model, label="Media plan", post=post)
     if data is None:
         return None

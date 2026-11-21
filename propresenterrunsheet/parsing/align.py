@@ -20,8 +20,8 @@ out of runsheet order: filing each slide under its line is what shows
 that, and what lets songs travel with their worship set when the
 operator agrees to put the playlist in runsheet order.
 
-  • WHAT SOMEONE VOUCHES FOR IS GIVEN AS FACT, not re-asked: an alias
-    they taught, and songs, whose `.pro` file is named after the song.
+  • WHAT IS VOUCHED FOR IS GIVEN AS FACT, not re-asked: songs, whose
+    `.pro` file is named after the song.
     Existing headers are shown as context, not facts — slides may have
     been moved under them. Media file names are weighed below what the
     slide actually reads; in a working playlist they are often stale.
@@ -30,8 +30,8 @@ operator agrees to put the playlist in runsheet order.
 
 Nothing here is trusted. `parse_sections` re-checks every number the
 model returns, and `propresenter/playlist_update.py` scores whatever
-survives BELOW recall and below the operator's aliases — a thing the
-operator told us always beats a thing the model inferred."""
+survives BELOW recall — where the operator dragged a header always beats
+a thing the model inferred."""
 
 import json
 import logging

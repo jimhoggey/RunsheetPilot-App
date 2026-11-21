@@ -1633,6 +1633,20 @@ body { animation: page-in .4s ease both; }
    of a folder that isn't used is noise. */
 .folder-job { flex: 0 0 9.5rem; width: 9.5rem; margin: 0; padding: 4px 8px; font-size: 0.78rem; }
 .folder-row .folder-count { min-width: 4.5em; text-align: right; }
+/* Settings → Service folders: a card per template, a row per folder
+   (folder, job, note, remove) that wraps on a narrow window. */
+.svc-card {
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-2);
+  padding: var(--s-3);
+  margin-top: var(--s-3);
+}
+.svc-head { font-weight: 700; font-size: 0.86rem; margin-bottom: var(--s-2); overflow-wrap: anywhere; }
+.svc-folder { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; margin-bottom: var(--s-2); }
+.svc-folder .svc-pick { flex: 1 1 12rem; min-width: 0; margin: 0; }
+.svc-folder .svc-note { flex: 2 1 14rem; min-width: 0; margin: 0; }
+.svc-folders + .btn { margin-top: var(--s-1); }
+
 /* What the folder line warns about: an announcement that looks past, a
    screen a line asks for that nobody made, files with no line to go to. */
 .folder-warnings {
