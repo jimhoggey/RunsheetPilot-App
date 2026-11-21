@@ -157,21 +157,36 @@ register_blueprints(app)
 # there too.
 
 from propresenterrunsheet.config import VERSION  # noqa: E402
-from propresenterrunsheet.parsing import (  # noqa: E402
-    DEFAULT_PROMPT, _extract_duration_min, _extract_time_str,
-    parse_ai_response,
+from propresenterrunsheet.parsing.ai import (  # noqa: E402
+    DEFAULT_PROMPT, parse_ai_response,
 )
-from propresenterrunsheet.propresenter import (  # noqa: E402
-    _norm, auto_detect_template_uuid, build_playlist_payload, fuzzy_match,
-    playlist_to_sections, resolve_library_name, resolve_section,
+from propresenterrunsheet.parsing.duration import (  # noqa: E402
+    _extract_duration_min, _extract_time_str,
 )
-from propresenterrunsheet.service_mate import (  # noqa: E402
-    _CLOCKS_LOOP_LAST_PUSHED, _CLOCK_THEME_SET,
-    _clean_header_name, _compute_remaining_seconds, _cue_for,
-    _ensure_item_cues, _format_mmss, _maybe_advance_from_pp,
-    _next_visible_item, _parse_pp_time,
-    _render_cue, _render_standby, _render_test_card,
-    _sm_font, _text_width,
+from propresenterrunsheet.propresenter.library import (  # noqa: E402
+    _norm, fuzzy_match, resolve_library_name,
+)
+from propresenterrunsheet.propresenter.playlist import (  # noqa: E402
+    build_playlist_payload,
+)
+from propresenterrunsheet.propresenter.templates import (  # noqa: E402
+    auto_detect_template_uuid, playlist_to_sections, resolve_section,
+)
+from propresenterrunsheet.service_mate.daemon import (  # noqa: E402
+    _CLOCKS_LOOP_LAST_PUSHED,
+)
+from propresenterrunsheet.service_mate.geekmagic import (  # noqa: E402
+    _CLOCK_THEME_SET,
+)
+from propresenterrunsheet.service_mate.pp_track import (  # noqa: E402
+    _clean_header_name, _maybe_advance_from_pp, _parse_pp_time,
+)
+from propresenterrunsheet.service_mate.render import (  # noqa: E402
+    _compute_remaining_seconds, _format_mmss, _render_cue, _render_standby,
+    _render_test_card, _sm_font, _text_width,
+)
+from propresenterrunsheet.service_mate.state import (  # noqa: E402
+    _cue_for, _ensure_item_cues, _next_visible_item,
 )
 from propresenterrunsheet.server import main  # noqa: E402
 
